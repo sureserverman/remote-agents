@@ -14,7 +14,7 @@ The existing owner command remains:
 Its source-pinned bootstrap delegates to `tests/support/run_folder_native.sh`. It runs all
 offline admission controls with `--maxfail=0` and separately records the namespace probe,
 even if one preflight fails. It starts the native case only when both pass. The native
-case declares 54 checks, a 420-second work budget, bounded final diagnostics, and a
+case declares 60 checks, a 420-second work budget, bounded final diagnostics, and a
 separate 60-second cleanup allowance. The existing private fixture setup/owned-process
 retirement retain their own prerequisite and lifecycle bounds.
 
@@ -57,7 +57,7 @@ profile, provider/model selection, hook trust, or publication changes are involv
 ## Local verification and independent review
 
 `uv run --locked pytest tests/contract/test_native_bulk_checks.py
-tests/contract/test_folder_native_admission.py -q --maxfail=0`: **44 passed in 1.31s**.
+tests/contract/test_folder_native_admission.py -q --maxfail=0`: **49 passed in 2.10s**.
 These are offline controls, including genuine disposable JSON-RPC children and the actual
 shell runner with fake tools; they never start Codex or spend a model turn. They exercise:
 
@@ -67,6 +67,8 @@ shell runner with fake tools; they never start Codex or spend a model turn. They
 - cancellation/system-exit leaf tracebacks, propagation and independent cleanup;
 - both failed preflights, skipped native tests, missing/invalid reports and log-writer errors;
 - private evidence reservation, symlink refusal and credential-free offline fixture admission.
+- real application DTOs, constrained method signatures, typed project/profile admission,
+  and continued safe diagnostics after an observational validator fails.
 
 Ruff check/format: **806 files**, passed. Bash syntax and ShellCheck passed. The ShellCheck
 SC2329 suppression documents the verified indirect EXIT-trap invocation only.
@@ -78,3 +80,35 @@ recorder for leaf/fixture/execution failures, then verified at fix scope. Final 
 and credential-free control corrections were also reviewed. No Critical/Important finding
 or reviewer-owned job remains. This source/control evidence leaves actual native acceptance,
 BL-141, original round5 and master close-out open until the real owner run supplies proof.
+
+## First bulk run: result-contract drift corrected
+
+The actual f340aa96 owner run with Codex0.166.0 completed its 54-check report in8.61s:
+15passed,1failed,38blocked; cleanup and no-model checks passed. Fresh launch returned an
+owned UNTRUSTED session, but its validator read `LaunchOutcome.created`, a field that exists
+only on `ResumeOutcome`. The offline fake fabricated that field, so the original44 passing
+controls had not proved compatibility with the actual application return contract. Full
+failure evidence remains under recovery/folder-bound-native-qualification-20261103/
+attempt-5-bulk-launch-outcome-contract; none of the blocked checks is accepted.
+
+The whole-path controls now return real slotted/frozen LaunchOutcome, ResumeOutcome,
+SessionRecord, TerminalObservation and Backend objects, real ProductionPaths and native
+fixture containers, and CompletedProcess. Use-case doubles have the actual method
+signatures, reject unknown methods and fail unconfigured calls. Real conversation and
+restart-report types remain in use. Before changing the workflow, these stricter controls
+reproduced the same missing-field failure locally (1FAIL0.45s; strict boundaries1FAIL0.48s).
+
+Acquisition, safety admission and observation are separate checks for fresh/manual/restart
+resources. Only an actual SessionRecord/SessionId under the expected project/profile is
+followed. A validator error or `ResumeOutcome.created=False` is reported without hiding
+otherwise safe readiness/restart diagnostics; it still prevents overall acceptance.
+Foreign identity and an unproven stop continue to block follow-up actors. The manifest now
+has60 checks. The added controls exercise those cuts, real DTO shapes, and method-signature
+rejection. Both independent reviewers audited the actual source contracts and approved the
+class repair, with no Critical/Important findings or owned jobs.
+
+AST sweep across every src/tests Python file for `launch` functions constructing a
+`SimpleNamespace` with `created` finds no remaining instance. The current harness's
+`.created` access is confined to actual ResumeOutcome data. Intent fields and retention
+were also checked against real runtime serialization/cleanup source. These repairs remain
+source/control proof; actual naming/catalogue/manual/restart acceptance is still pending.

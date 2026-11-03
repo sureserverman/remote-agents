@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import inspect
 import json
 import os
 import sqlite3
@@ -9,16 +10,25 @@ import stat
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import create_autospec
 from uuid import uuid4
 
 import pytest
 from native_checks import NativeChecks
 from native_run_report import finalize
 
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.tmux.runtime import TmuxTerminal
+from remote_agents.application.backend import Backend
+from remote_agents.application.conversations import ConversationService
 from remote_agents.application.interrupted_resume import ResumeReport
+from remote_agents.application.permission_presets import PermissionSettings
+from remote_agents.application.services import LaunchOutcome, ResumeOutcome, SessionService
+from remote_agents.application.thread_binding import ThreadBinder
 from remote_agents.composition.service import ServiceComposition
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -28,8 +38,30 @@ from remote_agents.domain.conversations import (
     ProviderConversationId,
     ResolvedConversation,
 )
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.domain.profiles import PermissionPreset
+from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.production import ProductionPaths
+
+
+def constrained_use_case(spec, implementation, names):
+    """Real signatures, no unconfigured return objects or invented public methods."""
+    value = create_autospec(spec, instance=True)
+    for name, _ in inspect.getmembers(spec, inspect.isfunction):
+        if not name.startswith("_"):
+            getattr(value, name).side_effect = AssertionError(
+                f"unconfigured {spec.__name__}.{name}"
+            )
+    for name in names:
+        getattr(value, name).side_effect = getattr(implementation, name)
+    return value
 
 
 async def test_collector_keeps_independent_failures_and_blocks_only_dependencies():
@@ -70,15 +102,8 @@ def bulk_case(monkeypatch, tmp_path):
     repo = tmp_path / "project"
     repo.mkdir()
     outside = tmp_path / "outside-folder"
-    paths = SimpleNamespace(
-        home=tmp_path / "home",
-        config_path=tmp_path / "config",
-        database_path=tmp_path / "domain.sqlite",
-        activity_directory=tmp_path / "activity",
-        intent_directory=tmp_path / "intents",
-    )
-    paths.activity_directory.mkdir()
-    paths.intent_directory.mkdir()
+    paths = ProductionPaths.for_home(tmp_path / "home")
+    paths.ensure_directories(include_unit_directory=False)
     project, agent = ProjectId("owned-native-project"), ProfileId("codex")
     thread = "observed-native-thread"
     connection = sqlite3.connect(":memory:")
@@ -88,11 +113,16 @@ def bulk_case(monkeypatch, tmp_path):
 
     def make_record(label, source=None):
         sid = SessionId(uuid4())
-        row = SimpleNamespace(
+        row = SessionRecord(
             session_id=sid,
             project_id=project,
             profile_id=agent,
+            display=SessionDisplayIdentity(
+                "owned-native-project", "codex", "regular", len(records) + 1
+            ),
             state=SessionState.RUNNING,
+            created_at=datetime.now(UTC),
+            resume_profile_id=agent if source is not None else None,
             resume_source_id=source,
         )
         records[sid], labels[sid] = row, label
@@ -116,21 +146,40 @@ def bulk_case(monkeypatch, tmp_path):
         async def launch(self, command):
             calls.append("launch")
             assert command.folder == outside and command.permissions is PermissionPreset.FULL_ACCESS
-            return SimpleNamespace(created=True, record=make_record("fresh"))
+            row = make_record("fresh")
+            if "foreign_project" in faults:
+                row = replace(row, project_id=ProjectId("unexpected-project"))
+            if "foreign_profile" in faults:
+                row = replace(row, profile_id=ProfileId("unexpected-profile"))
+            records[row.session_id] = row
+            return LaunchOutcome(row, remote_control=False)
 
         async def resume(self, command):
             calls.append("manual")
             assert command.conversation.provider_conversation_id.value == thread
             assert command.conversation.folder == outside
-            return SimpleNamespace(created=True, record=make_record("manual", thread))
+            return ResumeOutcome(
+                make_record("manual", thread), created="manual.created" not in faults
+            )
 
         async def force_stop(self, command):
             if "source.end" in faults:
                 raise RuntimeError("cannot prove source ended")
-            records[command.session_id].state = SessionState.ENDED
+            records[command.session_id] = replace(
+                records[command.session_id], state=SessionState.ENDED
+            )
+            return TerminalObservation(
+                command.session_id,
+                live=False,
+                preserved=False,
+                project_id=project,
+                profile_id=agent,
+            )
 
         async def cleanup(self, command):
-            records[command.session_id].state = SessionState.ENDED
+            records[command.session_id] = replace(
+                records[command.session_id], state=SessionState.ENDED
+            )
 
         async def permission_preset(self, sid):
             return (
@@ -179,7 +228,17 @@ def bulk_case(monkeypatch, tmp_path):
             return datetime.now(UTC) if state.server else None
 
         async def managed_observations(self):
-            return [row for row in records.values() if row.state is SessionState.RUNNING]
+            return [
+                TerminalObservation(
+                    row.session_id,
+                    live=True,
+                    preserved=False,
+                    project_id=row.project_id,
+                    profile_id=row.profile_id,
+                )
+                for row in records.values()
+                if row.state is SessionState.RUNNING
+            ]
 
         async def capture(self, sid):
             return "offline synthetic pane; not native acceptance"
@@ -194,21 +253,60 @@ def bulk_case(monkeypatch, tmp_path):
     async def bound(*args):
         return True
 
-    backend = SimpleNamespace(
-        sessions=Sessions(), conversations=Conversations(), permission_presets=Settings()
+    sessions = constrained_use_case(
+        SessionService,
+        Sessions(),
+        (
+            "launch",
+            "resume",
+            "force_stop",
+            "cleanup",
+            "permission_preset",
+            "remember_permissions",
+            "list_sessions",
+        ),
     )
+    store = constrained_use_case(SQLiteSessionStore, Store(), ("get",))
+    store._connection = connection
+    sessions._store = store
+    backend = Backend(
+        sessions=sessions,
+        conversations=constrained_use_case(
+            ConversationService,
+            Conversations(),
+            (
+                "catalogue",
+                "resolve_for_resume",
+                "capabilities",
+            ),
+        ),
+        permission_presets=constrained_use_case(PermissionSettings, Settings(), ("set", "read")),
+    )
+    state.backend = backend
 
     def harness():
-        terminal = Terminal()
-        return SimpleNamespace(
-            backend=backend,
-            terminal=terminal,
-            projects=SimpleNamespace(paths={project: repo}),
-            binder=SimpleNamespace(wait_bound=bound),
-            composition=ServiceComposition(None, terminal, None),
+        terminal = constrained_use_case(
+            TmuxTerminal,
+            Terminal(),
+            (
+                "send_prompt",
+                "server_started_at",
+                "managed_observations",
+                "capture",
+            ),
+        )
+        binder = create_autospec(ThreadBinder, instance=True)
+        binder.wait_bound.side_effect = bound
+        return module._Harness(
+            backend,
+            terminal,
+            ServiceComposition(None, terminal, None),
+            SimpleNamespace(paths={project: repo}),
+            [],
+            binder,
         )
 
-    native = SimpleNamespace(
+    native = module._CodexService(
         harness=harness(),
         paths=paths,
         repo=repo,
@@ -238,10 +336,10 @@ def bulk_case(monkeypatch, tmp_path):
     async def restart_service(composition, restart, poll):
         calls.append("restart")
         manual = next(row for sid, row in records.items() if labels[sid] == "manual")
-        manual.state = SessionState.ENDED
+        records[manual.session_id] = replace(manual, state=SessionState.ENDED)
         restored = make_record("restart", thread)
         if "duplicate" in faults:
-            manual.state = SessionState.RUNNING
+            records[manual.session_id] = replace(manual, state=SessionState.RUNNING)
         await restart.notify(
             (ResumeReport(manual, f"resumed:{restored.session_id}", restored.session_id),),
             1 if "unchecked" in faults else 0,
@@ -261,7 +359,11 @@ def bulk_case(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(module, "_git", lambda *args: None)
     monkeypatch.setattr(
-        module.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="offline codex double")
+        module.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            args=a[0], returncode=0, stdout="offline codex double", stderr=""
+        ),
     )
     monkeypatch.setattr(module, "SQLiteFolderBindings", Bindings)
     monkeypatch.setattr(module, "_kill_server", lambda *a: setattr(state, "server", False))
@@ -272,7 +374,10 @@ def bulk_case(monkeypatch, tmp_path):
     output = tmp_path / "checks.jsonl"
     monkeypatch.setenv("REMOTE_AGENTS_LIVE_ACCEPTANCE", "1")
     monkeypatch.setenv("RA_FOLDER_BOUND_NATIVE_OUT", str(output))
-    return module, faults, calls, state, output
+    try:
+        yield module, faults, calls, state, output
+    finally:
+        connection.close()
 
 
 async def test_entire_workflow_reaches_every_check_with_typed_provider_ids(bulk_case, monkeypatch):
@@ -352,6 +457,70 @@ async def test_bad_intent_blocks_only_its_fields_and_still_runs_restart(bulk_cas
     assert rows["manual.intent"] == "failed"
     assert rows["manual.cwd"] == rows["manual.argv"] == "blocked"
     assert rows["manual.preset"] == rows["restart.startup"] == rows["cleanup"] == "passed"
+
+
+async def test_noncreation_result_does_not_hide_other_safe_native_checks(bulk_case, monkeypatch):
+    module, faults, calls, state, output = bulk_case
+    faults.add("manual.created")
+    with pytest.raises(AssertionError, match="Native check report"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    rows = {row["check"]: row["status"] for row in report["checks"]}
+    assert rows["manual.created"] == "failed"
+    assert rows["manual.ready"] == rows["restart.startup"] == rows["cleanup"] == "passed"
+    assert rows["qualified.manual"] == rows["qualified.restart"] == "blocked"
+    assert calls == ["launch", "name", "manual", "restart"]
+
+
+async def test_bad_fresh_validator_does_not_block_a_valid_owned_launch(bulk_case, monkeypatch):
+    module, faults, calls, state, output = bulk_case
+    original = NativeChecks.run
+
+    def broken_validator(value):
+        raise AttributeError("injected observational validator defect")
+
+    async def inject(self, name, operation, **kwargs):
+        if name == "fresh.flags":
+            kwargs["expect"] = broken_validator
+        return await original(self, name, operation, **kwargs)
+
+    monkeypatch.setattr(NativeChecks, "run", inject)
+    with pytest.raises(AssertionError, match="Native check report"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    rows = {row["check"]: row["status"] for row in report["checks"]}
+    assert report["failed"] == ["fresh.flags"]
+    assert rows["fresh.ready"] == rows["restart.startup"] == rows["cleanup"] == "passed"
+    assert calls == ["launch", "name", "manual", "restart"]
+
+
+@pytest.mark.parametrize("foreign", ["foreign_project", "foreign_profile"])
+async def test_foreign_typed_target_blocks_followup_actors(bulk_case, monkeypatch, foreign):
+    module, faults, calls, state, output = bulk_case
+    faults.add(foreign)
+    with pytest.raises(AssertionError, match="Native check report"):
+        await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+            SimpleNamespace(config=None), monkeypatch
+        )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    rows = {row["check"]: row["status"] for row in report["checks"]}
+    assert rows["fresh.target"] == "failed"
+    assert rows["fresh.ready"] == rows["native.binding"] == rows["manual.launch"] == "blocked"
+    assert rows["restart.compose"] == rows["restart.build"] == rows["cleanup"] == "passed"
+    assert calls == ["launch"]
+
+
+async def test_offline_use_cases_reject_unknown_methods_and_wrong_signatures(bulk_case):
+    module, faults, calls, state, output = bulk_case
+    with pytest.raises(AttributeError):
+        state.backend.sessions.invented_launch()
+    with pytest.raises(TypeError):
+        await state.backend.sessions.launch(None, invented=True)
+    assert calls == []
 
 
 async def test_cancellation_is_preserved_and_cleanup_still_has_its_own_result(

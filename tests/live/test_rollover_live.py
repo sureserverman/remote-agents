@@ -194,7 +194,7 @@ from remote_agents.domain.conversations import (
     ProviderConversationId,
     ResolvedConversation,
 )
-from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.rollover import TERMINAL, RolloverState
 from remote_agents.domain.trust import TrustState
@@ -1458,6 +1458,8 @@ _FOLDER_NATIVE_CHECKS = (
     "settings.write",
     "settings.read",
     "fresh.launch",
+    "fresh.target",
+    "fresh.flags",
     "fresh.ready",
     "native.binding",
     "native.identity",
@@ -1471,6 +1473,9 @@ _FOLDER_NATIVE_CHECKS = (
     "catalogue.project_root",
     "manual.selection",
     "manual.launch",
+    "manual.target",
+    "manual.created",
+    "manual.flags",
     "manual.ready",
     *(f"manual.{field}" for field in _FOLDER_SESSION_FIELDS),
     "restart.stop_server",
@@ -1482,6 +1487,7 @@ _FOLDER_NATIVE_CHECKS = (
     "restart.report",
     "restart.outcome",
     "restart.new_id",
+    "restart.target",
     "restart.ready",
     *(f"restart.{field}" for field in _FOLDER_SESSION_FIELDS),
     "restart.single_running",
@@ -1499,6 +1505,15 @@ async def _folder_ready(harness, record):
     if record.state is SessionState.UNTRUSTED:
         await _answer_trust(harness, record.session_id)
     return await _until_running(harness, record.session_id)
+
+
+def _folder_record(record, project, agent):
+    """Only follow a typed session in this fixture's expected project and profile."""
+    assert isinstance(record, SessionRecord), "expected an actual SessionRecord"
+    assert isinstance(record.session_id, SessionId), "invalid managed session id"
+    assert record.project_id == project, "session belongs to an unexpected project"
+    assert record.profile_id == agent, "session belongs to an unexpected profile"
+    return record
 
 
 async def _folder_session_checks(prefix, harness, record, native, outside, thread, project, checks):
@@ -1599,11 +1614,21 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
             )
         ),
         requires=("folder.prepare",),
-        expect=lambda value: value.created,
     )
-    first = None if launched is None else launched.record.session_id
+    source_record = await checks.run(
+        "fresh.target",
+        lambda: _folder_record(launched.record, project, agent),
+        requires=("fresh.launch",),
+    )
     await checks.run(
-        "fresh.ready", lambda: _folder_ready(harness, launched.record), requires=("fresh.launch",)
+        "fresh.flags",
+        lambda: (launched.folder_unavailable, launched.worktree_removed, launched.worktree_failed),
+        requires=("fresh.launch",),
+        expect=lambda value: value == (False, False, None),
+    )
+    first = None if source_record is None else source_record.session_id
+    await checks.run(
+        "fresh.ready", lambda: _folder_ready(harness, source_record), requires=("fresh.target",)
     )
     await checks.run(
         "native.binding",
@@ -1657,7 +1682,7 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
     await checks.run(
         "source.end",
         end_source,
-        requires=("fresh.launch",),
+        requires=("fresh.target",),
         expect=lambda value: value is SessionState.ENDED,
     )
     await checks.run(
@@ -1731,11 +1756,27 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
             )
         ),
         requires=("manual.selection",),
-        expect=lambda value: value.created,
     )
-    mid = None if manual is None else manual.record.session_id
+    manual_target = await checks.run(
+        "manual.target",
+        lambda: _folder_record(manual.record, project, agent),
+        requires=("manual.launch",),
+    )
+    await checks.run(
+        "manual.created",
+        lambda: manual.created,
+        requires=("manual.launch",),
+        expect=lambda value: value is True,
+    )
+    await checks.run(
+        "manual.flags",
+        lambda: (manual.folder_unavailable, manual.worktree_removed, manual.pane_unavailable),
+        requires=("manual.launch",),
+        expect=lambda value: value == (False, False, False),
+    )
+    mid = None if manual_target is None else manual_target.session_id
     manual_record = await checks.run(
-        "manual.ready", lambda: _folder_ready(harness, manual.record), requires=("manual.launch",)
+        "manual.ready", lambda: _folder_ready(harness, manual_target), requires=("manual.target",)
     )
     await _folder_session_checks(
         "manual", harness, manual_record, native, outside, thread, project, checks
@@ -1826,11 +1867,14 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
         expect=lambda value: value is not None,
     )
 
-    async def resumed_record():
+    async def resumed_target():
         row = await fresh.backend.sessions._store.get(rid)
-        return await _folder_ready(fresh, row)
+        return _folder_record(row, project, agent)
 
-    restored = await checks.run("restart.ready", resumed_record, requires=("restart.new_id",))
+    target = await checks.run("restart.target", resumed_target, requires=("restart.new_id",))
+    restored = await checks.run(
+        "restart.ready", lambda: _folder_ready(fresh, target), requires=("restart.target",)
+    )
     await _folder_session_checks(
         "restart", fresh, restored, native, outside, thread, project, checks
     )
@@ -1849,6 +1893,8 @@ async def _collect_folder_native(native, checks, prompt_attempts, record):
             "catalogue.folder",
             "catalogue.project_root",
             "settings.read",
+            "manual.created",
+            "manual.flags",
             *(f"manual.{field}" for field in _FOLDER_SESSION_FIELDS),
         ),
     )
