@@ -203,49 +203,60 @@ async def test_native_restart_reaches_poll_after_real_boundary_refresh(monkeypat
 
 
 @pytest.mark.parametrize(
-    "text, allow_name",
+    "text",
     [
-        ("do work", True),
-        ("/rename other", True),
-        ("/rename ra-bl141-native\ndo work", True),
-        ("/rename ra-bl141-native ", True),
-        ("/rename ra-bl141-native", False),
+        "do work",
+        "/rename other",
+        "/rename ra-bl141-native\ndo work",
+        "/rename ra-bl141-native ",
+        "/rename ra-bl141-native",
     ],
 )
-async def test_native_command_guard_blocks_every_other_input(monkeypatch, text, allow_name):
+async def test_native_prompt_guard_blocks_every_input(monkeypatch, text):
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
     module = importlib.import_module("live.test_rollover_live")
-    delivered, attempts, commands = [], [], []
-
-    async def send(session, value):
-        delivered.append((session, value))
-
-    guard = module._folder_native_prompt_guard(
-        SimpleNamespace(send_prompt=send), attempts, commands, allow_name=allow_name
-    )
+    attempts = []
+    guard = module._folder_native_prompt_guard(attempts)
     with pytest.raises(AssertionError, match="forbids every model prompt"):
         await guard("private-session", text)
-    assert delivered == [] and commands == []
     assert attempts == [("private-session", text)]
 
 
-async def test_native_command_guard_allows_only_one_exact_builtin_rename(monkeypatch):
+@pytest.mark.parametrize("api_fails", [False, True])
+async def test_native_naming_uses_real_private_protocol_and_reaps_child(
+    monkeypatch, tmp_path, api_fails
+):
+    import os
+
+    from remote_agents.adapters.agents.protocols import ProtocolError
+
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
     module = importlib.import_module("live.test_rollover_live")
-    delivered, attempts, commands = [], [], []
-
-    async def send(session, value):
-        delivered.append((session, value))
-        return "native delivery"
-
-    guard = module._folder_native_prompt_guard(
-        SimpleNamespace(send_prompt=send), attempts, commands, allow_name=True
+    wrapper = tmp_path / ".local/bin/codex"
+    wrapper.parent.mkdir(parents=True)
+    calls = tmp_path / "protocol-calls.jsonl"
+    pid_file = tmp_path / "protocol.pid"
+    wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "for line in sys.stdin:\n"
+        " r=json.loads(line)\n"
+        f" with open({str(calls)!r},'a') as f: f.write(json.dumps(r)+'\\n')\n"
+        " if 'id' not in r: continue\n"
+        f" error={api_fails!r} and r['method']=='thread/name/set'\n"
+        " response={'id':r['id'],'error':{'code':-32600,'message':'refused'}} if error "
+        "else {'id':r['id'],'result':{}}\n"
+        " print(json.dumps(response),flush=True)\n"
     )
-    assert await guard("private-session", module._FOLDER_NATIVE_RENAME) == "native delivery"
-    with pytest.raises(AssertionError, match="forbids every model prompt"):
-        await guard("private-session", module._FOLDER_NATIVE_RENAME)
-    assert delivered == commands == [("private-session", "/rename ra-bl141-native")]
-    assert len(attempts) == 1
+    wrapper.chmod(0o700)
+    with pytest.raises(ProtocolError) if api_fails else nullcontext():
+        await module._name_folder_native_thread(SimpleNamespace(home=tmp_path), "private-thread")
+    requests = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert [r["method"] for r in requests] == ["initialize", "initialized", "thread/name/set"]
+    assert requests[-1]["params"] == {"threadId": "private-thread", "name": "ra-bl141-native"}
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
 
 
 def test_native_metadata_reads_only_selected_thread_and_no_transcript(monkeypatch, tmp_path):

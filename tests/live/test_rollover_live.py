@@ -1395,21 +1395,25 @@ async def _serve_native_restart(composition, restart, poll):
 
 
 _FOLDER_NATIVE_NAME = "ra-bl141-native"
-_FOLDER_NATIVE_RENAME = f"/rename {_FOLDER_NATIVE_NAME}"
 
 
-def _folder_native_prompt_guard(terminal, attempts, commands, *, allow_name=False):
-    """Permit one exact built-in rename, and reject every model prompt before delivery."""
-    send = terminal.send_prompt
+def _folder_native_prompt_guard(attempts):
+    """Reject every terminal message before delivery, including native slash commands."""
 
     async def guarded(session_id, text):
-        if allow_name and not commands and text == _FOLDER_NATIVE_RENAME:
-            commands.append((session_id, text))
-            return await send(session_id, text)
         attempts.append((session_id, text))
         raise AssertionError("this model-free qualification forbids every model prompt/nudge")
 
     return guarded
+
+
+async def _name_folder_native_thread(paths, thread):
+    """Name the actual private thread through Codex's metadata API, with no model turn."""
+    protocol = JsonRpcProcess((str(paths.home / ".local/bin/codex"), "app-server"))
+    try:
+        await protocol.request("thread/name/set", {"threadId": thread, "name": _FOLDER_NATIVE_NAME})
+    finally:
+        await protocol.close()
 
 
 def _folder_native_metadata(home, thread):
@@ -1453,7 +1457,6 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
 
         record("started", model_prompts_allowed=False)
         prompt_attempts = []
-        native_commands = []
 
         async with asyncio.timeout(300), _codex_service(request.config, monkeypatch) as native:
             native_version = await asyncio.to_thread(
@@ -1466,9 +1469,7 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
             )
             record("isolated_service_ready", native_version=native_version.stdout.strip())
             harness = native.harness
-            harness.terminal.send_prompt = _folder_native_prompt_guard(
-                harness.terminal, prompt_attempts, native_commands, allow_name=True
-            )
+            harness.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
             sessions = harness.backend.sessions
             agent = ProfileId("codex")
             project = next(k for k, p in harness.projects.paths.items() if p == native.repo)
@@ -1494,14 +1495,10 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
             record(
                 "native_before_naming", metadata=_folder_native_metadata(native.codex_home, thread)
             )
-            # Empty paginated threads need a durable user action: Codex's built-in
-            # rename persists them without starting a model turn (documented native behavior).
-            deadline = time.monotonic() + 15
-            while not await harness.terminal.pane_idle(first):
-                assert time.monotonic() < deadline, "native shell binding did not become idle"
-                await asyncio.sleep(0.25)
-            delivery = await harness.terminal.send_prompt(first, _FOLDER_NATIVE_RENAME)
-            assert delivery.outcome is PromptOutcome.SENT, delivery
+            # The remote-agents message relay intentionally refuses Codex slash commands.
+            # Use the native metadata API for fixture setup, never relax that policy.
+            record("native_naming_api_started", thread=thread)
+            await _name_folder_native_thread(native.paths, thread)
             deadline = time.monotonic() + 15
             metadata = _folder_native_metadata(native.codex_home, thread)
             while metadata.get("name") != _FOLDER_NATIVE_NAME and time.monotonic() < deadline:
@@ -1574,9 +1571,7 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
             _kill_server(native.socket)
             connection = sessions._store._connection
             fresh = _compose(load_config(native.paths.config_path), connection, native.paths)
-            fresh.terminal.send_prompt = _folder_native_prompt_guard(
-                fresh.terminal, prompt_attempts, native_commands
-            )
+            fresh.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
             notices = []
 
             async def enabled():
@@ -1637,5 +1632,4 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
                 preset=chosen.value,
             )
         assert not prompt_attempts, "automatic recovery attempted an unsolicited model prompt"
-        assert len(native_commands) == 1, "expected exactly one native built-in rename"
         record("passed_and_cleanup_complete", model_prompts_sent=0)
