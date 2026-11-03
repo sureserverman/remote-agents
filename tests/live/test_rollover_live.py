@@ -102,8 +102,8 @@ import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -123,15 +123,31 @@ from remote_agents.adapters.agents.registry import (
     provider_descriptors,
 )
 from remote_agents.adapters.agents.thread_binding import FileThreadBindings, thread_of
+from remote_agents.adapters.agents.turn_markers import (
+    FileConversationMarks,
+    FileStartedMarks,
+    FileTurnMarkers,
+)
 from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
+from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.adapters.tmux.composer import composer_draft
 from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
-from remote_agents.adapters.workflow.roots import handoff_root
-from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
+from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
+from remote_agents.application.commands import (
+    AnswerTrustCommand,
+    CleanupCommand,
+    ForceStopCommand,
+    LaunchCommand,
+    ResumeCommand,
+)
+from remote_agents.application.conversations import ConversationCatalogueQuery
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.rollover import RolloverReport
@@ -152,11 +168,18 @@ from remote_agents.composition.service import (
     _bind_threads_periodically,
     _reconcile_periodically,
     _roll_over_periodically,
+    _serve_with_reconciliation,
+    build_restart_resume,
     build_rollover_pass,
     build_thread_binder,
 )
 from remote_agents.composition.tui import _local_runtime, _resolve_profile_executable
-from remote_agents.config import load_config, read_claude_limits_source, read_cursor_limits_source
+from remote_agents.config import (
+    TelegramSecrets,
+    load_config,
+    read_claude_limits_source,
+    read_cursor_limits_source,
+)
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.rollover import TERMINAL, RolloverState
@@ -1329,23 +1352,6 @@ async def test_a_mangled_binding_line_is_cleared_by_c_u(
 # BL-141: model-free qualification beyond the regular-root native bundle.
 @pytest.mark.live_acceptance
 async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(request, monkeypatch):
-    from dataclasses import replace
-    from datetime import UTC, datetime
-
-    from remote_agents.adapters.agents.conversation_marks import FileConversationMarks
-    from remote_agents.adapters.agents.started_marks import FileStartedMarks
-
-    from remote_agents.adapters.agents.turn_markers import FileTurnMarkers
-    from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
-    from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
-    from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
-    from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
-    from remote_agents.adapters.workflow.roots import acceptable_root
-    from remote_agents.application.commands import CleanupCommand, ForceStopCommand, ResumeCommand
-    from remote_agents.application.conversations import ConversationCatalogueQuery
-    from remote_agents.composition.service import _serve_with_reconciliation, build_restart_resume
-    from remote_agents.config import TelegramSecrets
-
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("opt in to the isolated model-free native qualification")
     output = os.environ.get("RA_FOLDER_BOUND_NATIVE_OUT")
@@ -1369,6 +1375,15 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
             raise AssertionError("this model-free qualification forbids every model prompt/nudge")
 
         async with asyncio.timeout(300), _codex_service(request.config, monkeypatch) as native:
+            native_version = await asyncio.to_thread(
+                subprocess.run,
+                [str(native.paths.home / ".local/bin/codex"), "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=20,
+            )
+            record("isolated_service_ready", native_version=native_version.stdout.strip())
             harness = native.harness
             harness.terminal.send_prompt = no_model_prompt
             sessions = harness.backend.sessions
