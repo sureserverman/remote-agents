@@ -70,6 +70,27 @@ async def test_native_case_never_replaces_existing_evidence(
     assert calls == []
 
 
+@pytest.mark.parametrize("symlink", [False, True])
+async def test_native_case_reserves_summary_before_provider(
+    native_entry, monkeypatch, tmp_path, symlink
+):
+    entry, calls, _ = native_entry
+    output = tmp_path / "new-receipt.jsonl"
+    old = tmp_path / "previous-summary.json"
+    old.write_text("preserved earlier evidence")
+    summary = Path(str(output) + ".summary.json")
+    if symlink:
+        summary.symlink_to(old)
+    else:
+        summary.write_text(old.read_text())
+    monkeypatch.setenv("REMOTE_AGENTS_LIVE_ACCEPTANCE", "1")
+    monkeypatch.setenv("RA_FOLDER_BOUND_NATIVE_OUT", str(output))
+    with pytest.raises(FileExistsError):
+        await entry(SimpleNamespace(config=None), monkeypatch)
+    assert calls == [] and old.read_text() == "preserved earlier evidence"
+    assert summary.read_text() == "preserved earlier evidence"
+
+
 async def test_fresh_private_receipt_is_recorded_before_provider_admission(
     native_entry, monkeypatch, tmp_path
 ):
@@ -82,8 +103,13 @@ async def test_fresh_private_receipt_is_recorded_before_provider_admission(
     assert len(calls) == 1
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
     records = [json.loads(line) for line in output.read_text().splitlines()]
-    assert [row["step"] for row in records] == ["started"]
+    assert records[0]["step"] == "started"
+    assert records[-1]["step"] == "run_complete"
     assert records[0]["model_prompts_allowed"] is False
+    summary = json.loads(Path(str(output) + ".summary.json").read_text())
+    assert summary["qualification"] == "failed"
+    assert summary["failed"] == ["fixture"]
+    assert "cleanup" in summary["blocked"]
 
 
 @pytest.mark.parametrize("body_fails", [False, True])
@@ -98,6 +124,19 @@ async def test_private_catalogue_uses_its_wrapper_and_reaps_every_client(
 
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
     module = importlib.import_module("live.test_rollover_live")
+    operator_home = tmp_path / "operator"
+    login = operator_home / ".codex/auth.json"
+    login.parent.mkdir(parents=True)
+    login.touch()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: operator_home))
+    metadata_reads = []
+    read_stat = module._stat
+
+    def owned_stat(path):
+        metadata_reads.append(path)
+        return read_stat(path)
+
+    monkeypatch.setattr(module, "_stat", owned_stat)
     wrapper = tmp_path / ".local/bin/codex"
     wrapper.parent.mkdir(parents=True)
     wrapper.write_text(
@@ -170,6 +209,7 @@ async def test_private_catalogue_uses_its_wrapper_and_reaps_every_client(
             if body_fails:
                 raise RuntimeError("body failure")
     assert descriptor().sessions is before
+    assert metadata_reads and set(metadata_reads) == {login}
     for client, pid in zip(clients, pids, strict=True):
         assert client._protocol.child_pid is None
         with pytest.raises(ProcessLookupError):

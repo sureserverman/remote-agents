@@ -1,5 +1,9 @@
 # Remaining BL-141 native qualification
 
+Current collection mode: [bulk diagnostics](session-defaults-bulk-native-diagnostics.md)
+records every reachable check and explicitly blocks missing dependencies. The historical
+failed attempts below remain intact; no revised native pass is inferred from local controls.
+
 The original twelve-case native bundle qualifies regular-root preset resume, cross-project adoption and mixed native restart. Its restart composition uses the project's regular folder; it does not by itself measure BL-141's persisted non-default-folder/manual/restart chain. Source and Telegram observations remain valid, but that count is not a substitute for this missing case. BL-141 and full original close-out remain open until the case runs.
 
 A single opt-in case, test_native_nondefault_folder_catalogue_manual_and_restart_resume in tests/live/test_rollover_live.py, reuses the established private Codex home, read-only login mount, private tmux socket and attested cleanup. It launches in an unregistered sibling Git root, binds the real native thread without a model turn, ends it, resolves it from the real folder-aware catalogue, manually resumes with an explicit full_access choice, then reconstructs production startup and checks automatic recovery in the same folder/thread/preset despite a changed private default. It asserts one running successor. Both terminal prompt paths are guarded and counted; any model prompt or recovery nudge fails before delivery. A five-minute operation bound retains established cleanup.

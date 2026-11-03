@@ -92,6 +92,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import shlex
@@ -115,6 +116,7 @@ from _pytest.mark.expression import Expression
 from agent_panes import answer_hook_review
 from codex_home import managed_daemons, retire_codex_home, short_codex_home
 from cross_project_writer import WriterJourney
+from native_checks import NativeChecks
 from native_isolation import claude_command, codex_command, sharing_daemon
 
 from remote_agents.adapters.agents import codex as codex_provider
@@ -184,6 +186,13 @@ from remote_agents.config import (
     load_config,
     read_claude_limits_source,
     read_cursor_limits_source,
+)
+from remote_agents.domain.conversations import (
+    ConversationReference,
+    ConversationState,
+    ConversationSummary,
+    ProviderConversationId,
+    ResolvedConversation,
 )
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.profiles import PermissionPreset
@@ -1438,6 +1447,466 @@ def _folder_native_metadata(home, thread):
 
 
 # BL-141: model-free qualification beyond the regular-root native bundle.
+_FOLDER_NATIVE_WAIT = 15
+_FOLDER_SESSION_FIELDS = ("project", "thread", "folder", "preset", "intent", "cwd", "argv")
+_FOLDER_NATIVE_CHECKS = (
+    "fixture",
+    "execution",
+    "workflow",
+    "native.version",
+    "folder.prepare",
+    "settings.write",
+    "settings.read",
+    "fresh.launch",
+    "fresh.ready",
+    "native.binding",
+    "native.identity",
+    "native.name_api",
+    "native.saved_name",
+    "native.cwd",
+    "source.end",
+    "catalogue.service",
+    "catalogue.resolve",
+    "catalogue.folder",
+    "catalogue.project_root",
+    "manual.selection",
+    "manual.launch",
+    "manual.ready",
+    *(f"manual.{field}" for field in _FOLDER_SESSION_FIELDS),
+    "restart.stop_server",
+    "restart.server_absent",
+    "restart.compose",
+    "restart.build",
+    "restart.startup",
+    "restart.unchecked",
+    "restart.report",
+    "restart.outcome",
+    "restart.new_id",
+    "restart.ready",
+    *(f"restart.{field}" for field in _FOLDER_SESSION_FIELDS),
+    "restart.single_running",
+    "qualified.manual",
+    "qualified.restart",
+    "diagnostics.sessions",
+    "diagnostics.native",
+    "diagnostics.panes",
+    "no_model_prompts",
+    "cleanup",
+)
+
+
+async def _folder_ready(harness, record):
+    if record.state is SessionState.UNTRUSTED:
+        await _answer_trust(harness, record.session_id)
+    return await _until_running(harness, record.session_id)
+
+
+async def _folder_session_checks(prefix, harness, record, native, outside, thread, project, checks):
+    dependency = (f"{prefix}.ready",)
+    sid = None if record is None else record.session_id
+    await checks.run(
+        f"{prefix}.project",
+        lambda: record.project_id,
+        requires=dependency,
+        expect=lambda value: value == project,
+    )
+    await checks.run(
+        f"{prefix}.thread",
+        lambda: record.resume_source_id,
+        requires=dependency,
+        expect=lambda value: value == thread,
+    )
+    await checks.run(
+        f"{prefix}.folder",
+        lambda: SQLiteFolderBindings(
+            harness.backend.sessions._store._connection, accept=acceptable_root
+        ).folder_for(sid),
+        requires=dependency,
+        expect=lambda value: value == outside,
+    )
+    await checks.run(
+        f"{prefix}.preset",
+        lambda: harness.backend.sessions.permission_preset(sid),
+        requires=dependency,
+        expect=lambda value: value is PermissionPreset.FULL_ACCESS,
+    )
+    intent = await checks.run(
+        f"{prefix}.intent",
+        lambda: json.loads((native.paths.intent_directory / f"{sid}.json").read_text()),
+        requires=dependency,
+    )
+    await checks.run(
+        f"{prefix}.cwd",
+        lambda: intent["cwd"],
+        requires=(f"{prefix}.intent",),
+        expect=lambda value: value == str(outside),
+    )
+    await checks.run(
+        f"{prefix}.argv",
+        lambda: intent["argv"],
+        requires=(f"{prefix}.intent",),
+        expect=lambda value: thread in value,
+    )
+
+
+async def _collect_folder_native(native, checks, prompt_attempts, record):
+    harness = native.harness
+    harness.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
+    sessions = harness.backend.sessions
+    agent = ProfileId("codex")
+    project = next(key for key, path in harness.projects.paths.items() if path == native.repo)
+    outside = native.repo.parent / "outside-folder"
+    query = ConversationCatalogueQuery(1, 50, agent, project)
+    version = await checks.run(
+        "native.version",
+        lambda: asyncio.to_thread(
+            subprocess.run,
+            [str(native.paths.home / ".local/bin/codex"), "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        ),
+        seconds=22,
+    )
+    if version is not None:
+        record("native_version", version=version.stdout.strip())
+
+    def prepare():
+        assert outside != native.repo and outside not in harness.projects.paths.values()
+        outside.mkdir()
+        _git(outside, "init", "-q", "--template=")
+
+    await checks.run("folder.prepare", prepare)
+    # These are independent of catalogue discovery and native startup.
+    await checks.run(
+        "settings.write", lambda: harness.backend.permission_presets.set(PermissionPreset.ASK)
+    )
+    await checks.run(
+        "settings.read",
+        harness.backend.permission_presets.read,
+        expect=lambda value: value is PermissionPreset.ASK,
+    )
+    launched = await checks.run(
+        "fresh.launch",
+        lambda: sessions.launch(
+            LaunchCommand(
+                project,
+                agent,
+                _key("outside-fresh"),
+                permissions=PermissionPreset.FULL_ACCESS,
+                folder=outside,
+            )
+        ),
+        requires=("folder.prepare",),
+        expect=lambda value: value.created,
+    )
+    first = None if launched is None else launched.record.session_id
+    await checks.run(
+        "fresh.ready", lambda: _folder_ready(harness, launched.record), requires=("fresh.launch",)
+    )
+    await checks.run(
+        "native.binding",
+        lambda: harness.binder.wait_bound(first, agent),
+        requires=("fresh.ready",),
+        expect=bool,
+    )
+    thread = await checks.run(
+        "native.identity",
+        lambda: thread_of(native.paths.activity_directory, str(first)),
+        requires=("native.binding",),
+        expect=bool,
+    )
+    await checks.run(
+        "native.name_api",
+        lambda: _name_folder_native_thread(native.paths, thread),
+        requires=("native.identity",),
+        seconds=12,
+    )
+
+    async def saved_name():
+        deadline = time.monotonic() + _FOLDER_NATIVE_WAIT
+        while True:
+            metadata = _folder_native_metadata(native.codex_home, thread)
+            if metadata.get("name") == _FOLDER_NATIVE_NAME or time.monotonic() >= deadline:
+                record("native_persistence", metadata=metadata)
+                return metadata.get("name")
+            await asyncio.sleep(0.25)
+
+    # A naming failure does not prevent ending/listing the real bound thread.
+    await checks.run(
+        "native.saved_name",
+        saved_name,
+        requires=("native.identity",),
+        expect=lambda value: value == _FOLDER_NATIVE_NAME,
+        seconds=18,
+    )
+    await checks.run(
+        "native.cwd",
+        lambda: _folder_native_metadata(native.codex_home, thread).get("cwd"),
+        requires=("native.identity",),
+        expect=lambda value: value == str(outside),
+    )
+
+    async def end_source():
+        await sessions.force_stop(ForceStopCommand(first))
+        if (await sessions._store.get(first)).state is SessionState.PRESERVED:
+            await sessions.cleanup(CleanupCommand(first))
+        return (await sessions._store.get(first)).state
+
+    await checks.run(
+        "source.end",
+        end_source,
+        requires=("fresh.launch",),
+        expect=lambda value: value is SessionState.ENDED,
+    )
+    await checks.run(
+        "catalogue.service",
+        lambda: harness.backend.conversations.catalogue(query),
+        expect=lambda value: value.unavailable_reason is None,
+    )
+
+    async def discover():
+        deadline = time.monotonic() + _FOLDER_NATIVE_WAIT
+        while True:
+            page = await harness.backend.conversations.catalogue(query)
+            assert page.unavailable_reason is None, page.unavailable_reason
+            for summary in page.conversations:
+                candidate = await harness.backend.conversations.resolve_for_resume(
+                    summary.reference
+                )
+                # ProviderConversationId is a dataclass wrapper, not a str subclass.
+                if candidate is not None and candidate.provider_conversation_id.value == thread:
+                    return candidate
+            if time.monotonic() >= deadline:
+                record("native_catalogue_missing", listed_count=len(page.conversations))
+                return None
+            await asyncio.sleep(0.5)
+
+    selected = await checks.run(
+        "catalogue.resolve",
+        discover,
+        requires=("catalogue.service", "native.identity", "source.end"),
+        expect=lambda value: value is not None,
+        seconds=22,
+    )
+    await checks.run(
+        "catalogue.folder",
+        lambda: selected.folder,
+        requires=("catalogue.resolve",),
+        expect=lambda value: value == outside,
+    )
+    await checks.run(
+        "catalogue.project_root",
+        lambda: selected.project_root,
+        requires=("catalogue.resolve",),
+        expect=lambda value: value == native.repo,
+    )
+
+    def selection():
+        if checks.ok("catalogue.folder", "catalogue.project_root"):
+            record("manual_selection_provenance", mode="real_catalogue")
+            return selected
+        # Diagnostic continuation only: use the independently bound actual native id.
+        # This can expose resume/restart errors, but cannot qualify catalogue acceptance.
+        record("manual_selection_provenance", mode="observed_thread_diagnostic_only")
+        reference = ConversationReference("c-" + hashlib.sha256(thread.encode()).hexdigest())
+        summary = ConversationSummary(
+            reference, agent, project, ConversationState.RESUMABLE, datetime.now(UTC)
+        )
+        return ResolvedConversation(summary, ProviderConversationId(thread), outside, native.repo)
+
+    choice = await checks.run(
+        "manual.selection", selection, requires=("native.identity", "source.end")
+    )
+    manual = await checks.run(
+        "manual.launch",
+        lambda: sessions.resume(
+            ResumeCommand(
+                project,
+                agent,
+                choice,
+                _key("outside-manual"),
+                permissions=PermissionPreset.FULL_ACCESS,
+            )
+        ),
+        requires=("manual.selection",),
+        expect=lambda value: value.created,
+    )
+    mid = None if manual is None else manual.record.session_id
+    manual_record = await checks.run(
+        "manual.ready", lambda: _folder_ready(harness, manual.record), requires=("manual.launch",)
+    )
+    await _folder_session_checks(
+        "manual", harness, manual_record, native, outside, thread, project, checks
+    )
+
+    await checks.run(
+        "restart.stop_server", lambda: _kill_server(native.socket), requires=("manual.ready",)
+    )
+    await checks.run(
+        "restart.server_absent",
+        harness.terminal.server_started_at,
+        requires=("restart.stop_server",),
+        expect=lambda value: value is None,
+    )
+    # Composition/build checks remain reachable even if native resume failed.
+    fresh = await checks.run(
+        "restart.compose",
+        lambda: _compose(
+            load_config(native.paths.config_path), sessions._store._connection, native.paths
+        ),
+    )
+    notices = []
+
+    async def enabled():
+        return True
+
+    async def notify(reports, unchecked):
+        notices.append((reports, unchecked))
+
+    def build():
+        fresh.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
+        connection = sessions._store._connection
+        return build_restart_resume(
+            store=fresh.backend.sessions._store,
+            terminal=fresh.terminal,
+            turn_markers=FileTurnMarkers(native.paths.activity_directory),
+            conversation_marks=FileConversationMarks(native.paths.activity_directory),
+            started_marks=FileStartedMarks(native.paths.activity_directory),
+            rollovers=SQLiteRolloverStore(connection),
+            capabilities=fresh.backend.conversations.capabilities,
+            outcomes=SQLiteInterruptedResumes(connection),
+            resume=fresh.backend.sessions.resume,
+            folder_of=SQLiteWorktreeStore(connection).folder_for,
+            bound_folder_of=SQLiteFolderBindings(connection, accept=acceptable_root).folder_for,
+            enabled=enabled,
+            notify=notify,
+            stopping=lambda: False,
+            remember_permissions=fresh.backend.sessions.remember_permissions,
+            lock_path=native.paths.database_path.with_name("restart-resume.lock"),
+        )
+
+    restart = await checks.run("restart.build", build, requires=("restart.compose",))
+
+    async def poll(_secrets, _boundary):
+        async with asyncio.timeout(150):
+            while not notices:
+                await asyncio.sleep(0.5)
+
+    await checks.run(
+        "restart.startup",
+        lambda: _serve_native_restart(fresh.composition, restart, poll),
+        requires=("manual.ready", "restart.server_absent", "restart.build"),
+        seconds=160,
+    )
+    await checks.run(
+        "restart.unchecked",
+        lambda: notices[0][1],
+        requires=("restart.startup",),
+        expect=lambda value: value == 0,
+    )
+
+    def matching_report():
+        matching = [item for item in notices[0][0] if item.record.session_id == mid]
+        assert len(matching) == 1, f"expected one matching report, got {len(matching)}"
+        return matching[0]
+
+    report = await checks.run("restart.report", matching_report, requires=("restart.startup",))
+    await checks.run(
+        "restart.outcome",
+        lambda: report.outcome,
+        requires=("restart.report",),
+        expect=lambda value: value.startswith("resumed:"),
+    )
+    rid = await checks.run(
+        "restart.new_id",
+        lambda: report.new_session_id,
+        requires=("restart.report",),
+        expect=lambda value: value is not None,
+    )
+
+    async def resumed_record():
+        row = await fresh.backend.sessions._store.get(rid)
+        return await _folder_ready(fresh, row)
+
+    restored = await checks.run("restart.ready", resumed_record, requires=("restart.new_id",))
+    await _folder_session_checks(
+        "restart", fresh, restored, native, outside, thread, project, checks
+    )
+    await checks.run(
+        "restart.single_running",
+        lambda: fresh.backend.sessions.list_sessions(),
+        requires=("restart.ready",),
+        expect=lambda rows: (
+            [item.session_id for item in rows if item.state is SessionState.RUNNING] == [rid]
+        ),
+    )
+    await checks.run(
+        "qualified.manual",
+        lambda: True,
+        requires=(
+            "catalogue.folder",
+            "catalogue.project_root",
+            "settings.read",
+            *(f"manual.{field}" for field in _FOLDER_SESSION_FIELDS),
+        ),
+    )
+    await checks.run(
+        "qualified.restart",
+        lambda: True,
+        requires=(
+            "qualified.manual",
+            "restart.unchecked",
+            "restart.outcome",
+            "restart.single_running",
+            *(f"restart.{field}" for field in _FOLDER_SESSION_FIELDS),
+        ),
+    )
+
+
+async def _folder_native_diagnostics(native, checks, record):
+    async def sessions():
+        rows = await native.harness.backend.sessions.list_sessions()
+        record(
+            "session_snapshot",
+            sessions=[
+                {
+                    "session": str(row.session_id),
+                    "project": str(row.project_id),
+                    "state": row.state.value,
+                    "resume_source_id": row.resume_source_id,
+                }
+                for row in rows
+            ],
+        )
+
+    async def metadata():
+        rows = []
+        for row in await native.harness.backend.sessions.list_sessions():
+            thread = (
+                thread_of(native.paths.activity_directory, str(row.session_id))
+                or row.resume_source_id
+            )
+            if thread:
+                rows.append(_folder_native_metadata(native.codex_home, thread))
+        record("native_metadata_snapshot", threads=rows)
+
+    async def panes():
+        terminal = native.harness.terminal
+        observations = await terminal.managed_observations()
+        for observation in observations:
+            record(
+                "private_pane_snapshot",
+                session=str(observation.session_id),
+                screen=(await terminal.capture(observation.session_id))[-12000:],
+            )
+
+    for name, operation in (("sessions", sessions), ("native", metadata), ("panes", panes)):
+        await checks.run(f"diagnostics.{name}", operation, seconds=10, finalizer=True)
+
+
+# One bounded run collects reachable failures; dependent checks remain explicitly blocked.
 @pytest.mark.live_acceptance
 async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(request, monkeypatch):
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
@@ -1445,191 +1914,66 @@ async def test_native_nondefault_folder_catalogue_manual_and_restart_resume(requ
     output = os.environ.get("RA_FOLDER_BOUND_NATIVE_OUT")
     if not output or not Path(output).is_absolute():
         pytest.fail("RA_FOLDER_BOUND_NATIVE_OUT must name a fresh absolute private receipt")
-    fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as receipt:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    with os.fdopen(os.open(output, flags, 0o600), "w", encoding="utf-8") as receipt:
+        with os.fdopen(
+            os.open(output + ".summary.json", flags, 0o600), "w", encoding="utf-8"
+        ) as summary_file:
 
-        def record(step, **details):
-            receipt.write(
-                json.dumps({"at": datetime.now(UTC).isoformat(), "step": step, **details}) + "\n"
-            )
-            receipt.flush()
-            os.fsync(receipt.fileno())
-
-        record("started", model_prompts_allowed=False)
-        prompt_attempts = []
-
-        async with asyncio.timeout(300), _codex_service(request.config, monkeypatch) as native:
-            native_version = await asyncio.to_thread(
-                subprocess.run,
-                [str(native.paths.home / ".local/bin/codex"), "--version"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=20,
-            )
-            record("isolated_service_ready", native_version=native_version.stdout.strip())
-            harness = native.harness
-            harness.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
-            sessions = harness.backend.sessions
-            agent = ProfileId("codex")
-            project = next(k for k, p in harness.projects.paths.items() if p == native.repo)
-            outside = native.repo.parent / "outside-folder"
-            outside.mkdir()
-            subprocess.run(
-                ["git", "init", "-q", "--template=", str(outside)], check=True, timeout=30
-            )
-            assert outside != native.repo and outside not in harness.projects.paths.values()
-            chosen = PermissionPreset.FULL_ACCESS
-            launched = await sessions.launch(
-                LaunchCommand(
-                    project, agent, _key("outside-fresh"), permissions=chosen, folder=outside
+            def record(step, **details):
+                receipt.write(
+                    json.dumps({"at": datetime.now(UTC).isoformat(), "step": step, **details})
+                    + "\n"
                 )
-            )
-            first = launched.record.session_id
-            if launched.record.state is SessionState.UNTRUSTED:
-                await _answer_trust(harness, first)
-            await _until_running(harness, first)
-            assert await harness.binder.wait_bound(first, agent)
-            thread = thread_of(native.paths.activity_directory, str(first))
-            assert thread
-            record(
-                "native_before_naming", metadata=_folder_native_metadata(native.codex_home, thread)
-            )
-            # The remote-agents message relay intentionally refuses Codex slash commands.
-            # Use the native metadata API for fixture setup, never relax that policy.
-            record("native_naming_api_started", thread=thread)
-            await _name_folder_native_thread(native.paths, thread)
-            deadline = time.monotonic() + 15
-            metadata = _folder_native_metadata(native.codex_home, thread)
-            while metadata.get("name") != _FOLDER_NATIVE_NAME and time.monotonic() < deadline:
-                await asyncio.sleep(0.25)
-                metadata = _folder_native_metadata(native.codex_home, thread)
-            record("native_named_persistence", metadata=metadata)
-            assert metadata.get("name") == _FOLDER_NATIVE_NAME, metadata
-            assert metadata.get("cwd") == str(outside), metadata
-            await sessions.force_stop(ForceStopCommand(first))
-            if (await sessions._store.get(first)).state is SessionState.PRESERVED:
-                await sessions.cleanup(CleanupCommand(first))
-            assert (await sessions._store.get(first)).state is SessionState.ENDED
-            record("native_outside_folder_ended", thread=thread, folder=str(outside))
+                receipt.flush()
+                os.fsync(receipt.fileno())
 
-            deadline = time.monotonic() + 30
-            selected = None
-            while time.monotonic() < deadline and selected is None:
-                page = await harness.backend.conversations.catalogue(
-                    ConversationCatalogueQuery(1, 50, agent, project)
-                )
-                assert page.unavailable_reason is None, page.unavailable_reason
-                for summary in page.conversations:
-                    candidate = await harness.backend.conversations.resolve_for_resume(
-                        summary.reference
+            record("started", model_prompts_allowed=False, collection="all_reachable_checks")
+            checks = NativeChecks(_FOLDER_NATIVE_CHECKS, record)
+            prompt_attempts = []
+            context = _codex_service(request.config, monkeypatch)
+            try:
+                try:
+                    native = await context.__aenter__()
+                except BaseException as error:
+                    checks.failure("fixture", error)
+                    raise
+                checks.put("fixture", "passed")
+                try:
+                    await checks.run(
+                        "workflow",
+                        lambda: _collect_folder_native(native, checks, prompt_attempts, record),
+                        seconds=420,
                     )
-                    if candidate is not None and str(candidate.provider_conversation_id) == thread:
-                        selected = candidate
-                        break
-                if selected is None:
-                    await asyncio.sleep(0.5)
-            record(
-                "native_catalogue_observation",
-                bound_folders=[
-                    str(p)
-                    for p in await SQLiteFolderBindings(
-                        sessions._store._connection, accept=acceptable_root
-                    ).for_project(project)
-                ],
-                listed_count=len(page.conversations),
-                selected=selected is not None,
-                isolated_executable=str(native.paths.home / ".local/bin/codex"),
-                metadata=_folder_native_metadata(native.codex_home, thread),
+                    await _folder_native_diagnostics(native, checks, record)
+                except BaseException as error:
+                    checks.failure("execution", error)
+                    raise
+                else:
+                    checks.put("execution", "passed")
+                finally:
+                    # Run credential invariants and teardown even when collection failed.
+                    await checks.run(
+                        "cleanup",
+                        lambda: context.__aexit__(None, None, None),
+                        seconds=60,
+                        finalizer=True,
+                    )
+            finally:
+                await checks.run(
+                    "no_model_prompts",
+                    lambda: prompt_attempts,
+                    expect=lambda value: not value,
+                    finalizer=True,
+                )
+                summary = checks.finish()
+                summary_file.write(json.dumps(summary, indent=2) + "\n")
+                summary_file.flush()
+                os.fsync(summary_file.fileno())
+                if summary["qualification"] == "passed":
+                    record("passed_and_cleanup_complete", model_prompts_sent=0)
+            assert summary["qualification"] == "passed", (
+                f"Native check report: {len(summary['failed'])} failed, "
+                f"{len(summary['blocked'])} blocked. "
+                f"Failures: {', '.join(summary['failed'])}. Full report: {output}.summary.json"
             )
-            assert selected is not None, (
-                "ended native outside-folder conversation missing from catalogue"
-            )
-            assert selected.folder == outside and selected.project_root == native.repo
-            record("real_catalogue_resolves_outside_folder", folder=str(selected.folder))
-
-            # Explicit choice avoids fabricating a hook-start event for a shell-only thread.
-            # The automatic restart below must inherit this recorded choice, not the default.
-            await harness.backend.permission_presets.set(PermissionPreset.ASK)
-            manual = await sessions.resume(
-                ResumeCommand(project, agent, selected, _key("outside-manual"), permissions=chosen)
-            )
-            assert manual.created
-            mid = manual.record.session_id
-            if manual.record.state is SessionState.UNTRUSTED:
-                await _answer_trust(harness, mid)
-            await _until_running(harness, mid)
-            folder_store = SQLiteFolderBindings(sessions._store._connection, accept=acceptable_root)
-            assert await folder_store.folder_for(mid) == outside
-            assert await sessions.permission_preset(mid) is chosen
-            intent = json.loads((native.paths.intent_directory / f"{mid}.json").read_text())
-            assert intent["cwd"] == str(outside) and thread in intent["argv"]
-            record(
-                "native_manual_resume", session=str(mid), folder=intent["cwd"], preset=chosen.value
-            )
-
-            _kill_server(native.socket)
-            connection = sessions._store._connection
-            fresh = _compose(load_config(native.paths.config_path), connection, native.paths)
-            fresh.terminal.send_prompt = _folder_native_prompt_guard(prompt_attempts)
-            notices = []
-
-            async def enabled():
-                return True
-
-            async def notify(reports, unchecked):
-                notices.append((reports, unchecked))
-
-            restart = build_restart_resume(
-                store=fresh.backend.sessions._store,
-                terminal=fresh.terminal,
-                turn_markers=FileTurnMarkers(native.paths.activity_directory),
-                conversation_marks=FileConversationMarks(native.paths.activity_directory),
-                started_marks=FileStartedMarks(native.paths.activity_directory),
-                rollovers=SQLiteRolloverStore(connection),
-                capabilities=fresh.backend.conversations.capabilities,
-                outcomes=SQLiteInterruptedResumes(connection),
-                resume=fresh.backend.sessions.resume,
-                folder_of=SQLiteWorktreeStore(connection).folder_for,
-                bound_folder_of=SQLiteFolderBindings(connection, accept=acceptable_root).folder_for,
-                enabled=enabled,
-                notify=notify,
-                stopping=lambda: False,
-                remember_permissions=fresh.backend.sessions.remember_permissions,
-                lock_path=native.paths.database_path.with_name("restart-resume.lock"),
-            )
-
-            async def poll(_secrets, _boundary):
-                async with asyncio.timeout(150):
-                    while not notices:
-                        await asyncio.sleep(0.5)
-
-            await _serve_native_restart(fresh.composition, restart, poll)
-            reports, unchecked = notices[0]
-            matching = [r for r in reports if r.record.session_id == mid]
-            assert unchecked == 0 and len(matching) == 1
-            report = matching[0]
-            assert report.outcome.startswith("resumed:"), report.outcome
-            rid = report.new_session_id
-            assert rid is not None
-            record_after = await _until_running(fresh, rid)
-            assert (
-                record_after.project_id == project and str(record_after.resume_source_id) == thread
-            )
-            assert await fresh.backend.sessions.permission_preset(rid) is chosen
-            intent = json.loads((native.paths.intent_directory / f"{rid}.json").read_text())
-            assert intent["cwd"] == str(outside) and thread in intent["argv"]
-            live = [
-                r
-                for r in await fresh.backend.sessions.list_sessions()
-                if r.state is SessionState.RUNNING
-            ]
-            assert len(live) == 1 and live[0].session_id == rid
-            record(
-                "native_automatic_restart_resume",
-                session=str(rid),
-                folder=intent["cwd"],
-                preset=chosen.value,
-            )
-        assert not prompt_attempts, "automatic recovery attempted an unsolicited model prompt"
-        record("passed_and_cleanup_complete", model_prompts_sent=0)
