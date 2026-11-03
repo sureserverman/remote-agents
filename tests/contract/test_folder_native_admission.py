@@ -200,3 +200,89 @@ async def test_native_restart_reaches_poll_after_real_boundary_refresh(monkeypat
     await module._serve_native_restart(
         ServiceComposition(None, Terminal(), Reconciler()), None, poll
     )
+
+
+@pytest.mark.parametrize(
+    "text, allow_name",
+    [
+        ("do work", True),
+        ("/rename other", True),
+        ("/rename ra-bl141-native\ndo work", True),
+        ("/rename ra-bl141-native ", True),
+        ("/rename ra-bl141-native", False),
+    ],
+)
+async def test_native_command_guard_blocks_every_other_input(monkeypatch, text, allow_name):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    delivered, attempts, commands = [], [], []
+
+    async def send(session, value):
+        delivered.append((session, value))
+
+    guard = module._folder_native_prompt_guard(
+        SimpleNamespace(send_prompt=send), attempts, commands, allow_name=allow_name
+    )
+    with pytest.raises(AssertionError, match="forbids every model prompt"):
+        await guard("private-session", text)
+    assert delivered == [] and commands == []
+    assert attempts == [("private-session", text)]
+
+
+async def test_native_command_guard_allows_only_one_exact_builtin_rename(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    delivered, attempts, commands = [], [], []
+
+    async def send(session, value):
+        delivered.append((session, value))
+        return "native delivery"
+
+    guard = module._folder_native_prompt_guard(
+        SimpleNamespace(send_prompt=send), attempts, commands, allow_name=True
+    )
+    assert await guard("private-session", module._FOLDER_NATIVE_RENAME) == "native delivery"
+    with pytest.raises(AssertionError, match="forbids every model prompt"):
+        await guard("private-session", module._FOLDER_NATIVE_RENAME)
+    assert delivered == commands == [("private-session", "/rename ra-bl141-native")]
+    assert len(attempts) == 1
+
+
+def test_native_metadata_reads_only_selected_thread_and_no_transcript(monkeypatch, tmp_path):
+    import sqlite3
+
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    database = tmp_path / "state_5.sqlite"
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE threads(id, cwd, name, has_user_event, archived, history_mode, transcript)"
+    )
+    connection.executemany(
+        "INSERT INTO threads VALUES (?,?,?,?,?,?,?)",
+        [
+            ("private", "/private/outside", "ra-bl141-native", 0, 0, "paginated", "secret"),
+            ("other", "/other", "not selected", 1, 0, "legacy", "other content"),
+        ],
+    )
+    connection.commit()
+    connection.close()
+    before = database.read_bytes()
+    assert module._folder_native_metadata(tmp_path, "private") == {
+        "database": "state_5.sqlite",
+        "id": "private",
+        "cwd": "/private/outside",
+        "name": "ra-bl141-native",
+        "has_user_event": 0,
+        "archived": 0,
+        "history_mode": "paginated",
+    }
+    assert database.read_bytes() == before
+    assert module._folder_native_metadata(tmp_path, "absent") == {"found": False}
+
+
+def test_native_metadata_missing_database_creates_nothing(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    assert module._folder_native_metadata(tmp_path, "private") == {"found": False}
+    assert list(tmp_path.iterdir()) == []
