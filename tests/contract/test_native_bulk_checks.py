@@ -111,7 +111,8 @@ def bulk_case(monkeypatch, tmp_path):
         server=True,
         named=False,
         seeded=False,
-        requires_user_event=False,
+        requires_preview=False,
+        legacy_user_event=1,
         preset=PermissionPreset.PROVIDER_DEFAULT,
         cleaned=0,
     )
@@ -211,7 +212,7 @@ def bulk_case(monkeypatch, tmp_path):
     class Conversations:
         async def catalogue(self, query):
             missing = "catalogue" in faults or (
-                state.requires_user_event and (not state.seeded or "empty_preview" in faults)
+                state.requires_preview and (not state.seeded or "empty_preview" in faults)
             )
             return ConversationCataloguePage(() if missing else (summary,), 1, 1)
 
@@ -374,7 +375,7 @@ def bulk_case(monkeypatch, tmp_path):
         lambda *args: {
             "cwd": str(outside),
             "name": module._FOLDER_NATIVE_NAME if state.named else None,
-            "has_user_event": int(state.seeded),
+            "has_user_event": int(state.seeded) * state.legacy_user_event,
             "preview_nonempty": int(state.seeded and "empty_preview" not in faults),
         },
     )
@@ -768,7 +769,7 @@ async def test_one_turn_mode_uses_real_delivery_contract_once_and_keeps_cleanup(
     bulk_case, monkeypatch, fail_seed
 ):
     module, faults, calls, state, output = bulk_case
-    state.requires_user_event = True
+    state.requires_preview = True
     monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", module._FOLDER_NATIVE_TURN_AUTH)
     if fail_seed:
         faults.add("seed")
@@ -837,7 +838,7 @@ async def test_empty_native_history_reproduces_catalogue_failure_with_complete_d
     bulk_case, monkeypatch
 ):
     module, faults, calls, state, output = bulk_case
-    state.requires_user_event = True
+    state.requires_preview = True
     with pytest.raises(AssertionError, match="Native check report"):
         await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
             SimpleNamespace(config=None), monkeypatch
@@ -858,7 +859,7 @@ async def test_sent_turn_with_empty_preview_cannot_qualify_and_is_not_retried(
     bulk_case, monkeypatch
 ):
     module, faults, calls, state, output = bulk_case
-    state.requires_user_event = True
+    state.requires_preview = True
     faults.add("empty_preview")
     monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", module._FOLDER_NATIVE_TURN_AUTH)
     with pytest.raises(AssertionError, match="Native check report"):
@@ -888,4 +889,17 @@ async def test_qualified_labels_depend_on_one_turn_history_even_if_catalogue_ret
     assert checks["qualified.manual"]["status"] == "blocked"
     assert "native.history_ready" in checks["qualified.manual"]["prerequisites"]
     assert checks["qualified.restart"]["status"] == "blocked"
+    assert calls.count("seed") == 1 and state.cleaned == 1
+
+
+async def test_paginated_history_with_zero_legacy_event_flag_is_eligible(bulk_case, monkeypatch):
+    module, faults, calls, state, output = bulk_case
+    state.requires_preview = True
+    state.legacy_user_event = 0
+    monkeypatch.setenv("RA_FOLDER_NATIVE_TURN_AUTHORIZATION", module._FOLDER_NATIVE_TURN_AUTH)
+    await module.test_native_nondefault_folder_catalogue_manual_and_restart_resume(
+        SimpleNamespace(config=None), monkeypatch
+    )
+    report = json.loads(Path(str(output) + ".summary.json").read_text())
+    assert report["qualification"] == "passed"
     assert calls.count("seed") == 1 and state.cleaned == 1

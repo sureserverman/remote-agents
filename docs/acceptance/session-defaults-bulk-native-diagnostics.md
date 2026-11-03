@@ -179,3 +179,40 @@ class. The original failure is preserved with the green controls under
 
 This remedy does not close the original run, invent a sixth round, waive catalogue
 acceptance, change the installed application, or authorize another paid/native bundle.
+
+
+## Actual one-turn result and stale paginated metadata correction
+
+Owner invocation of the disclosed single-use command supplies the OD-7 one-message
+approval and actual execution; it does not authorize a repeat. At792290f8/Codex0.166.0,
+QdkpW5 completed62checks: **59passed,1failed,2blocked**, rawexit1. The raw receipt remains
+failed and immutable. The actual non-default-folder catalogue, root/folder resolution,
+manual resume, automatic restart, exact thread/preset/cwd/argv, one running successor,
+prompt budget, credential invariants and cleanup all passed. Selection provenance is
+`real_catalogue`. There is no diagnostic fallback in this run.
+
+The sole failure was the executor-added history prerequisite: `has_user_event` remained0
+in the paginated state database even after the exact user message and completed
+RA_FOLDER_NATIVE_OK reply. The persisted preview became nonempty and the actual catalogue
+returned that exact outside-folder conversation. This legacy flag is not the success
+signal assumed by the fixture. It remains read-only diagnostic metadata; the future
+eligibility predicate uses nonempty preview plus a real idle observation. All stale flag
+eligibility assertions were swept across src/tests; no product use requires a change.
+The whole-path reproduction failed1case0.50s before the correction, then76offline
+controls passed3.01s, including both legacy flag values, empty preview and busy-pane denial.
+
+Evidence boundary: the old predicate short-circuited before `pane_idle(first)`, so the
+original fresh session's post-message idle port observation was **NOT OBSERVED**. A
+production classifier re-read of the saved later restart-successor pane returns IDLE,
+and the corrected predicate holds for that later observation only. Neither observation
+is relabelled as execution of the amended predicate on the original session. The two raw
+qualified labels stay blocked. Separate correction assessment preserves the full raw
+failure and hashes under `recovery/bulk-native-diagnostics-20261103/paginated-history-
+correction/`; actual run artifacts are in `attempt-7-one-turn-legacy-flag/`.
+
+The authored BL-141/gate requirement is actual outside-folder catalogue/manual/restart
+behavior, all of which is directly evidenced by the successful operational checks. It
+does not require the executor-added legacy flag or that supplemental fresh-session idle
+port observation. Original functional acceptance therefore uses the measured product
+checks plus source-only fixture fix-scope evidence under OD-3's approved reconciliation;
+it does not claim raw62-pass, buy another paid turn, or alter any authored Outcome.

@@ -428,3 +428,17 @@ async def test_catalogue_instrumentation_preserves_real_payload_and_logs_only_co
     ]
     await observed.close()
     protocol.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("legacy_flag", [0, 1])
+@pytest.mark.parametrize("preview", [0, 1])
+@pytest.mark.parametrize("idle", [False, True])
+def test_history_eligibility_uses_preview_and_real_idle_not_legacy_flag(
+    monkeypatch, legacy_flag, preview, idle
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]))
+    module = importlib.import_module("live.test_rollover_live")
+    metadata = {"has_user_event": legacy_flag, "preview_nonempty": preview}
+    assert module._folder_native_history_eligible(metadata, pane_idle=idle) is bool(
+        preview and idle
+    )

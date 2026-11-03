@@ -1459,6 +1459,11 @@ async def _name_folder_native_thread(paths, thread):
         await protocol.close()
 
 
+def _folder_native_history_eligible(metadata, *, pane_idle):
+    """The installed paginated store lists a nonempty preview; legacy event flags may stay zero."""
+    return metadata.get("preview_nonempty") == 1 and pane_idle is True
+
+
 def _folder_native_metadata(home, thread):
     """Read only the fixture thread's persistence metadata, never its transcript or auth."""
     for path in sorted(home.glob("state_*.sqlite")):
@@ -1735,10 +1740,8 @@ async def _collect_folder_native(native, checks, prompt_attempts, record, *, all
             deadline = time.monotonic() + _FOLDER_NATIVE_TURN_WAIT
             while True:
                 metadata = _folder_native_metadata(native.codex_home, thread)
-                if (
-                    metadata.get("has_user_event") == 1
-                    and metadata.get("preview_nonempty") == 1
-                    and await harness.terminal.pane_idle(first)
+                if _folder_native_history_eligible(
+                    metadata, pane_idle=await harness.terminal.pane_idle(first)
                 ):
                     record("native_history_eligible", metadata=metadata)
                     return
