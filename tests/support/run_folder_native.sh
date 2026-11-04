@@ -2,7 +2,7 @@
 # One owned job, model-free by default: collect local admission and namespace failures, then all reachable native checks.
 set -uo pipefail
 umask 077
-ra_worktree=/tmp/remote-agents-project-routing
+ra_worktree=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 ra_expected_head=${1:?expected source commit required}
 ra_writer=${2:?qualified writer checkout required}
 ra_writer_head=${3:?expected writer commit required}

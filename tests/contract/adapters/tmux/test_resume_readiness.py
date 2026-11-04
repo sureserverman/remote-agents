@@ -13,6 +13,7 @@ from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import (
+    FOLDER_UNAVAILABLE,
     NOT_AWAITING_TRUST,
     OWNERSHIP_LOST,
     WORKTREE_REMOVED,
@@ -823,7 +824,9 @@ async def test_the_intent_cwd_is_the_folder_the_lookup_answers(tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_project_from_the_lookup_is_still_an_invalid_intent(tmp_path) -> None:
+async def test_an_unknown_project_from_the_lookup_is_a_folder_unavailable_refusal(
+    tmp_path,
+) -> None:
     session_id = SessionId.new()
     gateway = _CountingGateway(session_id, tmp_path)
 
@@ -833,7 +836,7 @@ async def test_an_unknown_project_from_the_lookup_is_still_an_invalid_intent(tmp
     terminal = _folder_terminal(gateway, unknown)
     observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"))
 
-    assert observation.detail == "invalid_intent"
+    assert observation.detail == FOLDER_UNAVAILABLE
     assert gateway.launched == 0
 
 
