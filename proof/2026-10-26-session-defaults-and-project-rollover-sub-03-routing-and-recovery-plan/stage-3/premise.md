@@ -40,3 +40,90 @@ Assumption: The final native/provider, fresh-Codex-identity and independent Tele
 Checked: Existing Codex/Claude auth metadata (regular files, contents not read); prepared native collection12selected/13total; source capability/routing constraints and prior owner authorization.
 Result: Provider file-auth prerequisites exist, but complete native effective-policy/identity/adoption/restart behavior is unmeasured. Fresh unbound Codex writers deliberately refuse without independent managed conversation evidence. No isolated Telegram user route or external send was authorized. These are retained final-gate obligations, not source passes. Added at the final gate after Task3.1/3.2; the original pre-implementation premises and Outcomes above remain unchanged.
 Verdict: not checkable here — requires the final actual native measurements and an authorized isolated Telegram route; no test or supplied fixture substitutes for them
+
+# Recovered current Stage 3 premise assessment — 2026-11-04
+
+This assesses the pre-existing Stage 3 premises against retained final-gate
+evidence. It does not alter their original text or historical verdicts; it
+records their current status within the same original round 5. No provider,
+model, bot, service, or test command was run for this assessment.
+
+## Premise 1 — current
+
+Assumption: Both qualified built planning writers can emit actual v2 destinations
+into owned external-record fixtures.
+
+Current evidence: the canonical reconciliation retains the qualified writer at
+`7f83446`, version 1.4.2, with both host `handoff_v2.py` hashes equal; the
+final source validation repeats the same clean writer identity. The exact
+four-file master goal command is retained as 112 passed at `fa401c23`.
+
+Verdict: **holds**.
+
+Limit: this is writer/source evidence; it is not itself a live provider claim.
+
+## Premise 2 — current
+
+Assumption: The proposed live drills can be collected without executing providers
+or reading login contents.
+
+Current evidence: the final-gate records retain live-suite collection and the
+owner-native receipts independently. The later native work used bounded
+owner-terminal wrappers and explicit prompt budgets; the QdkpW5 receipt records
+one authorized turn and cleanup rather than inferring execution from collection.
+
+Verdict: **holds**.
+
+Limit: collection remains collection only; provider behavior is established only
+by the separately cited owner-native observations.
+
+## Premise 3 — current
+
+Assumption: An authorized isolated Codex login route is available without
+changing the owner's profile or credentials.
+
+Current evidence: owner QdkpW5/Codex 0.166.0 completed the outside-folder
+catalogue/manual/restart route with a bounded one-turn budget; the receipt
+records prompt-budget and cleanup checks passing. The canonical reconciliation
+keeps it distinct from the working service and records no profile/provider/trust
+change.
+
+Verdict: **holds**.
+
+Limit: this establishes the authorized disposable owner-terminal mechanism, not
+a claim about sandbox enforcement in the managed service.
+
+## Premise 4 — current
+
+Assumption: The final native/provider, fresh-Codex-identity and independent
+Telegram routes can demonstrate the full owner journey.
+
+Current evidence:
+
+- Historical owner-native 12-pass and separate binding 5-pass receipts cover
+  the original native identity/rollover/adoption/restart/preset scope at their
+  measured base.
+- QdkpW5 directly measured the missing outside-folder real-catalogue, manual,
+  and restart functional path. Its raw 59-pass/1-fail/2-blocked record is
+  retained; the separate immutable correction assessment identifies the failed
+  legacy `has_user_event` condition as diagnostic, while the authored
+  functional checks passed.
+- Installed `d5e64b78` Telegram acceptance records the corrected named
+  unavailable-folder/no-pane refusal with preserved sessions and the observed
+  trust-hold interruption followed by one safe explicit retry without a
+  duplicate.
+
+Verdict: **holds at the stated measured scope**.
+
+Limit: the first fresh-session idle observation remains NOT OBSERVED; raw native
+qualification did not exit zero; no claim is made for all crash windows, a new
+paid bundle, published deployment, or a provider behavior beyond the retained
+observations. These are not unmet authored Premise 4 requirements.
+
+## Current premise finding
+
+**PASS.** No premise is false and no current Stop condition is identified.
+Earlier not-checkable verdicts remain historical records of the unavailable
+route at that time.
+
+Background jobs: none started.

@@ -305,3 +305,108 @@ The evaluator's original Material architecture-not-run finding remains preserved
 Owner-operated Telegram acceptance exposed a generic readiness/pane warning for a known unavailable folder. The actual failure is retained in canonical recovery captures. The independently observed trust-hold native interruption plus one explicit Telegram fresh-launch retry passed with exactly one new session/pane in the same folder and preset; it does not measure daemon restart or claim-publication crash.
 
 OD-5 approved a bounded source repair within the existing fifth round. Missing/unknown/non-directory/unresolvable folders now keep their pre-pane reason through the application to both interfaces; 875 affected checks pass, both focused reviews approve. Source report: docs/acceptance/session-defaults-round5-folder-refusal.md. This source fix is not installed and the actual Telegram refusal rerun/final evidence judgment remain open. This executor note does not change the evaluator's preserved cannot-reach verdicts or convert the observed failure into a pass.
+
+# Recovered current Stage 3 Outcomes assessment — 2026-11-04
+
+This is the owed current assessment within original round 5. It appends to,
+and does not revise, the earlier evaluator's historical cannot-reach entries:
+those describe the evaluator's then-unavailable isolated transport. The current
+verdicts use the subsequently retained owner-operated native and Telegram
+receipts under OD-3's input-bound evidence-reuse/fix-scope authority. No product,
+provider, model, bot, service, or test command was run for this assessment.
+
+| Outcome | Current verdict |
+| --- | --- |
+| 1 | holds |
+| 2 | holds |
+| 3 | holds |
+
+## Outcome 1 — current
+
+> Works: The owner can run a five-project master plan through rollovers and restart without manually fixing project or permission selection.
+
+Verdict: **holds**.
+
+Evidence:
+
+- The retained owner-observed live Claude routing journey records exactly one
+  successor in the stated project and folder, with the real five-project journey
+  separately disclosed as unseeded; the Stage 3 brief preserves its commit and
+  limits.
+- The owner native receipt `ra-live-owner-20261102T171948.log` is retained as
+  12 passed at its measured base, and the separate binding proof as 5 passed;
+  neither is relabelled as a new run.
+- The owner-run `QdkpW5` native receipt on Codex 0.166.0 directly records
+  real-catalogue outside-folder resolution, manual resume, and restart. Its
+  actual checks passed project, thread, folder, preset, intent, cwd, argv, and
+  one-running-successor checks. The raw result remains **59 PASS, 1 FAIL, 2
+  BLOCKED**, not a fabricated 62-pass result. The failed
+  `native.history_ready` predicate required the legacy `has_user_event=1`;
+  the recorded later row had `preview_nonempty=1` and the pane showed the
+  actual reply. The separate correction assessment limits this to an invalid
+  diagnostic prerequisite; it does not overwrite the raw receipt.
+- The final source validation records the exact four-file master goal command
+  as 112 passed at `fa401c23`; its runtime implementation is stated identical
+  to installed `d5e64b78` except the version string. This is source
+  qualification, not a substitute for the owner-operated evidence above.
+
+Limit: the original first-session post-message idle observation is explicitly
+NOT OBSERVED, and the amended predicate was not rerun natively. Neither is an
+authored Outcome requirement; the directly observed catalogue/manual/restart
+functional checks are the relevant owner journey evidence.
+
+## Outcome 2 — current
+
+> Invalid or unavailable input → a named refusal with existing sessions preserved.
+
+Verdict: **holds**.
+
+Evidence:
+
+- `corrected-rerun-result.json` records the owner confirmation, after the
+  instructed Codex press on the existing Telegram bot, of the unavailable-folder
+  / no-pane response on installed candidate `d5e64b78`. It labels the owner's
+  words as confirmation, not a fabricated verbatim bot quote.
+- The same receipt records one ended attempt, no fixture pane or duplicate, and
+  no pre-existing session-state change. `latest-installation.json` ties the
+  installed candidate to `d5e64b78` and records preserved pre-existing rows,
+  pane inventory, configuration, and dependencies.
+- `unavailable-result.json` remains retained as the earlier generic-message
+  failure; it is not erased or represented as a pass.
+
+Limit: the owner confirmation is not a literal transcript. The authored
+criterion requires owner-operated named refusal and preserved sessions, both of
+which are evidenced; it does not require a verbatim bot-message capture.
+
+## Outcome 3 — current
+
+> Interrupted operation → durable state permits safe retry or a visible hold, never an unrecorded second launch.
+
+Verdict: **holds**.
+
+Evidence:
+
+- `interruption-before.json`, `interruption-action.json`, and
+  `interruption-after.json` record a real trust-held Codex pane, its abrupt
+  closure, ended original session, no fixture panes, unchanged pre-existing
+  states, and unchanged service identity.
+- `interruption-owner-observation.json` records the owner's `absent`
+  observation. `interruption-retry-result.json` records one explicit retry:
+  one new untrusted session/pane in the same project root with the saved
+  `approve_for_me` preset; the original ended and no automatic or duplicate
+  successor existed.
+- The earlier owner native restart receipt remains separately attributed, and
+  `QdkpW5` additionally directly passed restart target/project/thread/folder/
+  preset/intent/cwd/argv and single-running-successor checks.
+
+Limit: the Telegram interruption was an abrupt native trust-hold pane closure,
+not a daemon/power-loss/publication-crash or completed-turn scenario. Those are
+not additional authored Outcome requirements and are not claimed.
+
+## Current findings
+
+**PASS.** No Blocking, Material, or Minor finding is identified for the three
+authored Outcomes at their stated evidence scope. The limits above remain
+disclosures, and all earlier failed/cannot-reach evidence remains preserved.
+
+Background jobs: none started.
