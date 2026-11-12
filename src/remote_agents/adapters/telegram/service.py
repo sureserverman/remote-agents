@@ -114,10 +114,12 @@ from remote_agents.application.limits_source import (
 )
 from remote_agents.application.permission_apply import permission_state_line
 from remote_agents.application.permission_presets import (
+    LIVE_CHOICES,
     PERMISSION_CHOICES,
     PERMISSION_EFFECT,
     PERMISSION_INHERIT_LABEL,
     PERMISSION_TITLE,
+    permission_change_sentence,
     permission_label,
 )
 from remote_agents.application.profiles import ProfileAvailability
@@ -1948,6 +1950,10 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._inspect_reply(entity_id))
         if action == "session.unqueue":
             return _reply_arguments(self._unqueue_reply(entity_id))
+        if action == "session.permissions":
+            return _reply_arguments(await self._live_permissions_question(entity_id))
+        if action == "session.permissions.set":
+            return await self._live_permissions_reply(entity_id, token, message_id)
         if action in _ROLLOVER_OF_CALLBACK:
             return await self._rollover_reply(
                 _ROLLOVER_OF_CALLBACK[action], entity_id, token, message_id
@@ -3078,6 +3084,17 @@ class PrivateBotBoundary:
         )
         if rollover_row:
             buttons.append(rollover_row)
+        # Permissions (DEC-033): one action, then one pick, as on the console. Offered where a
+        # change could be asked for at all; the use case refuses the rest by name.
+        if self._live_permissions_offered(record):
+            buttons.append(
+                (
+                    Button(
+                        "🛡 Permissions",
+                        self._callback("session.permissions", session_value),
+                    ),
+                )
+            )
         # **The two answers share one row, and the row is still the trust row's own.** The
         # owner asked for the pair to sit side by side on 2026-09-11, which supersedes
         # DEC-032's clause that gave each answer a row of its own; what that clause was
@@ -3292,6 +3309,84 @@ class PrivateBotBoundary:
                 back=self._callback("session.detail", session_value),
                 back_label="Back to session",
             )
+        )
+
+    def _live_permissions_offered(self, record: SessionRecord) -> bool:
+        settings = self.backend.permission_presets
+        return (
+            record.state is SessionState.RUNNING
+            and settings is not None
+            and record.profile_id in settings.profiles
+        )
+
+    async def _live_permissions_question(self, session_value: str) -> RenderedMessage:
+        """The three live choices (`LIVE_CHOICES`, OD-3), the session's current one marked."""
+        back = self._callback("session.detail", session_value)
+        record = await self._record(session_value)
+        if record is None or not self._live_permissions_offered(record):
+            return self._message(
+                "That session's permissions cannot be changed now.",
+                back=back,
+                back_label="Back to session",
+            )
+        try:
+            state = await self.backend.sessions.permission_state(record.session_id)
+        except Exception:
+            _LOG.exception("the permission state of %s could not be read", session_value)
+            state = None
+        current = None if state is None else state.requested
+        choices = tuple(
+            (
+                Button(
+                    choice.label + (" ✓" if choice.value == current else ""),
+                    self._callback(
+                        "session.permissions.set",
+                        f"{choice.value.value}:{session_value}",
+                        mutation=True,
+                    ),
+                ),
+            )
+            for choice in LIVE_CHOICES
+        )
+        return self._message(
+            "<b>Permissions</b>\nChange this session's mode now. Its continuations keep it; "
+            "the Settings default stays unchanged.",
+            choices,
+            back=back,
+            back_label="Back to session",
+        )
+
+    async def _live_permissions_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """A pick: claimed once, so a redelivered press changes nothing (DEC-011), then the
+        shared outcome sentence (DEC-091)."""
+        value, _, session_value = entity_id.partition(":")
+        back = self._callback("session.detail", session_value)
+        try:
+            preset = PermissionPreset(value)
+        except ValueError:
+            preset = None
+        if preset not in {choice.value for choice in LIVE_CHOICES}:
+            return _reply_arguments(self._message("That permission selection is invalid."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        try:
+            said = permission_change_sentence(
+                await self.backend.change_session_permissions(
+                    SessionId.parse(session_value), preset
+                )
+            )
+        except Exception:
+            _LOG.exception("the permission change for %s failed", session_value)
+            said = "not changed: the change could not be recorded"
+        return _reply_arguments(
+            self._message(escape(said), back=back, back_label="Back to session")
         )
 
     def _unqueue_reply(self, session_value: str) -> RenderedMessage:
