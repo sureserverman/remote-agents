@@ -570,6 +570,25 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         BEGIN SELECT RAISE(ABORT, 'session project root is immutable'); END;
         """,
     ),
+    (
+        26,
+        # What the service still owes a session on the shared daemon: the preset it asked for,
+        # the one the daemon last confirmed, which daemon confirmed it, and a failure's reason.
+        # Additive and never backfilled: a session with no row was launched with flags by an
+        # older build, and nothing applies a preset to it.
+        """
+        CREATE TABLE session_permission_state (
+            session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+            requested TEXT NOT NULL CHECK (requested IN
+                ('approve_for_me', 'ask', 'full_access', 'provider_default')),
+            applied TEXT CHECK (applied IS NULL OR applied IN
+                ('approve_for_me', 'ask', 'full_access', 'provider_default')),
+            daemon TEXT,
+            failure TEXT,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

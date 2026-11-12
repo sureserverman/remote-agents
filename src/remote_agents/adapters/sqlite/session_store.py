@@ -77,9 +77,20 @@ class SQLiteSessionStore:
                 (str(record.session_id),),
             )
             if permissions is not None:
+                preset = PermissionPreset(permissions).value
                 self._connection.execute(
                     "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
-                    (str(record.session_id), PermissionPreset(permissions).value),
+                    (str(record.session_id), preset),
+                )
+                # Pending until the daemon confirms it: `applied` stays NULL.
+                self._connection.execute(
+                    "INSERT INTO session_permission_state(session_id, requested, updated_at)"
+                    " VALUES (?, ?, ?)",
+                    (
+                        str(record.session_id),
+                        preset,
+                        record.created_at.astimezone(UTC).isoformat(),
+                    ),
                 )
 
             if project_root is not None:
