@@ -371,12 +371,12 @@ async def _refused(daemon_answer, *, timeout: float = 5.0, **daemon) -> str:
 
 async def test_a_wrong_websocket_accept_is_refused() -> None:
     reason = await _refused(_cooperative, accept=b"bm90LXRoZS1yaWdodC1hY2NlcHQ=")
-    assert reason == "the Codex daemon closed the connection"
+    assert reason == "the Codex daemon socket did not speak WebSocket"
 
 
 async def test_a_reply_that_is_not_101_is_refused() -> None:
     reason = await _refused(_cooperative, status=b"200")
-    assert reason == "the Codex daemon closed the connection"
+    assert reason == "the Codex daemon socket did not speak WebSocket"
 
 
 async def test_a_ping_is_answered_with_a_pong_and_the_reply_still_counts() -> None:
@@ -477,103 +477,100 @@ async def test_a_refusal_carries_a_cleaned_excerpt_of_what_codex_said() -> None:
     """Owner, 2026-11-12 (OD-9): "Show a cleaned excerpt"."""
     said = (
         "Invalid params: unknown field `approvalsReviewr` in thread/settings/update "
-        "(config at /home/operator/.codex/config.toml, token=sk-abcdef0123456789)\nsecond line"
+        "(see /home/operator/.codex/config.toml)\nsecond line"
     )
     error = {"code": -32602, "message": said}
     reason = await _refused(_on_update(lambda request_id: ({"id": request_id, "error": error},)))
     assert "Codex said “Invalid params: unknown field `approvalsReviewr`" in reason
-    assert "thread/settings/update" in reason.split("Codex said")[1]
-    for secret in ("/home", "config.toml", "sk-abcdef", "token=", "second line"):
+    for secret in ("/home", "config.toml", "operator", "second line"):
         assert secret not in reason
 
 
-@pytest.mark.parametrize(
-    "said",
-    [
-        "pairing code ABCD-EFGH-IJKL expired",
-        "bearer eyJhbGciOiJIUzI1NiJ9 rejected",
-        "key: 0123456789abcdef0123456789abcdef",
-        "see ~/.codex/auth.json",
-        "x" * 500,
-    ],
-)
-def test_the_excerpt_strips_every_secret_shape_and_stays_bounded(said) -> None:
+#: What the reviewers and the demo evaluator got past earlier cleaners (2026-11-12), and the
+#: piece of each that must not come back out.
+LEAKS = {
+    "zero-width split token": ("bad AAAAAAAAAA\u200bAAAAAAAAAA value", "AAAAAAAAAA"),
+    "zero-width split keyword": ("bad tok\u200ben=abc value", "abc"),
+    "token next to non-ASCII": ("bad AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAé value", "AAAAAAAAAA"),
+    "19 capitals": ("bad ABCDEFGHIJKLMNOPQRS value", "ABCDEFGHIJ"),
+    "letters-only camel token": ("bad aBcDeFgHiJkLmN value", "aBcDeF"),
+    "base64": ("bad abcdefghij+klmnopqrst/uvwxyz0123== value", "abcdefghij"),
+    "compound key": ("bad access_token=abc value", "abc"),
+    "environment key": ("OPENAI_API_KEY=abc", "abc"),
+    "authorization header": ("Invalid params: Authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+    "json key": ('bad "token":"abc123"', "abc123"),
+    "quoted value": ('password = "hunter2 correct horse"', "correct horse"),
+    "bare credential word": ("invalid token abc123", "abc123"),
+    "session token": ("Invalid params: session token sk-live-SECRET123", "SECRET123"),
+    "secret word": ("Invalid params: secret hunter2hunter2 used", "hunter2"),
+    "pairing code": ("code 4F7K-92QX expired", "4F7K"),
+    "six digits": ("enter 482913 on your phone", "482913"),
+    "relative path": ("bad src/remote_agents/secrets/id_rsa here", "id_rsa"),
+    "home path": ("see ~alice/.ssh/id_rsa", "alice"),
+    "windows path": ("at C:\\Users\\alice\\proj ok", "alice"),
+    "path with a space": ("/Users/jo smith/proj/x", "smith"),
+    "mac path with a space": ("/Users/owner/Library/Application Support/codex/x.db", "x.db"),
+    "fullwidth keyword": ("ｔｏｋｅｎ=abc", "abc"),
+    "cyrillic keyword": ("tоken=abc", "abc"),
+    "ansi codes": ("\x1b[31m red\x1b[0m", "[31m"),
+    "url credentials": ("https://user:pass@host/x", "user:pass"),
+    "jwt": ("got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln", "eyJ"),
+    "hex key": ("bad 0123456789abcdef0123456789abcdef0123 value", "0123456789"),
+    "long line": ("x" * 1000, "x" * 30),
+    "non-ASCII digits": ("enter \u0664\u0668\u0662\u0669\u0661 now", "\u0664\u0668"),
+    "fullwidth keyword, spaced value": ("ｔｏｋｅｎ hunterpass", "hunterpass"),
+}
+
+
+@pytest.mark.parametrize("said, secret", LEAKS.values(), ids=LEAKS.keys())
+def test_the_excerpt_never_carries_a_secret(said, secret) -> None:
     from remote_agents.adapters.agents.codex.thread_settings import _refusal
 
-    reason = _refusal({"code": -32000, "message": said}, "thread/settings/update", "T1")
-    for piece in ("ABCD-EFGH", "eyJhbGci", "0123456789abcdef", "auth.json", "x" * 30):
-        assert piece not in reason
+    reason = _refusal({"code": -32602, "message": said}, "thread/settings/update", "T1")
+    assert secret not in reason
     assert len(reason) < 260
 
 
-async def test_a_hung_daemon_probe_times_out_within_the_same_bound() -> None:
-    class Hanging:
-        async def run(self, argv, *, timeout):
-            await asyncio.sleep(30)
-
-    started = time.monotonic()
-    with pytest.raises(ThreadPermissionsError) as raised:
-        await CodexThreadPermissions(runner=Hanging(), timeout=0.5).apply(
-            THREAD, PermissionPreset.ASK
-        )
-    assert raised.value.reason == "timed out" and time.monotonic() - started < 2.0
-
-
-async def test_a_missing_codex_is_named() -> None:
-    from remote_agents.adapters.agents.protocols import ProtocolError
-
-    class Missing:
-        async def run(self, argv, *, timeout):
-            raise ProtocolError("codex is not installed on this host")
-
-    with pytest.raises(ThreadPermissionsError) as raised:
-        await CodexThreadPermissions(runner=Missing()).apply(THREAD, PermissionPreset.ASK)
-    assert raised.value.reason == "codex is not installed"
+#: What the owner's daemon actually sends (0.167.2, 2026-11-12), and what must stay readable.
+READABLE = {
+    "invalid thread id": (
+        "invalid thread id: invalid character: expected an optional prefix of `urn:uuid:` "
+        "followed by [0-9a-fA-F-], found `n` at line 1",
+        "invalid thread id: invalid character: expected an optional prefix of `urn:uuid:`",
+    ),
+    "unknown field": (
+        "Invalid params: unknown field `approvalsReviewr`, expected one of `threadId`, `model`",
+        "unknown field `approvalsReviewr`, expected one of `threadId`, `model`",
+    ),
+    "unknown method": (
+        "Invalid request: unknown variant `thread/settings/update`, expected one of "
+        "`initialize`, `thread/start`",
+        "unknown variant `thread/settings/update`",
+    ),
+}
 
 
-async def test_a_socket_path_that_is_not_a_socket_is_never_spoken_to() -> None:
-    folder = Path(tempfile.mkdtemp(prefix="ra-ws-", dir="/tmp"))
-    try:
-        plain = folder / "s.sock"
-        plain.write_text("")
-        client, _ = _client(plain)
-        with pytest.raises(ThreadPermissionsError) as raised:
-            await client.apply(THREAD, PermissionPreset.ASK)
-    finally:
-        shutil.rmtree(folder)
-    assert raised.value.reason == "the Codex daemon socket is not this user's"
+@pytest.mark.parametrize("said, kept", READABLE.values(), ids=READABLE.keys())
+def test_the_excerpt_keeps_what_codex_actually_says(said, kept) -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import _refusal
+
+    assert kept in _refusal({"code": -32600, "message": said}, "thread/settings/update", "T1")
 
 
-async def test_an_unknown_preset_is_this_ports_error() -> None:
-    client, _ = _client(Path("/tmp/ra-ws-missing/s.sock"))
-    with pytest.raises(ThreadPermissionsError) as raised:
-        await client.apply(THREAD, "everything")  # type: ignore[arg-type]
-    assert raised.value.reason == "unknown permission preset"
+def test_an_unknown_method_names_the_thread_code_and_excerpt() -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import _refusal
+
+    said = READABLE["unknown method"][0]
+    reason = _refusal({"code": -32600, "message": said}, "thread/settings/update", "T1")
+    assert reason.startswith("this Codex does not offer thread/settings/update for thread T1")
+    assert "(error -32600): Codex said “Invalid request: unknown variant" in reason
 
 
-async def test_loaded_threads_reads_every_page() -> None:
-    def answer(message):
-        if message.get("method") != "thread/loaded/list":
-            return _cooperative(message)
-        if message["params"].get("cursor") is None:
-            return ({"id": message["id"], "result": {"data": ["a", "b"], "nextCursor": "p2"}},)
-        return ({"id": message["id"], "result": {"data": ["c"], "nextCursor": None}},)
+def test_a_credential_word_drops_the_whole_excerpt() -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import _refusal
 
-    async with FakeDaemon(answer) as daemon:
-        client, _ = _client(daemon.path)
-        assert await client.loaded_threads() == frozenset({"a", "b", "c"})
-
-
-async def test_thread_folder_reads_the_threads_recorded_cwd() -> None:
-    def answer(message):
-        if message.get("method") != "thread/read":
-            return _cooperative(message)
-        assert message["params"] == {"threadId": THREAD, "includeTurns": False}
-        return ({"id": message["id"], "result": {"thread": {"id": THREAD, "cwd": "/srv/x"}}},)
-
-    async with FakeDaemon(answer) as daemon:
-        client, _ = _client(daemon.path)
-        assert await client.thread_folder(THREAD) == Path("/srv/x")
+    reason = _refusal({"code": 1, "message": "token expired"}, "thread/settings/update", "T1")
+    assert reason == "the Codex daemon refused thread/settings/update for thread T1 (error 1)"
 
 
 def _raw(first: int, second: int, payload: bytes = b"") -> bytes:

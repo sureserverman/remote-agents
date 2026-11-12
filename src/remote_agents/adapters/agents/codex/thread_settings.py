@@ -24,6 +24,7 @@ import os
 import re
 import stat
 import struct
+import unicodedata
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -87,6 +88,10 @@ class _Closed(Exception):
     """The daemon closed the connection, or broke the WebSocket framing."""
 
 
+class _Refused(Exception):
+    """The peer on the socket did not complete a WebSocket upgrade this client can verify."""
+
+
 class _Unexpected(Exception):
     """The daemon answered with something that is not a JSON-RPC reply this client can read."""
 
@@ -111,7 +116,7 @@ class CodexThreadPermissions:
 
     **Refusals say what they mean, and what Codex said, cleaned.** A refusal names the method,
     the caller's own thread id and the JSON-RPC code, plus a bounded excerpt of the daemon's own
-    first line with every path and secret-shaped piece removed (`_excerpt`, owner OD-9). A thread
+    first line that keeps only plain words and fails closed (`_excerpt`, owner OD-9). A thread
     or method the daemon lacks is said in this adapter's words. Nothing else the daemon printed
     comes back out (`tests/architecture/test_every_parser_refuses_to_echo.py`).
 
@@ -248,6 +253,10 @@ class CodexThreadPermissions:
             ]
         except _Unexpected:
             raise ThreadPermissionsError("unexpected reply from the Codex daemon") from None
+        except _Refused:
+            raise ThreadPermissionsError(
+                "the Codex daemon socket did not speak WebSocket"
+            ) from None
         except (_Closed, asyncio.IncompleteReadError, asyncio.LimitOverrunError, OSError):
             raise ThreadPermissionsError("the Codex daemon closed the connection") from None
         finally:
@@ -279,7 +288,7 @@ async def _handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter)
     }
     status = lines[0].split(b" ")
     if len(status) < 2 or status[1] != b"101" or answered.get(b"sec-websocket-accept") != accept:
-        raise _Closed
+        raise _Refused
 
 
 async def _send(writer: asyncio.StreamWriter, message: Mapping[str, object]) -> None:
@@ -303,6 +312,7 @@ def _frame(payload: bytes, opcode: int) -> bytes:
 async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> dict:
     """The next whole text message, answering pings and reassembling fragments."""
     parts: list[bytes] | None = None
+    received = 0
     while True:
         first, second = await reader.readexactly(2)
         final, reserved, opcode = bool(first & 0x80), first & 0x70, first & 0x0F
@@ -314,7 +324,7 @@ async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -
             (length,) = struct.unpack(">H", await reader.readexactly(2))
         elif length == 127:
             (length,) = struct.unpack(">Q", await reader.readexactly(8))
-        if length + sum(map(len, parts or ())) > _MAX_MESSAGE_BYTES:
+        if length + received > _MAX_MESSAGE_BYTES:
             raise _Closed
         mask = await reader.readexactly(4) if second & 0x80 else None
         data = await reader.readexactly(length)
@@ -332,12 +342,12 @@ async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -
             raise _Closed  # 0x3-0x7: reserved data opcodes, never negotiated here
         if (opcode == _CONTINUATION) is (parts is None):
             raise _Closed  # a continuation with nothing to continue, or a text frame mid-message
-        parts = [*(parts or ()), data]
+        if parts is None:
+            parts = []
+        parts.append(data)
+        received += len(data)
         if final:
-            try:
-                return _json_object(b"".join(parts))
-            finally:
-                parts = None
+            return _json_object(b"".join(parts))
 
 
 def _json_object(raw: bytes) -> dict:
@@ -372,41 +382,61 @@ async def _call(
         return message["result"]
 
 
-#: What a cleaned excerpt may never carry: an absolute or home path, a `key=value` or `key: value`
-#: whose key names a credential, a bearer-style token, any long unbroken run of letters and
-#: digits (keys, ids, hashes), and a pairing-code-shaped group (`ABCD-EFGH`).
-_SECRET_SHAPES = (
-    re.compile(r"(?<![\w.~/])(?:~|\.{1,2})?/[^\s'\"`]*"),
-    re.compile(
-        r"(?i)\b(?:token|secret|password|passwd|api[_-]?key|key|auth|cookie|bearer|code)"
-        r"\b\s*[:=]\s*\S+"
-    ),
-    re.compile(r"(?i)\bbearer\s+\S+"),
-    re.compile(r"\b[A-Za-z0-9_\-]{20,}\b"),
-    re.compile(r"\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b"),
+#: The only words a cleaned excerpt may keep. An allowlist, not a list of secret shapes: every
+#: denylist tried here (2026-11-12) let something through -- a zero-width space splitting a token,
+#: a compound key name, a quoted value, base64, a relative path. A word is kept only if it is
+#: plainly a word: up to 14 ASCII letters, lower case after an optional capital (hyphenated in
+#: lower case, or with a short apostrophe ending), an acronym of 2-5 capitals, a number of up to
+#: 5 digits, or a backtick-quoted name -- how Codex quotes a field or method -- of up to four
+#: letter-and-underscore segments joined by `/`, `:` or `.`, with no digit. Each may open with a
+#: bracket and end in plain punctuation. The residual risk, accepted: a secret made only of
+#: letters and quoted in backticks. Anything else -- digits mixed with letters, `=`, `@`, a
+#: slash outside backticks, any non-ASCII or invisible character -- becomes `…`. A pairing code
+#: (`XXXX-XXXX`, digits and capitals) can never pass.
+_KEPT_WORD = re.compile(
+    r"""\(?(?:
+        [A-Za-z][a-z]{0,13}(?:'[a-z]{1,2})?
+      | [A-Z]{2,5}
+      | [a-z]{1,14}(?:-[a-z]{1,14}){1,3}
+      | \d{1,5}
+      | `[A-Za-z_]{1,24}(?:[/:.][A-Za-z_]{1,24}){0,3}[/:.]?`
+    )[.,;:!?)]*""",
+    re.VERBOSE,
+)
+#: A word naming a credential drops the whole excerpt: what follows it is the likeliest secret,
+#: and no rule above can tell `token abc` from `token expired`.
+_CREDENTIAL_WORDS = re.compile(
+    r"(?i)token|secret|passw|pwd|credential|api.?key|private|bearer|cookie|session|jwt|auth|"
+    r"pairing|apikey|\bkey\b|\bpass\b"
 )
 _EXCERPT_CHARS = 120
 
 
 def _excerpt(text: object) -> str | None:
-    """A short, cleaned excerpt of the daemon's own message, or None when nothing safe is left.
+    """A short excerpt of the daemon's own message that can hold no secret, or None.
 
     The owner chose to see what Codex said when it refuses a change (2026-11-12, OD-9), against
-    this project's habit of never echoing provider output. So only the first line is kept, every
-    secret-shaped piece is replaced by `…`, anything unprintable is dropped, and the result is
-    bounded. The pairing code Remote Control mints is never in a settings reply; its shape is
-    stripped anyway.
+    this project's habit of never echoing provider output. So the excerpt fails closed: the
+    first non-blank line, normalised (NFKC), split on whitespace, each word kept only if it
+    matches `_KEPT_WORD` and replaced by `…` otherwise, nothing kept at all if a word names a
+    credential, and the result bounded. A character the allowlist does not know poisons its
+    whole word rather than being deleted, so it can never join two halves of a token.
     """
     if not isinstance(text, str):
         return None
-    line = text.strip().splitlines()[0] if text.strip() else ""
-    for shape in _SECRET_SHAPES:
-        line = shape.sub("…", line)
-    line = "".join(character for character in line if character.isprintable())
-    line = re.sub(r"\s+", " ", line).strip(" :")
-    if len(line) > _EXCERPT_CHARS:
-        line = line[: _EXCERPT_CHARS - 1].rstrip() + "…"
-    return line if line.strip("… ") else None
+    lines = [line for line in unicodedata.normalize("NFKC", text).splitlines() if line.strip()]
+    if not lines or _CREDENTIAL_WORDS.search(lines[0]):
+        return None
+    words = []
+    for word in lines[0].split():
+        kept = word if word.isascii() and _KEPT_WORD.fullmatch(word) else "…"
+        if kept == "…" and words and words[-1] == "…":
+            continue
+        words.append(kept)
+    excerpt = " ".join(words)
+    if len(excerpt) > _EXCERPT_CHARS:
+        excerpt = excerpt[: _EXCERPT_CHARS - 1].rsplit(" ", 1)[0] + " …"
+    return excerpt if any(word != "…" for word in excerpt.split()) else None
 
 
 def _refusal(error: object, method: str, thread_id: str | None) -> str:
@@ -420,10 +450,11 @@ def _refusal(error: object, method: str, thread_id: str | None) -> str:
     if isinstance(text, str) and text.startswith("thread not found") and thread_id is not None:
         return f"thread {thread_id} is not loaded on the Codex daemon"
     if isinstance(text, str) and "unknown variant" in text and method in text:
-        return f"this Codex does not offer {method}"
-    what = "the parameters of " if code == -32602 else ""
+        reason = f"this Codex does not offer {method}{subject}"
+    else:
+        what = "the parameters of " if code == -32602 else ""
+        reason = f"the Codex daemon refused {what}{method}{subject}"
     numbered = isinstance(code, int) and not isinstance(code, bool)
-    reason = f"the Codex daemon refused {what}{method}{subject}"
     if numbered:
         reason += f" (error {code})"
     said = _excerpt(text)
