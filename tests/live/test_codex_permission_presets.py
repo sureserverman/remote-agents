@@ -316,12 +316,12 @@ async def test_codex_permission_presets_fresh_and_resume(
                     ),
                     ProviderConversationId(source),
                 )
-                # Seed the association from the thread actually observed above. Native hook
-                # attribution is a separate final-gate drill; this one checks preset inheritance.
-                await bindings.remember(session, source)
+                # A resume follows the current default unless the owner picks (DEC-133 as
+                # superseded by this plan's Task 3.1): pick the preset under test explicitly,
+                # with the default moved away from it so the pick is what decides.
                 await settings.set(next(value for value in PermissionPreset if value != preset))
                 resumed = await service.resume(
-                    ResumeCommand(PROJECT, CODEX, resolved, "native-resume")
+                    ResumeCommand(PROJECT, CODEX, resolved, "native-resume", permissions=preset)
                 )
                 assert resumed.created
                 session = resumed.record.session_id

@@ -194,9 +194,6 @@ def bulk_case(monkeypatch, tmp_path):
                 else PermissionPreset.FULL_ACCESS
             )
 
-        async def remember_permissions(self):
-            pass
-
         async def list_sessions(self):
             return tuple(records.values())
 
@@ -281,7 +278,6 @@ def bulk_case(monkeypatch, tmp_path):
             "force_stop",
             "cleanup",
             "permission_preset",
-            "remember_permissions",
             "list_sessions",
         ),
     )

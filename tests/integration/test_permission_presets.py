@@ -240,7 +240,9 @@ async def test_replayed_resume_returns_the_original_snapshot_and_starts_no_secon
 
 
 @pytest.mark.parametrize("preset", list(PermissionPreset))
-async def test_manual_resume_inherits_the_latest_managed_conversation_preset(rig, preset):
+async def test_manual_resume_without_a_pick_uses_the_current_default_not_the_conversations(
+    rig, preset
+):
     from remote_agents.domain.state_machine import LifecycleEvent
 
     original = await rig.service.resume(
@@ -255,40 +257,14 @@ async def test_manual_resume_inherits_the_latest_managed_conversation_preset(rig
     await rig.store.record_event(
         original.record.session_id, LifecycleEvent.RECONCILED_TERMINAL_MISSING
     )
-    await rig.settings.set(
+    default = (
         PermissionPreset.ASK if preset != PermissionPreset.ASK else PermissionPreset.FULL_ACCESS
     )
+    await rig.settings.set(default)
     resumed = await rig.service.resume(
         ResumeCommand(PROJECT, CODEX, conversation(), "resume-again")
     )
-    assert await rig.bindings.for_session(resumed.record.session_id) == preset
-
-
-async def test_fresh_conversation_association_survives_mark_cleanup(rig, tmp_path):
-    from remote_agents.adapters.agents.turn_markers import FileConversationMarks
-    from remote_agents.domain.state_machine import LifecycleEvent
-
-    marks = FileConversationMarks(tmp_path / "activity")
-    rig.permissions._marks = marks
-    original = await rig.service.launch(
-        LaunchCommand(
-            PROJECT,
-            CODEX,
-            "fresh-with-mark",
-            permissions=PermissionPreset.ASK,
-        )
-    )
-    marks.record(str(original.record.session_id), "source-123")
-    await rig.store.record_event(
-        original.record.session_id, LifecycleEvent.RECONCILED_TERMINAL_MISSING
-    )
-    await rig.service.remember_permissions()
-    marks.forget(str(original.record.session_id))
-    await rig.settings.set(PermissionPreset.FULL_ACCESS)
-    resumed = await rig.service.resume(
-        ResumeCommand(PROJECT, CODEX, conversation(), "resume-marked")
-    )
-    assert await rig.bindings.for_session(resumed.record.session_id) == PermissionPreset.ASK
+    assert await rig.bindings.for_session(resumed.record.session_id) == default
 
 
 async def test_legacy_session_keeps_unknown_history_and_uses_the_next_process_default(rig):

@@ -1,9 +1,9 @@
-"""Read launch snapshots, track what the daemon confirmed, retain conversation associations."""
+"""Read launch snapshots and track what the daemon confirmed."""
 
 from dataclasses import dataclass
 from typing import Protocol
 
-from remote_agents.domain.models import ProfileId, SessionId
+from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import PermissionPreset
 
 
@@ -22,14 +22,6 @@ class PermissionState:
 
 class PermissionBindings(Protocol):
     async def for_session(self, session_id: SessionId) -> PermissionPreset | None: ...
-
-    async def for_conversation(
-        self,
-        profile_id: ProfileId,
-        source_id: str,
-    ) -> PermissionPreset | None: ...
-
-    async def remember(self, session_id: SessionId, source_id: str) -> None: ...
 
     async def requested(self, session_id: SessionId) -> PermissionPreset | None: ...
 

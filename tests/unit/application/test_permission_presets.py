@@ -81,3 +81,135 @@ def test_the_string_schema_and_typed_choices_have_the_same_closed_values():
     from remote_agents.config import CODEX_PERMISSION_PRESETS
 
     assert set(CODEX_PERMISSION_PRESETS) == {preset.value for preset in PermissionPreset}
+
+
+# --- Resume follows the current default (Task 3.1, supersedes part of DEC-133) ---------------
+
+
+def _resume_rig(tmp_path: Path):
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.permission_presets import SessionPermissions
+    from remote_agents.application.services import SessionService
+    from remote_agents.domain.models import ProfileId
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteSessionStore(connection)
+    bindings = SQLitePermissionBindings(connection)
+    path = tmp_path / "config.toml"
+    path.write_text('[codex]\ndefault_permissions = "approve_for_me"\n')
+    settings = PermissionSettings(
+        ConfigPermissionSetting(path), profiles={ProfileId("codex"): tuple(PermissionPreset)}
+    )
+    service = SessionService(
+        store, FakeTerminal(), permissions=SessionPermissions(settings, bindings, store)
+    )
+    return connection, store, bindings, settings, service
+
+
+def _conversation(source: str = "source-123"):
+    from datetime import UTC, datetime
+
+    from remote_agents.domain.conversations import (
+        ConversationReference,
+        ConversationState,
+        ConversationSummary,
+        ProviderConversationId,
+        ResolvedConversation,
+    )
+    from remote_agents.domain.models import ProfileId, ProjectId
+
+    return ResolvedConversation(
+        ConversationSummary(
+            ConversationReference("c-" + "a" * 20),
+            ProfileId("codex"),
+            ProjectId("fixture-project"),
+            ConversationState.RESUMABLE,
+            datetime.now(UTC),
+        ),
+        ProviderConversationId(source),
+    )
+
+
+@pytest.mark.parametrize("default", [PermissionPreset.APPROVE_FOR_ME, PermissionPreset.ASK])
+async def test_resume_without_a_pick_uses_the_current_default_not_the_conversations_old_preset(
+    tmp_path, default
+):
+    from remote_agents.application.commands import ResumeCommand
+    from remote_agents.domain.models import ProfileId, ProjectId
+    from remote_agents.domain.state_machine import LifecycleEvent
+
+    connection, store, bindings, settings, service = _resume_rig(tmp_path)
+    try:
+        codex, project = ProfileId("codex"), ProjectId("fixture-project")
+        earlier = await service.resume(
+            ResumeCommand(
+                project, codex, _conversation(), "earlier", permissions=PermissionPreset.FULL_ACCESS
+            )
+        )
+        await store.record_event(
+            earlier.record.session_id, LifecycleEvent.RECONCILED_TERMINAL_MISSING
+        )
+        await settings.set(default)
+        again = await service.resume(ResumeCommand(project, codex, _conversation(), "again"))
+        assert await bindings.for_session(again.record.session_id) == default
+        picked = await service.resume(
+            ResumeCommand(
+                project,
+                codex,
+                _conversation("source-456"),
+                "picked",
+                permissions=PermissionPreset.FULL_ACCESS,
+            )
+        )
+        assert await bindings.for_session(picked.record.session_id) == PermissionPreset.FULL_ACCESS
+    finally:
+        connection.close()
+
+
+async def test_a_rollover_from_a_full_access_predecessor_still_inherits_full_access(tmp_path):
+    from remote_agents.application.commands import LaunchCommand
+    from remote_agents.domain.models import ProfileId, ProjectId
+
+    connection, _store, bindings, settings, service = _resume_rig(tmp_path)
+    try:
+        codex, project = ProfileId("codex"), ProjectId("fixture-project")
+        predecessor = await service.launch(
+            LaunchCommand(project, codex, "pred", permissions=PermissionPreset.FULL_ACCESS)
+        )
+        await settings.set(PermissionPreset.ASK)
+        successor = await service.launch(
+            LaunchCommand(
+                project, codex, "succ", inherit_permissions_of=predecessor.record.session_id
+            )
+        )
+        assert (
+            await bindings.for_session(successor.record.session_id) == PermissionPreset.FULL_ACCESS
+        )
+    finally:
+        connection.close()
+
+
+def test_the_old_conversation_association_is_left_in_place_with_no_destructive_migration(
+    tmp_path,
+):
+    from remote_agents.adapters.sqlite import migrations
+    from remote_agents.adapters.sqlite.database import open_database
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(session_permissions)")}
+        assert "conversation_id" in columns
+    finally:
+        connection.close()
+    text = Path(migrations.__file__).read_text()
+    assert "DROP COLUMN conversation_id" not in text
+    assert "DROP TABLE session_permissions" not in text
+
+
+def test_the_no_pick_choice_names_the_current_default_and_no_saved_snapshot():
+    from remote_agents.application.permission_presets import permission_label
+
+    assert permission_label(None) == "Current default"

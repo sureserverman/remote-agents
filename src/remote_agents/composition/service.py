@@ -407,7 +407,6 @@ def build_restart_resume(
     stopping: Callable[[], bool],
     lock_path: Path | None = None,
     ready: Callable[[SessionId], Awaitable[Readiness]] | None = None,
-    remember_permissions: Callable[[], Awaitable[None]] | None = None,
 ) -> RestartResume:
     """The restart resume pass over the bot's stores and terminal (DEC-127)."""
 
@@ -476,8 +475,6 @@ def build_restart_resume(
         )
 
     async def forget_marks() -> None:
-        if remember_permissions is not None:
-            await remember_permissions()
         # Only ENDED, never merely not RUNNING: an UNTRUSTED or STARTING session is live, and
         # FAILED can still be promoted; their marks are what a later resume would need.
         kept = {

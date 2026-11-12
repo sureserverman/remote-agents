@@ -27,7 +27,6 @@ from remote_agents.adapters.agents.registry import (
     usage_readers,
 )
 from remote_agents.adapters.agents.thread_binding import FileThreadBindings
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
@@ -552,7 +551,6 @@ def compose_backend(
                 permission_settings,
                 SQLitePermissionBindings(connection),
                 backend_store,
-                marks=FileConversationMarks(paths.activity_directory),
             ),
             locks=backend_locks,
             hide_in_console=hide_in_console,

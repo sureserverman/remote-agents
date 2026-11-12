@@ -635,7 +635,6 @@ class SessionService:
             command.profile_id,
             command.permissions,
             command.inherit_permissions_of,
-            conversation=source_id,
         )
         if not await self._store.claim_idempotency_key(command.idempotency_key):
             raise DuplicateCommandError("resume callback was already handled")
@@ -726,19 +725,12 @@ class SessionService:
         profile_id: ProfileId,
         override: PermissionPreset | None,
         inherit: SessionId | None,
-        *,
-        conversation: str | None = None,
     ) -> PermissionPreset | None:
         if self._permissions is None:
             if override is not None:
                 raise ValueError("permission presets are unavailable")
             return None
-        return await self._permissions.resolve(
-            profile_id,
-            override,
-            inherit,
-            conversation=conversation,
-        )
+        return await self._permissions.resolve(profile_id, override, inherit)
 
     async def _save_with_permissions(
         self,
@@ -775,10 +767,6 @@ class SessionService:
             if self._permissions is None
             else await self._permissions.bindings.state(session_id)
         )
-
-    async def remember_permissions(self) -> None:
-        if self._permissions is not None:
-            await self._permissions.remember_marks()
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())

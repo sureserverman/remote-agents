@@ -1906,7 +1906,6 @@ async def _collect_folder_native(native, checks, prompt_attempts, record, *, all
             enabled=enabled,
             notify=notify,
             stopping=lambda: False,
-            remember_permissions=fresh.backend.sessions.remember_permissions,
             lock_path=native.paths.database_path.with_name("restart-resume.lock"),
         )
 

@@ -116,6 +116,7 @@ from remote_agents.application.permission_apply import permission_state_line
 from remote_agents.application.permission_presets import (
     PERMISSION_CHOICES,
     PERMISSION_EFFECT,
+    PERMISSION_INHERIT_LABEL,
     PERMISSION_TITLE,
     permission_label,
 )
@@ -4018,7 +4019,7 @@ class PrivateBotBoundary:
             choices += (
                 (
                     Button(
-                        "Saved preset / current default",
+                        PERMISSION_INHERIT_LABEL,
                         self._callback(f"{flow}.permissions.set", entity),
                     ),
                 ),

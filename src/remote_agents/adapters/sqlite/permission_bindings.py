@@ -4,8 +4,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from remote_agents.domain.conversations import ProviderConversationId
-from remote_agents.domain.models import ProfileId, SessionId
+from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.permission_bindings import PermissionState
 
@@ -26,29 +25,6 @@ class SQLitePermissionBindings:
             (str(session_id),),
         ).fetchone()
         return None if row is None else PermissionPreset(row[0])
-
-    async def for_conversation(
-        self,
-        profile_id: ProfileId,
-        source_id: str,
-    ) -> PermissionPreset | None:
-        row = self._connection.execute(
-            """SELECT p.preset FROM session_permissions p
-               JOIN sessions s ON s.session_id = p.session_id
-               WHERE s.profile_id = ? AND (p.conversation_id = ? OR s.resume_source_id = ?)
-               ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1""",
-            (str(profile_id), source_id, source_id),
-        ).fetchone()
-        return None if row is None else PermissionPreset(row[0])
-
-    async def remember(self, session_id: SessionId, source_id: str) -> None:
-        source_id = ProviderConversationId(source_id).value
-        with self._connection:
-            self._connection.execute(
-                """UPDATE session_permissions SET conversation_id = ?
-                   WHERE session_id = ? AND conversation_id IS NULL""",
-                (source_id, str(session_id)),
-            )
 
     async def requested(self, session_id: SessionId) -> PermissionPreset | None:
         state = await self.state(session_id)

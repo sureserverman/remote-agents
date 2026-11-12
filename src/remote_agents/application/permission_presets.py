@@ -1,6 +1,5 @@
 """Shared choices and use case for managed launch permissions."""
 
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -10,7 +9,6 @@ from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.permission_bindings import PermissionBindings
 from remote_agents.ports.permission_setting import PermissionSettingPort
 from remote_agents.ports.session_store import SessionStore
-from remote_agents.ports.turn_markers import ConversationMarks
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +44,7 @@ PERMISSION_TITLE = "Codex launch permissions"
 PERMISSION_EFFECT = (
     "Applies to future managed sessions. Existing sessions keep their launch preset."
 )
-PERMISSION_INHERIT_LABEL = "Saved preset / current default"
+PERMISSION_INHERIT_LABEL = "Current default"
 
 
 def permission_label(value: PermissionPreset | None) -> str:
@@ -89,22 +87,21 @@ class SessionPermissions:
         settings: PermissionSettings,
         bindings: PermissionBindings,
         sessions: SessionStore,
-        *,
-        marks: ConversationMarks | None = None,
     ) -> None:
         self.settings = settings
         self.bindings = bindings
         self._sessions = sessions
-        self._marks = marks
 
     async def resolve(
         self,
         profile_id: ProfileId,
         override: PermissionPreset | None,
         inherit: SessionId | None,
-        *,
-        conversation: str | None = None,
     ) -> PermissionPreset | None:
+        """Override, then the inherited session's snapshot, then the current default.
+
+        A resume with no pick takes the current default, never the conversation's last
+        preset: the owner's Settings choice is what a resume follows."""
         supported = self.settings.profiles.get(profile_id)
         if supported is None:
             if override is not None:
@@ -120,23 +117,7 @@ class SessionPermissions:
             if preset is None:
                 preset = await self.settings.read()
         else:
-            preset = None
-            if conversation is not None:
-                await self.remember_marks()
-                preset = await self.bindings.for_conversation(profile_id, conversation)
-            if preset is None:
-                preset = await self.settings.read()
+            preset = await self.settings.read()
         if preset not in supported:
             raise ValueError("permission preset is unavailable for this provider")
         return preset
-
-    async def remember_marks(self) -> None:
-        """Retain ended sessions' associations before temporary marks are forgotten."""
-        if self._marks is None:
-            return
-        for record in await self._sessions.list():
-            if record.profile_id not in self.settings.profiles:
-                continue
-            source = await asyncio.to_thread(self._marks.latest, str(record.session_id))
-            if source is not None:
-                await self.bindings.remember(record.session_id, source)
