@@ -82,7 +82,10 @@ def test_the_sweep_can_actually_find_a_parser() -> None:
 # covers a parse function added tomorrow before anyone writes a case for it.
 
 #: The modules whose job is to read provider output, relative to `SOURCE_ROOT`.
-OUTPUT_PARSER_MODULES = ("adapters/agents/codex/remote_control.py",)
+OUTPUT_PARSER_MODULES = (
+    "adapters/agents/codex/remote_control.py",
+    "adapters/agents/codex/thread_settings.py",
+)
 
 #: Text a hostile or merely unlucky provider could print, which must not come back out.
 POISON = "/home/operator/.codex/auth.json token=sk-abcdef0123456789"
@@ -128,3 +131,21 @@ def test_a_malformed_provider_payload_never_comes_back_out_of_the_error() -> Non
     assert POISON not in str(raised.value)
     assert "sk-abcdef" not in str(raised.value)
     assert POISON not in repr(raised.value)
+
+
+def test_the_thread_settings_client_never_echoes_what_the_daemon_printed() -> None:
+    """`daemon version` output and a JSON-RPC refusal are both read, and neither comes back."""
+    import pytest
+
+    from remote_agents.adapters.agents.codex.thread_settings import (
+        CodexThreadPermissions,
+        _refusal,
+    )
+    from remote_agents.ports.thread_permissions import ThreadPermissionsError
+
+    with pytest.raises(ThreadPermissionsError) as raised:
+        CodexThreadPermissions._parse_socket_path(POISON)
+    assert "sk-abcdef" not in str(raised.value) and "sk-abcdef" not in repr(raised.value)
+    for error in ({"code": -32600, "message": POISON}, {"message": POISON}, POISON):
+        reason = _refusal(error, "thread/settings/update", "thread-1")
+        assert "sk-abcdef" not in reason and "auth.json" not in reason
