@@ -22,11 +22,17 @@ qualification remains an independent final gate.
   4. Keep a terminal override on its flow object; keep a Telegram override in opaque durable
      callback state. Re-check provider capability before acting; stale/unavailable choices
      receive a named refusal. A claimed mutation cannot launch twice on redelivery.
-  5. `SessionService` resolves the choice, then saves the session and immutable preset in one
-     SQLite transaction before starting a pane. The fixed builder adds the curated flags.
+  5. `SessionService` resolves the choice, then saves the session, its launch snapshot and a
+     pending `session_permission_state` row in one SQLite transaction before starting a pane.
+     The builder adds no permission argument: any Codex config override runs the TUI on an
+     embedded app server, off the shared daemon and out of Remote Control's reach. The
+     `serve` pass (`PermissionApplyPass`) then sets the preset on the daemon with
+     `thread/settings/update` once the thread is bound; `provider_default` sends nothing.
 - **Postconditions:** A new managed Codex process has one inspectable requested preset.
   Its default is unchanged by an override. Failed validation starts no pane; failed saves are
-  visible. Existing sessions retain their launch metadata.
+  visible. Existing sessions retain their launch metadata. Automatic work (rollover template,
+  schedule prompt, restart nudge) waits for the apply; a failed apply holds it and both
+  surfaces say so once.
 - **Side effects:** Settings updates only remote-agents' config. A start writes session,
   idempotency and permission records, then creates its owned terminal pane.
 - **Invariants:** Full access is a deliberate named choice. No raw launch arguments,
@@ -42,11 +48,14 @@ qualification remains an independent final gate.
 - **Preconditions:** The source session or provider conversation is attributable to the same
   provider. The normal runtime includes `serve`, which owns reconciliation and restart work.
 - **Steps:**
-  1. For a new process, resolve explicit override → inherited session snapshot → managed
-     conversation snapshot → current persisted default. An inherited legacy row without
-     metadata uses the current default rather than inventing an earlier choice.
-  2. Retain content-free conversation/preset associations before temporary ended-session
-     conversation marks are forgotten. A default changed later cannot rewrite the snapshot.
+  1. For a new process, resolve explicit override → inherited session's current request
+     (`session_permission_state.requested`, which a live change may have moved; its launch
+     snapshot when it has no state row) → current persisted default. A resume with no pick
+     takes the current default; the conversation's earlier preset is no longer consulted. An
+     inherited legacy row without metadata uses the current default rather than inventing an
+     earlier choice.
+  2. A default changed later cannot rewrite a session's launch snapshot. The old
+     conversation association column stays in place, unread; no migration drops it.
   3. Persist the successor session and its preset atomically before its pane is created.
      Restart and rollover pass the predecessor identity explicitly; they use the same resolver.
   4. Reuse an already running conversation only after verifying a live or preserved pane
@@ -163,3 +172,35 @@ qualification remains an independent final gate.
 - **Last verified:** 2026-10-29 against RA `902f2a9a`, including source implementation
   `97ff2bcc`, and the built writer: composed finished-request, correlation, cleanup and
   interrupted-cleanup cases. These are source checks, not native workflow completion acceptance.
+
+## WF-CONT-006 — Change a running session's permissions
+
+- **Entry:** Telegram session screen → `🛡 Permissions` →
+  `PrivateBotBoundary._live_permissions_question` / `_live_permissions_reply`; terminal session
+  detail → `Permissions` row → `SessionDetailScreen.show_permissions` → `PermissionsScreen`.
+  Both call `Backend.change_session_permissions` → `SessionPermissions.change`.
+- **Preconditions:** A RUNNING session of a provider that declares permission presets, with a
+  `session_permission_state` row (launched from v0.70.0), launched with an explicit mode.
+- **Steps:**
+  1. Offer `LIVE_CHOICES` (Approve for me, Ask me, Full access; OD-3) with the current request
+     marked. "Use Codex configuration" is launch-only.
+  2. On a pick, refuse by name: a target outside `LIVE_CHOICES`; a provider without presets; a
+     session ended or not running; a v0.69.0 session ("launched with flags; relaunch to change
+     permissions"); a session on "Use Codex configuration" (OD-12); a session whose earlier
+     apply is still pending. A Telegram pick is a claimed mutation and runs once.
+  3. Set `requested`; the `serve` pass applies it with `thread/settings/update`. Wait up to
+     10 s for `applied == requested` or a recorded failure.
+  4. On a failure or no outcome, restore the earlier request with a compare-and-set and clear
+     what the daemon confirmed, so the pass applies the earlier mode afresh.
+- **Postconditions:** The surface says the shared sentence: "now <mode>" or
+  "not changed: <reason>". Inspection shows "now <mode>" beside the launch snapshot.
+  A rollover or restart successor inherits the current request.
+- **Side effects:** One `session_permission_state` update (and one undo on failure); one
+  `thread/settings/update` call from `serve`. The Settings default is unchanged.
+- **Invariants:** Nothing is typed into the pane. A late confirmation or failure of an
+  abandoned request is never recorded against the current one. A failed change never leaves a
+  stored mode the daemon was not asked to hold. No global key is added on the console.
+- **Last verified:** 2026-11-12 on branch `codex-permissions-daemon` (Stage 3): unit tests of
+  the use case, the bot and the console action, each proven by breaking it. Native turns
+  under a changed mode are Stage 4's drill.
+
