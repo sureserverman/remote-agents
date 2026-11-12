@@ -127,9 +127,12 @@ def _frame(payload: bytes, opcode: int = 1) -> bytes:
 class FakeDaemon:
     """A WebSocket JSON-RPC peer. `answer(message)` returns the reply to send, or None for none."""
 
-    def __init__(self, answer) -> None:
+    def __init__(self, answer, *, status: bytes = b"101", accept: bytes | None = None) -> None:
         self.answer = answer
+        self.status = status
+        self.accept = accept
         self.received: list[dict] = []
+        self.opcodes: list[int] = []
         self.unmasked = False
         self.connections = 0
         self.closed = asyncio.Event()
@@ -154,24 +157,30 @@ class FakeDaemon:
                 for line in request.split(b"\r\n")
                 if line.lower().startswith(b"sec-websocket-key:")
             )
-            accept = base64.b64encode(hashlib.sha1(key + _GUID.encode()).digest())
+            accept = self.accept or base64.b64encode(hashlib.sha1(key + _GUID.encode()).digest())
             writer.write(
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                b"HTTP/1.1 " + self.status + b" Switching Protocols\r\nUpgrade: websocket\r\n"
                 b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n"
             )
             await writer.drain()
             while True:
                 opcode, data, masked = await _read_frame(reader)
                 self.unmasked |= not masked
+                self.opcodes.append(opcode)
                 if opcode == 8:
                     break
+                if opcode != 1:
+                    continue
                 message = json.loads(data)
                 self.received.append(message)
                 for reply in self.answer(message) or ():
                     if reply == "close":
                         writer.close()
                         return
-                    writer.write(_frame(json.dumps(reply).encode()))
+                    if isinstance(reply, bytes):
+                        writer.write(reply)  # a raw frame, written as the test built it
+                    else:
+                        writer.write(_frame(json.dumps(reply).encode()))
                 await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
@@ -329,3 +338,205 @@ def test_the_client_adds_no_dependency() -> None:
     pyproject = (Path(__file__).parents[5] / "pyproject.toml").read_text()
     for library in ("websocket", "aiohttp", "wsproto"):
         assert library not in pyproject
+
+
+# --- Framing and reply rules the client claims (Stage 1 remediation round 1) -----------------
+
+
+def _on_update(*replies):
+    """Answer `initialize` normally, and the settings update with `replies`."""
+
+    def answer(message):
+        if message.get("method") == "thread/settings/update":
+            if len(replies) == 1 and callable(replies[0]):
+                return replies[0](message["id"])
+            return replies
+        return _cooperative(message)
+
+    return answer
+
+
+async def _apply_against(daemon_answer, *, timeout: float = 5.0, **daemon) -> FakeDaemon:
+    async with FakeDaemon(daemon_answer, **daemon) as fake:
+        client, _ = _client(fake.path, timeout=timeout)
+        await client.apply(THREAD, PermissionPreset.ASK)
+    return fake
+
+
+async def _refused(daemon_answer, *, timeout: float = 5.0, **daemon) -> str:
+    with pytest.raises(ThreadPermissionsError) as raised:
+        await _apply_against(daemon_answer, timeout=timeout, **daemon)
+    return raised.value.reason
+
+
+async def test_a_wrong_websocket_accept_is_refused() -> None:
+    reason = await _refused(_cooperative, accept=b"bm90LXRoZS1yaWdodC1hY2NlcHQ=")
+    assert reason == "the Codex daemon closed the connection"
+
+
+async def test_a_reply_that_is_not_101_is_refused() -> None:
+    reason = await _refused(_cooperative, status=b"200")
+    assert reason == "the Codex daemon closed the connection"
+
+
+async def test_a_ping_is_answered_with_a_pong_and_the_reply_still_counts() -> None:
+    def answer(message):
+        if message.get("method") == "thread/settings/update":
+            return (_frame(b"hi", opcode=9), {"id": message["id"], "result": {}})
+        return _cooperative(message)
+
+    fake = await _apply_against(answer)
+    assert 0xA in fake.opcodes
+
+
+async def test_a_reply_split_into_fragments_with_a_ping_between_is_reassembled() -> None:
+    def answer(message):
+        if message.get("method") != "thread/settings/update":
+            return _cooperative(message)
+        body = json.dumps({"id": message["id"], "result": {"padding": "y" * 300}}).encode()
+        half = len(body) // 2
+        first = bytes([0x01, 126]) + struct.pack(">H", half) + body[:half]
+        last = bytes([0x80, 126]) + struct.pack(">H", len(body) - half) + body[half:]
+        return (first, _frame(b"", opcode=9), last)
+
+    fake = await _apply_against(answer)
+    assert 0xA in fake.opcodes
+
+
+async def test_an_oversized_declared_length_is_refused_before_anything_is_read() -> None:
+    started = time.monotonic()
+    reason = await _refused(_on_update(bytes([0x81, 127]) + struct.pack(">Q", 1 << 40)))
+    assert reason == "the Codex daemon closed the connection"
+    assert time.monotonic() - started < 2.0
+
+
+async def test_a_binary_frame_is_refused() -> None:
+    assert await _refused(_on_update(_frame(b"{}", opcode=2))) == (
+        "the Codex daemon closed the connection"
+    )
+
+
+async def test_a_client_payload_past_65535_bytes_uses_the_64_bit_length() -> None:
+    huge = "t" * 70_000
+    async with FakeDaemon(_cooperative) as daemon:
+        client, _ = _client(daemon.path)
+        await client.apply(huge, PermissionPreset.ASK)
+    assert daemon.received[-1]["params"]["threadId"] == huge
+
+
+async def test_a_daemon_request_reusing_the_id_is_not_taken_for_success() -> None:
+    def replies(request_id):
+        request = {"id": request_id, "method": "item/approval/request", "params": {}}
+        error = {"code": -32600, "message": "refused"}
+        return (request, {"id": request_id, "error": error})
+
+    reason = await _refused(_on_update(replies))
+    assert (
+        reason
+        == f"the Codex daemon refused thread/settings/update for thread {THREAD} (error -32600)"
+    )
+
+
+async def test_a_boolean_id_is_not_taken_for_a_reply() -> None:
+    """`True == 1` in Python, so a `true` id must not answer request 1 (`initialize`)."""
+
+    def answer(message):
+        if message.get("method") == "initialize":
+            refusal = {"id": True, "error": {"code": 1, "message": "x"}}
+            return (refusal, {"id": message["id"], "result": {}})
+        return _cooperative(message)
+
+    await _apply_against(answer)  # succeeds: the `true` id was not taken for the reply
+
+
+async def test_a_reply_holding_both_result_and_error_is_unexpected() -> None:
+    def replies(request_id):
+        return ({"id": request_id, "result": {}, "error": {"code": 1, "message": "x"}},)
+
+    assert await _refused(_on_update(replies)) == "unexpected reply from the Codex daemon"
+
+
+async def test_a_reply_with_neither_result_nor_error_is_unexpected() -> None:
+    reason = await _refused(_on_update(lambda request_id: ({"id": request_id},)))
+    assert reason == "unexpected reply from the Codex daemon"
+
+
+async def test_a_reply_nested_past_the_parser_is_contained() -> None:
+    nested = _frame(b"[" * 200_000 + b"]" * 200_000)
+    assert await _refused(_on_update(nested)) == "unexpected reply from the Codex daemon"
+
+
+async def test_a_refused_parameter_names_the_thread_and_never_the_daemons_words() -> None:
+    error = {"code": -32602, "message": POISON}
+    reason = await _refused(_on_update(lambda request_id: ({"id": request_id, "error": error},)))
+    assert THREAD in reason and "-32602" in reason and "sk-abcdef" not in reason
+
+
+async def test_a_hung_daemon_probe_times_out_within_the_same_bound() -> None:
+    class Hanging:
+        async def run(self, argv, *, timeout):
+            await asyncio.sleep(30)
+
+    started = time.monotonic()
+    with pytest.raises(ThreadPermissionsError) as raised:
+        await CodexThreadPermissions(runner=Hanging(), timeout=0.5).apply(
+            THREAD, PermissionPreset.ASK
+        )
+    assert raised.value.reason == "timed out" and time.monotonic() - started < 2.0
+
+
+async def test_a_missing_codex_is_named() -> None:
+    from remote_agents.adapters.agents.protocols import ProtocolError
+
+    class Missing:
+        async def run(self, argv, *, timeout):
+            raise ProtocolError("codex is not installed on this host")
+
+    with pytest.raises(ThreadPermissionsError) as raised:
+        await CodexThreadPermissions(runner=Missing()).apply(THREAD, PermissionPreset.ASK)
+    assert raised.value.reason == "codex is not installed"
+
+
+async def test_a_socket_path_that_is_not_a_socket_is_never_spoken_to() -> None:
+    folder = Path(tempfile.mkdtemp(prefix="ra-ws-", dir="/tmp"))
+    try:
+        plain = folder / "s.sock"
+        plain.write_text("")
+        client, _ = _client(plain)
+        with pytest.raises(ThreadPermissionsError) as raised:
+            await client.apply(THREAD, PermissionPreset.ASK)
+    finally:
+        shutil.rmtree(folder)
+    assert raised.value.reason == "the Codex daemon socket is not this user's"
+
+
+async def test_an_unknown_preset_is_this_ports_error() -> None:
+    client, _ = _client(Path("/tmp/ra-ws-missing/s.sock"))
+    with pytest.raises(ThreadPermissionsError) as raised:
+        await client.apply(THREAD, "everything")  # type: ignore[arg-type]
+    assert raised.value.reason == "unknown permission preset"
+
+
+async def test_loaded_threads_reads_every_page() -> None:
+    def answer(message):
+        if message.get("method") != "thread/loaded/list":
+            return _cooperative(message)
+        if message["params"].get("cursor") is None:
+            return ({"id": message["id"], "result": {"data": ["a", "b"], "nextCursor": "p2"}},)
+        return ({"id": message["id"], "result": {"data": ["c"], "nextCursor": None}},)
+
+    async with FakeDaemon(answer) as daemon:
+        client, _ = _client(daemon.path)
+        assert await client.loaded_threads() == frozenset({"a", "b", "c"})
+
+
+async def test_thread_folder_reads_the_threads_recorded_cwd() -> None:
+    def answer(message):
+        if message.get("method") != "thread/read":
+            return _cooperative(message)
+        assert message["params"] == {"threadId": THREAD, "includeTurns": False}
+        return ({"id": message["id"], "result": {"thread": {"id": THREAD, "cwd": "/srv/x"}}},)
+
+    async with FakeDaemon(answer) as daemon:
+        client, _ = _client(daemon.path)
+        assert await client.thread_folder(THREAD) == Path("/srv/x")

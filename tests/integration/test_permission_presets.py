@@ -28,7 +28,8 @@ PROJECT = ProjectId("fixture-project")
 CODEX = ProfileId("codex")
 DEFINITION = next(p for p in closed_profiles() if p.profile_id == CODEX)
 # No preset is a launch argument: any Codex config override runs the TUI off the shared daemon,
-# without Remote Control (`domain.profiles.PermissionPreset`). The service applies it after launch.
+# without Remote Control (`domain.profiles.PermissionPreset`). The client that sets a running
+# thread's permissions instead is `adapters/agents/codex/thread_settings.py`.
 EXPECTED = dict.fromkeys(PermissionPreset, ())
 
 

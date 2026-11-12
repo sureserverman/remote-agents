@@ -21,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import os
+import stat
 import struct
 from collections.abc import Mapping
 from pathlib import Path
@@ -55,6 +56,8 @@ CODEX_THREAD_SETTINGS: Mapping[PermissionPreset, Mapping[str, object]] = Mapping
                 "sandboxPolicy": _WORKSPACE,
             }
         ),
+        # No reviewer: with `never` nothing is asked, so whichever reviewer the thread held
+        # before is never consulted. Pinned as written by the exact-match test.
         PermissionPreset.FULL_ACCESS: MappingProxyType(
             {
                 "approvalPolicy": "never",
@@ -65,19 +68,24 @@ CODEX_THREAD_SETTINGS: Mapping[PermissionPreset, Mapping[str, object]] = Mapping
 )
 
 
-#: Bounds. One apply opens one connection and makes two requests; ten seconds covers a cold
-#: daemon. A reply larger than a megabyte is not a settings answer.
+#: Bounds. One apply probes the daemon, opens one connection and makes two requests, all under
+#: one deadline; ten seconds covers a cold daemon. A reply larger than a megabyte is not a
+#: settings answer.
 _TIMEOUT_SECONDS = 10.0
 _MAX_MESSAGE_BYTES = 1 << 20
 _WEBSOCKET_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-_TEXT, _CONTINUATION, _CLOSE, _PING = 0x1, 0x0, 0x8, 0x9
+_CONTINUATION, _TEXT, _BINARY, _CLOSE, _PING, _PONG = 0x0, 0x1, 0x2, 0x8, 0x9, 0xA
 
 #: The client this adapter says it is, in `initialize`. The daemon logs it; it is not a secret.
 _CLIENT_INFO = MappingProxyType({"name": "remote-agents", "version": "1"})
 
 
 class _Closed(Exception):
-    """The daemon closed the connection, or sent something that ends it."""
+    """The daemon closed the connection, or broke the WebSocket framing."""
+
+
+class _Unexpected(Exception):
+    """The daemon answered with something that is not a JSON-RPC reply this client can read."""
 
 
 class CodexThreadPermissions:
@@ -86,16 +94,24 @@ class CodexThreadPermissions:
     **Where the daemon is.** `codex app-server daemon version` names the control socket of the
     daemon serving this `CODEX_HOME` (`socketPath`), so the client never guesses a path and a
     drill's private home reaches its own daemon. Nothing here starts a daemon: a launch of plain
-    `codex` does that, and an apply with none running fails "no Codex daemon".
+    `codex` does that, and an apply with none running fails "no Codex daemon". The path must be
+    a socket owned by this user: a policy is never sent to somebody else's listener.
 
     **Transport.** The socket speaks WebSocket (measured 2026-11-12: `HTTP/1.1 101`). The stdlib
     has no client, and one connection sending two text frames does not justify a dependency, so
-    the handshake and the masked frames are written out below (RFC 6455 §4-5).
+    the handshake and the masked frames are written out below (RFC 6455 §4-5), strictly: a
+    binary, reserved-bit or oversized control frame ends the connection.
+
+    **A reply is only a reply.** A message counts as the answer to a request only when it has no
+    `method`, carries that request's integer id, and holds exactly one of `result` and `error`;
+    a server-to-client request reusing the id is not mistaken for success.
 
     **Refusals say what they mean, never what the daemon printed.** Provider output does not
     come back out of an error (`tests/architecture/test_every_parser_refuses_to_echo.py`): a
-    thread the daemon does not have is named by the caller's own id, a method it does not know
-    means this Codex does not offer it, and anything else is reported by its JSON-RPC code.
+    refusal names the method, the caller's own thread id and the JSON-RPC code, and a thread or
+    method the daemon lacks is said in this adapter's words.
+
+    `apply` with `provider_default` is a successful no-op: that preset means "add nothing".
     """
 
     def __init__(
@@ -105,33 +121,89 @@ class CodexThreadPermissions:
         self._timeout = timeout
 
     async def apply(self, thread_id: str, preset: PermissionPreset) -> None:
-        params = CODEX_THREAD_SETTINGS.get(PermissionPreset(preset))
+        """Set `thread_id`'s settings to `preset`'s. `thread_id` is the service's own binding."""
+        try:
+            params = CODEX_THREAD_SETTINGS.get(PermissionPreset(preset))
+        except ValueError:
+            raise ThreadPermissionsError("unknown permission preset") from None
         if params is None:
             return
-        socket_path = await self._socket_path()
+        await self._session(
+            thread_id,
+            (("thread/settings/update", {"threadId": thread_id, **_plain(params)}),),
+        )
+
+    async def loaded_threads(self) -> frozenset[str]:
+        """The ids of every thread loaded on the daemon (`thread/loaded/list`, all pages)."""
+        threads: set[str] = set()
+        cursor: str | None = None
+        while True:
+            params: dict[str, object] = {} if cursor is None else {"cursor": cursor}
+            (result,) = await self._session(None, (("thread/loaded/list", params),))
+            data = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                raise ThreadPermissionsError("unexpected reply from the Codex daemon")
+            threads.update(data)
+            cursor = result.get("nextCursor")
+            if not isinstance(cursor, str) or not cursor:
+                return frozenset(threads)
+
+    async def thread_folder(self, thread_id: str) -> Path:
+        """The working folder the daemon recorded for `thread_id` (`thread/read`, no turns)."""
+        (result,) = await self._session(
+            thread_id, (("thread/read", {"threadId": thread_id, "includeTurns": False}),)
+        )
+        thread = result.get("thread") if isinstance(result, dict) else None
+        folder = thread.get("cwd") if isinstance(thread, dict) else None
+        if not isinstance(folder, str) or not os.path.isabs(folder):
+            raise ThreadPermissionsError("unexpected reply from the Codex daemon")
+        return Path(folder)
+
+    async def _session(
+        self, thread_id: str | None, calls: tuple[tuple[str, Mapping[str, object]], ...]
+    ) -> list[object]:
+        """Probe, connect, initialize and make `calls` under one deadline; their results."""
         try:
             async with asyncio.timeout(self._timeout):
-                await self._exchange(socket_path, thread_id, _plain(params))
+                socket_path = await self._socket_path()
+                return await self._exchange(socket_path, thread_id, calls)
         except TimeoutError:
             raise ThreadPermissionsError("timed out") from None
+        except ThreadPermissionsError:
+            raise
+        except Exception:
+            # Anything else a peer can provoke -- a reply nested deep enough to exhaust the
+            # parser, say -- is still this port's one error, never an exception the caller does
+            # not handle. Cancellation is not an Exception and still propagates.
+            raise ThreadPermissionsError("unexpected reply from the Codex daemon") from None
 
     async def _socket_path(self) -> Path:
         try:
             result = await self._runner.run(
                 REMOTE_CONTROL_ARGV["daemon_probe"], timeout=self._timeout
             )
-        except ProtocolError:
-            raise ThreadPermissionsError("codex did not answer") from None
+        except ProtocolError as error:
+            # The runner's own two sentences (`AsyncCommandRunner`), not the provider's output.
+            if "not installed" in str(error):
+                raise ThreadPermissionsError("codex is not installed") from None
+            raise ThreadPermissionsError("timed out") from None
         if result.returncode != 0:
             raise ThreadPermissionsError("no Codex daemon")
-        return self._parse_socket_path(result.stdout)
+        path = self._parse_socket_path(result.stdout)
+        try:
+            status = path.stat()
+        except OSError:
+            raise ThreadPermissionsError("no Codex daemon") from None
+        if not stat.S_ISSOCK(status.st_mode) or status.st_uid != os.getuid():
+            raise ThreadPermissionsError("the Codex daemon socket is not this user's")
+        return path
 
     @staticmethod
     def _parse_socket_path(stdout: str) -> Path:
         """`socketPath` out of `daemon version`'s JSON, or "no Codex daemon" -- never its text."""
         try:
             payload = json.loads(stdout)
-        except ValueError:
+        except (ValueError, RecursionError):
             payload = None
         if not isinstance(payload, dict) or payload.get("status") != "running":
             raise ThreadPermissionsError("no Codex daemon")
@@ -140,7 +212,12 @@ class CodexThreadPermissions:
             raise ThreadPermissionsError("no Codex daemon")
         return Path(path)
 
-    async def _exchange(self, socket_path: Path, thread_id: str, params: dict) -> None:
+    async def _exchange(
+        self,
+        socket_path: Path,
+        thread_id: str | None,
+        calls: tuple[tuple[str, Mapping[str, object]], ...],
+    ) -> list[object]:
         try:
             reader, writer = await asyncio.open_unix_connection(str(socket_path))
         except OSError:
@@ -156,20 +233,19 @@ class CodexThreadPermissions:
                 thread_id,
             )
             await _send(writer, {"method": "initialized"})
-            await _call(
-                reader,
-                writer,
-                2,
-                "thread/settings/update",
-                {"threadId": thread_id, **params},
-                thread_id,
-            )
+            return [
+                await _call(reader, writer, index, method, params, thread_id)
+                for index, (method, params) in enumerate(calls, start=2)
+            ]
+        except _Unexpected:
+            raise ThreadPermissionsError("unexpected reply from the Codex daemon") from None
         except (_Closed, asyncio.IncompleteReadError, asyncio.LimitOverrunError, OSError):
             raise ThreadPermissionsError("the Codex daemon closed the connection") from None
         finally:
             writer.close()
             with contextlib.suppress(Exception):
-                await writer.wait_closed()
+                # Bounded on its own: this runs after the deadline has fired, too.
+                await asyncio.wait_for(writer.wait_closed(), 1.0)
 
 
 def _plain(value: object) -> object:
@@ -192,7 +268,8 @@ async def _handshake(reader: asyncio.StreamReader, writer: asyncio.StreamWriter)
         name.strip().lower(): value.strip()
         for name, _, value in (line.partition(b":") for line in lines[1:])
     }
-    if b" 101 " not in lines[0] + b" " or answered.get(b"sec-websocket-accept") != accept:
+    status = lines[0].split(b" ")
+    if len(status) < 2 or status[1] != b"101" or answered.get(b"sec-websocket-accept") != accept:
         raise _Closed
 
 
@@ -216,16 +293,19 @@ def _frame(payload: bytes, opcode: int) -> bytes:
 
 async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> dict:
     """The next whole text message, answering pings and reassembling fragments."""
-    parts: list[bytes] = []
+    parts: list[bytes] | None = None
     while True:
         first, second = await reader.readexactly(2)
-        final, opcode = bool(first & 0x80), first & 0x0F
+        final, reserved, opcode = bool(first & 0x80), first & 0x70, first & 0x0F
         length = second & 0x7F
+        control = opcode >= _CLOSE
+        if reserved or opcode == _BINARY or (control and (length > 125 or not final)):
+            raise _Closed
         if length == 126:
             (length,) = struct.unpack(">H", await reader.readexactly(2))
         elif length == 127:
             (length,) = struct.unpack(">Q", await reader.readexactly(8))
-        if length + sum(map(len, parts)) > _MAX_MESSAGE_BYTES:
+        if length + sum(map(len, parts or ())) > _MAX_MESSAGE_BYTES:
             raise _Closed
         mask = await reader.readexactly(4) if second & 0x80 else None
         data = await reader.readexactly(length)
@@ -234,20 +314,29 @@ async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -
         if opcode == _CLOSE:
             raise _Closed
         if opcode == _PING:
-            writer.write(_frame(data, 0xA))
+            writer.write(_frame(data, _PONG))
             await writer.drain()
             continue
-        if opcode not in (_TEXT, _CONTINUATION):
-            continue
-        parts.append(data)
+        if control:
+            continue  # a pong, or a reserved control opcode
+        if (opcode == _CONTINUATION) is (parts is None):
+            raise _Closed  # a continuation with nothing to continue, or a text frame mid-message
+        parts = (parts or []) + [data]
         if final:
             try:
-                message = json.loads(b"".join(parts))
-            except ValueError:
-                raise _Closed from None
-            if isinstance(message, dict):
-                return message
-            parts = []
+                return _json_object(b"".join(parts))
+            finally:
+                parts = None
+
+
+def _json_object(raw: bytes) -> dict:
+    try:
+        message = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        raise _Unexpected from None
+    if not isinstance(message, dict):
+        raise _Unexpected
+    return message
 
 
 async def _call(
@@ -256,27 +345,33 @@ async def _call(
     request_id: int,
     method: str,
     params: Mapping[str, object],
-    thread_id: str,
-) -> None:
+    thread_id: str | None,
+) -> object:
+    """Send one request and return its `result`; a refusal raises in this adapter's words."""
     await _send(writer, {"id": request_id, "method": method, "params": params})
     while True:
         message = await _message(reader, writer)
-        if message.get("id") != request_id:
-            continue  # a notification, or another client's traffic
-        error = message.get("error")
-        if error is not None:
-            raise ThreadPermissionsError(_refusal(error, method, thread_id))
-        return
+        reply_id = message.get("id")
+        if "method" in message or type(reply_id) is not int or reply_id != request_id:
+            continue  # a notification, a request from the daemon, or another request's reply
+        if ("result" in message) == ("error" in message):
+            raise _Unexpected
+        if "error" in message:
+            raise ThreadPermissionsError(_refusal(message["error"], method, thread_id))
+        return message["result"]
 
 
-def _refusal(error: object, method: str, thread_id: str) -> str:
+def _refusal(error: object, method: str, thread_id: str | None) -> str:
     """Say what a refusal means in this adapter's words; the daemon's text never comes back."""
     text = error.get("message") if isinstance(error, dict) else None
     code = error.get("code") if isinstance(error, dict) else None
-    if isinstance(text, str) and text.startswith("thread not found"):
+    subject = "" if thread_id is None else f" for thread {thread_id}"
+    if isinstance(text, str) and text.startswith("thread not found") and thread_id is not None:
         return f"thread {thread_id} is not loaded on the Codex daemon"
     if isinstance(text, str) and "unknown variant" in text and method in text:
         return f"this Codex does not offer {method}"
+    if code == -32602:
+        return f"this Codex refused the parameters of {method}{subject} (error -32602)"
     if isinstance(code, int) and not isinstance(code, bool):
-        return f"the Codex daemon refused {method} (error {code})"
-    return f"the Codex daemon refused {method}"
+        return f"the Codex daemon refused {method}{subject} (error {code})"
+    return f"the Codex daemon refused {method}{subject}"
