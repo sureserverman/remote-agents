@@ -376,27 +376,23 @@ class TmuxTerminal:
         remote_control: bool = False,
         permissions: PermissionPreset | None = None,
     ) -> TerminalObservation:
-        """Persist a resolved intent, launch it, then require observed pane liveness."""
+        """Persist a resolved intent, launch it, then require observed pane liveness.
+
+        `permissions` never changes the argv: no preset is a launch argument
+        (`domain.profiles.PermissionPreset`).
+        """
         try:
             # A prebuilt profile holds one argv and so cannot answer a request for the
-            # other one. Skipped rather than used, because launching the plain argv here
-            # would report a live session the owner believes is connected: the pane comes
-            # up, nothing looks wrong, and the flag it was asked for is simply gone. With
+            # other one, for remote control. Skipped rather than used, because launching
+            # the plain argv here would report a live session the owner believes is
+            # connected: the pane comes up, nothing looks wrong, and the flag it was asked
+            # for is simply gone. With
             # no factory to fall back to, the `KeyError` below refuses the launch -- the
             # same answer this adapter already gives a profile it cannot resolve at all.
             # Production wires `profiles={}` and resolves every launch through a factory.
-            profile = (
-                None
-                if remote_control or permissions is not None
-                else self._profiles.get(profile_id)
-            )
+            profile = None if remote_control else self._profiles.get(profile_id)
             if profile is None:
-                factory = self._profile_factories[profile_id]
-                profile = (
-                    factory(session_id, remote_control)
-                    if permissions is None
-                    else factory(session_id, remote_control, permissions)
-                )
+                profile = self._profile_factories[profile_id](session_id, remote_control)
         except KeyError:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"
@@ -412,14 +408,12 @@ class TmuxTerminal:
         *,
         permissions: PermissionPreset | None = None,
     ) -> TerminalObservation:
-        """Launch only a curated, adapter-resolved resume profile on the owned tmux server."""
+        """Launch only a curated, adapter-resolved resume profile on the owned tmux server.
+
+        `permissions` never changes the argv, as in `launch`.
+        """
         try:
-            factory = self._resume_profile_factories[profile_id]
-            profile = (
-                factory(session_id, source_id)
-                if permissions is None
-                else factory(session_id, source_id, permissions)
-            )
+            profile = self._resume_profile_factories[profile_id](session_id, source_id)
         except KeyError:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"

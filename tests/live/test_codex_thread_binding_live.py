@@ -27,8 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.domain.models import ProfileId
-from remote_agents.domain.profiles import PermissionPreset, closed_profiles
+from remote_agents.domain.profiles import PermissionPreset
 
 from .test_codex_tool_shell_identity import (
     _TOKEN_SCRIPT,
@@ -208,7 +207,6 @@ def _resume_bang_only(drill: Drill) -> dict[str, object]:  # noqa: F811
 
 
 def test_measure_bang_shell_premise(drill: Drill) -> None:  # noqa: F811
-    definition = next(item for item in closed_profiles() if item.profile_id == ProfileId("codex"))
     result: dict[str, object] = {
         "one_daemon": None,
         "control_marker_seen": None,
@@ -232,7 +230,8 @@ def test_measure_bang_shell_premise(drill: Drill) -> None:  # noqa: F811
     assert len(PermissionPreset) == 4
     for preset in PermissionPreset:
         name = f"preset-{preset.value}".replace("_", "-")
-        result["presets"].append(launch(name, definition.permission_argv(preset)))
+        # No preset is a launch argument since v0.70.0; every preset launches plain.
+        result["presets"].append(launch(name, ()))
         keep()
     result["read_only"] = launch("read-only", ("--sandbox", "read-only"))
     keep()

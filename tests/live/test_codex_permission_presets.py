@@ -278,17 +278,13 @@ async def test_codex_permission_presets_fresh_and_resume(
             {},
             startup_timeout=25,
             profile_factories={
-                CODEX: lambda session, _remote, choice: confined(
-                    build_launch_profile(
-                        definition, codex, session, environment, permissions=choice
-                    )
+                CODEX: lambda session, _remote: confined(
+                    build_launch_profile(definition, codex, session, environment)
                 )
             },
             resume_profile_factories={
-                CODEX: lambda session, source, choice: confined(
-                    build_resume_profile(
-                        definition, codex, session, source, environment, permissions=choice
-                    )
+                CODEX: lambda session, source: confined(
+                    build_resume_profile(definition, codex, session, source, environment)
                 )
             },
             trust_dialogs=profile_trust_dialogs(),

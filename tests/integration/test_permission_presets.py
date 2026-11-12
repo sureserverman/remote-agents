@@ -27,19 +27,9 @@ from remote_agents.domain.profiles import PermissionPreset, closed_profiles
 PROJECT = ProjectId("fixture-project")
 CODEX = ProfileId("codex")
 DEFINITION = next(p for p in closed_profiles() if p.profile_id == CODEX)
-EXPECTED = {
-    PermissionPreset.APPROVE_FOR_ME: ("--approve-for-me",),
-    PermissionPreset.ASK: (
-        "--sandbox",
-        "workspace-write",
-        "--ask-for-approval",
-        "on-request",
-        "-c",
-        'approvals_reviewer="user"',
-    ),
-    PermissionPreset.FULL_ACCESS: ("--dangerously-bypass-approvals-and-sandbox",),
-    PermissionPreset.PROVIDER_DEFAULT: (),
-}
+# No preset is a launch argument: any Codex config override runs the TUI off the shared daemon,
+# without Remote Control (`domain.profiles.PermissionPreset`). The service applies it after launch.
+EXPECTED = dict.fromkeys(PermissionPreset, ())
 
 
 def conversation(source="source-123"):
@@ -80,7 +70,6 @@ class CapturingTerminal(FakeTerminal):
                 Path("/fixture/codex"),
                 session_id,
                 {},
-                permissions=permissions,
             )
             self.argv.append(profile.argv)
         return await super().launch(
@@ -100,7 +89,6 @@ class CapturingTerminal(FakeTerminal):
             session_id,
             source_id,
             {},
-            permissions=permissions,
         )
         self.argv.append(profile.argv)
         return await super().resume(session_id, project_id, profile_id, source_id)

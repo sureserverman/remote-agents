@@ -48,26 +48,13 @@ def test_current_repository_exposes_only_the_approved_remote_surface() -> None:
     assert scan(Path(__file__).parents[2]) == ()
 
 
-@pytest.mark.parametrize("defect", [None, "path", "preset", "provider", "extra", "duplicate"])
-def test_only_the_exact_curated_full_access_constant_is_allowed(tmp_path, defect):
-    relative = "src/remote_agents/domain/profiles.py" if defect != "path" else "src/remote.py"
-    preset = "ASK" if defect == "preset" else "FULL_ACCESS"
-    provider = "claude" if defect == "provider" else "codex"
-    flag = '"--dangerously-bypass-approvals-and-sandbox"'
-    value = f"({flag},)" if defect != "extra" else f'({flag}, "--extra")'
-    content = (
-        '_PERMISSION_ARGUMENTS = {"'
-        + provider
-        + '": {PermissionPreset.'
-        + preset
-        + ": "
-        + value
-        + "}}\n"
-    )
-    if defect == "duplicate":
-        content += f"extra = {flag}\n"
-    path = tmp_path / relative
+def test_no_permission_bypass_literal_is_allowed_even_in_the_profiles_module(tmp_path):
+    """The one carve-out for a Full access launch flag left with the flag (v0.70.0).
+
+    No preset is a launch argument any more, so `domain/profiles.py` is scanned like
+    everything else.
+    """
+    path = tmp_path / "src/remote_agents/domain/profiles.py"
     path.parent.mkdir(parents=True)
-    path.write_text(content)
-    findings = scan(tmp_path)
-    assert bool(findings) is (defect is not None)
+    path.write_text('FLAGS = {"codex": ("--dangerously-bypass-approvals-and-sandbox",)}\n')
+    assert any("prohibited remote surface" in finding.reason for finding in scan(tmp_path))

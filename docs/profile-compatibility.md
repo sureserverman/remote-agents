@@ -50,26 +50,26 @@ controlled" was the misreading this paragraph now exists to prevent.
 
 The profile arguments are defined in the closed catalogue. Telegram can select a named
 permission preset; it does not accept an executable, path, raw argument or arbitrary keystroke
-as launch configuration. Full access maps only to the reviewed variant below.
+as launch configuration. No preset is ever a launch argument.
 
 ## Codex permission presets
 
 Both surfaces use one closed catalogue and one persisted remote-agents default. The absent-key
 default is `approve_for_me`; the setting does not edit `~/.codex/config.toml`.
 
-| Persisted value | Label | Permission arguments, fresh and selected resume |
+| Persisted value | Label | Launch arguments, fresh and selected resume |
 | --- | --- | --- |
-| `approve_for_me` | Approve for me | `--approve-for-me` alone |
-| `ask` | Ask me | `--sandbox workspace-write --ask-for-approval on-request -c approvals_reviewer="user"` |
-| `full_access` | Full access | `--dangerously-bypass-approvals-and-sandbox` |
+| `approve_for_me` | Approve for me | None |
+| `ask` | Ask me | None |
+| `full_access` | Full access | None |
 | `provider_default` | Use Codex configuration | None |
 
-Fresh arguments follow `codex`; resume arguments follow `codex resume <provider-thread-id>`.
-The preset adds no model/provider selection. Approve for me is not combined with sandbox,
-approval or bypass switches. Ask explicitly resets the reviewer to the user, even if the
-provider configuration normally requests automatic review. Full access is an explicit choice.
-These mappings follow the [official CLI reference](https://learn.chatgpt.com/docs/cli/reference)
-and [approval configuration](https://learn.chatgpt.com/docs/agent-approvals-security).
+Every Codex session starts as plain `codex`, or `codex resume <provider-thread-id>`. Since
+v0.70.0 no preset adds a switch: Codex 0.167 runs a TUI started with any command-line config
+override, the permission switches included, on an embedded app server instead of the shared
+daemon, and Codex Remote Control reaches only threads on that daemon
+(`codex-rs/tui/src/daemon_startup.rs`, `exclusion()`). The preset adds no model/provider
+selection. Full access is an explicit choice.
 
 For each new process, precedence is:
 
