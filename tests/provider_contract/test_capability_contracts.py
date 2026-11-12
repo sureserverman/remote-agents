@@ -116,6 +116,20 @@ def test_activity_contract(descriptor) -> None:
     )
 
 
+def test_thread_permissions_contract(descriptor) -> None:
+    """A provider declaring `thread_permissions` applies a preset to a thread, awaited.
+
+    Behavior, not address. Driving `apply` for real would reach the host's own daemon, so the
+    recorded drive lives in the vertical's unit tests, which inject a fake daemon.
+    """
+    import inspect
+
+    permissions = drive_or_skip(descriptor, "thread_permissions")
+    assert inspect.iscoroutinefunction(getattr(permissions, "apply", None)), (
+        f"{descriptor.profile_id}'s thread permissions cannot be awaited for apply"
+    )
+
+
 def test_remote_control_contract(descriptor) -> None:
     """The host-level toggle answers three verbs and offers no way to tear the daemon down.
 

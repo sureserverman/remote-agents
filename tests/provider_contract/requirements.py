@@ -61,9 +61,10 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "composer": (SUPPORTED, "idle/busy/dialog patterns measured on 2.1.280, 2026-09-23"),
         "limit_screen": (SUPPORTED, "limit sentence read from the 2.1.284 bundle, 2026-09-28"),
         "adopt_template": (SUPPORTED, "the `/` command of the planning plugin (staged-planning)"),
+        "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
     },
     "codex": {
-        "permission_presets": (SUPPORTED, "four closed launch permission presets"),
+        "permission_presets": (SUPPORTED, "four closed permission presets, applied after launch"),
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
         "usage": (
             SUPPORTED,
@@ -79,6 +80,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             SUPPORTED,
             "planning@engineering-skills 0.2.1's `$` skill mention (engineering-skills DEC-045)",
         ),
+        "thread_permissions": (SUPPORTED, "thread/settings/update on the shared daemon"),
     },
     "opencode": {
         "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
@@ -103,6 +105,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             UNSUPPORTED,
             "no handoff writer ported to opencode (BL-123); the registry declares None",
         ),
+        "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
     },
     "cursor-agent": {
         "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
@@ -124,5 +127,6 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             UNSUPPORTED,
             "no handoff writer ported to cursor (BL-123); the registry declares None",
         ),
+        "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
     },
 }

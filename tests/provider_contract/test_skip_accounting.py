@@ -53,7 +53,11 @@ def test_the_skip_count_is_fully_accounted_for() -> None:
     # the codex-rollover plan). The live run, re-summed that day, reported 8 SKIPPED lines from
     # these 7 declarations, for the same opencode reason.
     # 7 -> 10: only Codex publishes managed permission presets.
-    assert expected_skips() == 10, (
+    # 10 -> 13 on 2026-11-12: `thread_permissions` joined the capability set, declared
+    # unsupported for claude, opencode and cursor-agent (Task 1.2 of the codex-permissions-on-
+    # the-daemon plan). The live run, re-summed that day, reported 14 SKIPPED tests from these 13
+    # declarations, for the same opencode reason.
+    assert expected_skips() == 13, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

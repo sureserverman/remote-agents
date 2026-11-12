@@ -36,6 +36,7 @@ from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
 from remote_agents.ports.limit_screen import LimitScreen
+from remote_agents.ports.thread_permissions import ThreadPermissions
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +409,14 @@ class ProviderDescriptor:
     action and lives on the terminal port instead, so claude declares None here and is not
     thereby less capable — the two are different subjects, not two depths of one
     capability."""
+
+    thread_permissions: ThreadPermissions | None = None
+    """Applies a permission preset to a running thread on the provider's shared server, or None
+    when the provider takes no preset after launch.
+
+    Codex's alone (2026-11-12, v0.70.0). A preset passed as a launch flag runs Codex's TUI off
+    its shared daemon and so without Remote Control, so presets are applied here instead, once
+    the service knows the session's thread. Typed, because the port is a ports-layer protocol."""
 
     reserved_keys: frozenset[str] = frozenset()
     """The tmux key names this provider's own agent binds, which a console must pass through.

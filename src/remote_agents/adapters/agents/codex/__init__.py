@@ -13,6 +13,7 @@ from remote_agents.adapters.agents.codex.sessions import (
     CodexAppServerClient,
     CodexSessionCatalogue,
 )
+from remote_agents.adapters.agents.codex.thread_settings import CodexThreadPermissions
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor, TrustDialog
@@ -49,6 +50,9 @@ def descriptor() -> ProviderDescriptor:
         hooks="codex",
         activity=HOOK_LICENCE,
         remote_control=CodexRemoteControl(),
+        # Presets are applied to the thread on the shared daemon, never passed as launch flags:
+        # a flag runs the TUI off the daemon and so without Remote Control (v0.70.0).
+        thread_permissions=CodexThreadPermissions(),
         # Measured 2026-09-28 on codex-cli 0.158.0, which redrew the dialog (acceptance
         # 2026-09-09 § 9): "Trust this folder?" under a `Folder access` heading, the cursor
         # still on the **affirmative** -- the opposite of claude's, which is the whole reason

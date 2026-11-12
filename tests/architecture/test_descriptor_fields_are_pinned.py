@@ -61,6 +61,10 @@ import typing
 #: DEC-122), which grew the capability half: `adopt_template` is what a rollover types into a
 #: successor of that provider. A real `None`: a provider with no ported handoff writer has
 #: nothing to adopt with, and its sessions never roll over.
+#: It moved 13 -> 14 on 2026-11-12 by the plan
+#: `2026-11-12-codex-permissions-on-the-daemon-plan.md` (Task 1.2), which grew the capability
+#: half: `thread_permissions` applies a preset to a running thread on the provider's shared
+#: server. A real `None`: only Codex takes presets, and only after launch.
 _IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
     "permission_presets",
@@ -73,6 +77,7 @@ _CAPABILITY_FIELDS = (
     "composer",
     "limit_screen",
     "adopt_template",
+    "thread_permissions",
 )
 _RESERVATION_FIELDS = ("reserved_keys",)
 
