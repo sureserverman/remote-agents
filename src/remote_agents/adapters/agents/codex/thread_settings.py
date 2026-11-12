@@ -385,54 +385,68 @@ async def _call(
 #: The only words a cleaned excerpt may keep. An allowlist, not a list of secret shapes: every
 #: denylist tried here (2026-11-12) let something through -- a zero-width space splitting a token,
 #: a compound key name, a quoted value, base64, a relative path. A word is kept only if it is
-#: plainly a word: up to 14 ASCII letters, lower case after an optional capital (hyphenated in
-#: lower case, or with a short apostrophe ending), an acronym of 2-5 capitals, a number of up to
-#: 5 digits, or a backtick-quoted name -- how Codex quotes a field or method -- of up to four
-#: letter-and-underscore segments joined by `/`, `:` or `.`, with no digit. Each may open with a
-#: bracket and end in plain punctuation. The residual risk, accepted: a secret made only of
-#: letters and quoted in backticks. Anything else -- digits mixed with letters, `=`, `@`, a
-#: slash outside backticks, any non-ASCII or invisible character -- becomes `…`. A pairing code
-#: (`XXXX-XXXX`, digits and capitals) can never pass.
+#: plainly a word: up to 14 ASCII letters, lower case after an optional capital, with a short
+#: apostrophe ending allowed; a single letter, an acronym of 2-4 capitals or a number of up to 3
+#: digits, never two of these in a row; the refused method's own name; or a
+#: backtick-quoted single name of letters and `_` (how Codex quotes a field). Each may open with
+#: a bracket and end in plain punctuation. Anything else -- digits mixed with letters, a hyphen,
+#: `=`, `@`, a slash, any non-ASCII or invisible character -- becomes `…`.
 _KEPT_WORD = re.compile(
     r"""\(?(?:
-        [A-Za-z][a-z]{0,13}(?:'[a-z]{1,2})?
-      | [A-Z]{2,5}
-      | [a-z]{1,14}(?:-[a-z]{1,14}){1,3}
-      | \d{1,5}
-      | `[A-Za-z_]{1,24}(?:[/:.][A-Za-z_]{1,24}){0,3}[/:.]?`
+        (?P<word>[aAI]|[A-Za-z][a-z]{1,13}(?:'[a-z]{1,2})?)
+      | (?P<code>[A-Z]{2,4}|\d{1,3}|[b-zB-HJ-Z])
+      | `[A-Za-z_]{1,24}`
     )[.,;:!?)]*""",
     re.VERBOSE,
 )
 #: A word naming a credential drops the whole excerpt: what follows it is the likeliest secret,
-#: and no rule above can tell `token abc` from `token expired`.
-_CREDENTIAL_WORDS = re.compile(
-    r"(?i)token|secret|passw|pwd|credential|api.?key|private|bearer|cookie|session|jwt|auth|"
-    r"pairing|apikey|\bkey\b|\bpass\b"
+#: and no rule can tell `token abc` from `token expired`. The long names are also looked for
+#: with the spaces taken out, so `pa ss word` and `tok en` count.
+_CREDENTIAL_WORDS = re.compile(r"(?i)\b(?:pin|otp|ssh|key|pass|seed|salt|jwt|auth\w*|login|code)\b")
+_CREDENTIAL_SPELLED = re.compile(
+    r"(?i)token|secret|passw|passphrase|passcode|pwd|credential|apikey|api_key|private|bearer|"
+    r"cookie|session|mnemonic|recovery"
 )
 _EXCERPT_CHARS = 120
 
 
-def _excerpt(text: object) -> str | None:
+def _excerpt(text: object, method: str) -> str | None:
     """A short excerpt of the daemon's own message that can hold no secret, or None.
 
     The owner chose to see what Codex said when it refuses a change (2026-11-12, OD-9), against
     this project's habit of never echoing provider output. So the excerpt fails closed: the
     first non-blank line, normalised (NFKC), split on whitespace, each word kept only if it
-    matches `_KEPT_WORD` and replaced by `…` otherwise, nothing kept at all if a word names a
-    credential, and the result bounded. A character the allowlist does not know poisons its
-    whole word rather than being deleted, so it can never join two halves of a token.
+    matches `_KEPT_WORD` (or is the refused method's own name) and `…` otherwise, never two short
+    codes in a row (so a number or a pairing code cannot be spelled out in pieces), nothing kept
+    at all if the line names a credential, and the result bounded. A character the allowlist does
+    not know poisons its whole word rather than being deleted, so it never joins two halves.
+
+    **Accepted residual** (reviewed 2026-11-12): a secret written as ordinary short words, such as
+    a passphrase or a user name in plain prose, cannot be told from an error message and would
+    pass. It needs the owner's own daemon, whose socket is checked to be the owner's, to echo it.
     """
     if not isinstance(text, str):
         return None
     lines = [line for line in unicodedata.normalize("NFKC", text).splitlines() if line.strip()]
-    if not lines or _CREDENTIAL_WORDS.search(lines[0]):
+    if not lines:
         return None
-    words = []
-    for word in lines[0].split():
-        kept = word if word.isascii() and _KEPT_WORD.fullmatch(word) else "…"
-        if kept == "…" and words and words[-1] == "…":
-            continue
-        words.append(kept)
+    line = lines[0]
+    if _CREDENTIAL_WORDS.search(line) or _CREDENTIAL_SPELLED.search("".join(line.split())):
+        return None
+    words: list[str] = []
+    after_code = False
+    for word in line.split():
+        match = _KEPT_WORD.fullmatch(word) if word.isascii() else None
+        kept = match is not None or word.strip(".,;:!?()`") == method
+        is_code = match is not None and match.group("code") is not None
+        if kept and is_code and after_code:
+            kept = False
+        after_code = is_code  # a rejected code still counts: no code may follow it
+        if not kept:
+            if words and words[-1] == "…":
+                continue
+            word = "…"
+        words.append(word)
     excerpt = " ".join(words)
     if len(excerpt) > _EXCERPT_CHARS:
         excerpt = excerpt[: _EXCERPT_CHARS - 1].rsplit(" ", 1)[0] + " …"
@@ -457,5 +471,5 @@ def _refusal(error: object, method: str, thread_id: str | None) -> str:
     numbered = isinstance(code, int) and not isinstance(code, bool)
     if numbered:
         reason += f" (error {code})"
-    said = _excerpt(text)
+    said = _excerpt(text, method)
     return f"{reason}: Codex said “{said}”" if said else reason

@@ -519,6 +519,23 @@ LEAKS = {
     "long line": ("x" * 1000, "x" * 30),
     "non-ASCII digits": ("enter \u0664\u0668\u0662\u0669\u0661 now", "\u0664\u0668"),
     "fullwidth keyword, spaced value": ("ｔｏｋｅｎ hunterpass", "hunterpass"),
+    "passphrase": ("the passphrase is correct horse battery", "horse"),
+    "hyphenated passphrase": ("correct-horse-battery-staple", "horse"),
+    "six digits in two numbers": ("expected 482 913 here", "913"),
+    "pin in two numbers": ("pin 1234 5678", "5678"),
+    "card in three numbers": ("card 12345 67890 11111", "67890"),
+    "lowercase pairing code": ("expected abcd-efgh got wxyz-qrst", "efgh"),
+    "spelled-out letters": ("a b c d e f g h", "c d"),
+    "acronym pairs": ("got ABCD EFGH", "EFGH"),
+    "mnemonic": ("mnemonic abandon ability able about", "abandon"),
+    "otp": ("otp 123 456", "456"),
+    "split keyword": ("tok en: hunter two", "hunter"),
+    "split password": ("pa ss word is hunter two", "hunter"),
+    "backticked home path": ("refused for `home/alice/work`", "alice"),
+    "backticked host": ("host `alice.example.com` refused", "alice"),
+    "short pin": ("your pin is 482", "482"),
+    "short otp": ("otp 482", "482"),
+    "three non-ASCII digits": ("enter \u0664\u0668\u0662 now", "\u0664\u0668\u0662"),
 }
 
 
@@ -536,7 +553,11 @@ READABLE = {
     "invalid thread id": (
         "invalid thread id: invalid character: expected an optional prefix of `urn:uuid:` "
         "followed by [0-9a-fA-F-], found `n` at line 1",
-        "invalid thread id: invalid character: expected an optional prefix of `urn:uuid:`",
+        "invalid thread id: invalid character: expected an optional prefix of",
+    ),
+    "method not found": (
+        "Method not found: thread/settings/update",
+        "Method not found: thread/settings/update",
     ),
     "unknown field": (
         "Invalid params: unknown field `approvalsReviewr`, expected one of `threadId`, `model`",
