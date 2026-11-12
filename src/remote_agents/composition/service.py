@@ -1145,9 +1145,19 @@ def build_permission_apply_pass(
     activity_directory: Path,
     connection,
     binder: ThreadBinder | None = None,
+    notify: Callable[[SessionRecord, str], Awaitable[None]] | None = None,
 ) -> PermissionApplyPass:
     """The permission pass `serve` runs beside the binder, and only `serve` (DEC-115)."""
     bindings = FileThreadBindings(activity_directory)
+    rollovers = SQLiteRolloverStore(connection)
+
+    async def successor_of_a_rollover(session_id: SessionId) -> bool:
+        # Its rollover ends `permissions-failed` and reports that itself.
+        return any(
+            rollover.successor_session_id == session_id
+            for rollover in await rollovers.open_rollovers()
+        )
+
     hooks = profiles_bound_by_thread(descriptors)
 
     async def sessions_seen() -> Sequence[SessionRecord]:
@@ -1183,6 +1193,8 @@ def build_permission_apply_pass(
         thread_of=bound_thread,
         unbound=gave_up,
         bound=None if binder is None else binder.wait_bound,
+        notify=notify,
+        told_elsewhere=successor_of_a_rollover,
     )
 
 

@@ -22,7 +22,10 @@ from remote_agents.application.permission_apply import (
     RETRY_SECONDS,
     UNBOUND_REASON,
     PermissionApplyPass,
+    PermissionFailureWatch,
     Readiness,
+    permission_state_line,
+    permissions_notice,
 )
 from remote_agents.domain.models import (
     ProfileId,
@@ -132,6 +135,9 @@ class Rig:
         self.gave_up: set[str] = set()
         self.bound_answers: list[bool] = []
         self.bound_asked: list[tuple[SessionId, ProfileId, bool]] = []
+        self.told: list[tuple[SessionId, str]] = []
+        self.rollover_successors: set[SessionId] = set()
+        self.notify_error: Exception | None = None
         self.now = START
         self.slept: list[float] = []
         self.apply_pass = PermissionApplyPass(
@@ -141,9 +147,19 @@ class Rig:
             thread_of=self._thread_of,
             unbound=self.gave_up.__contains__,
             bound=self._bound,
+            notify=self._notify,
+            told_elsewhere=self._told_elsewhere,
             now=lambda: self.now,
             sleep=self._sleep,
         )
+
+    async def _notify(self, record: SessionRecord, reason: str) -> None:
+        if self.notify_error is not None:
+            raise self.notify_error
+        self.told.append((record.session_id, reason))
+
+    async def _told_elsewhere(self, session_id: SessionId) -> bool:
+        return session_id in self.rollover_successors
 
     def _thread_of(self, session_id: str, profile_id: str) -> str | None:
         assert profile_id == str(PROVIDER)
@@ -638,6 +654,153 @@ async def test_a_session_that_ends_is_forgotten_and_a_reused_key_starts_clean() 
     await rig.tick()
 
     assert rig.apply_pass.tracked == frozenset()
+
+
+# --- Telling the owner (Task 2.4). ---
+
+
+def test_permissions_notice_names_the_session_and_the_reason_and_no_provider() -> None:
+    text = permissions_notice(_record(), "remote-agents", "no Codex daemon")
+
+    assert text == (
+        "shared-server-provider in remote-agents #1 could not be given its permissions: "
+        "no Codex daemon. It runs on the agent's own configuration, and nothing automatic is "
+        "typed into it."
+    )
+
+
+async def test_permission_failure_is_told_once_by_the_pass() -> None:
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.server.failures = ["timed out", "no Codex daemon"]
+
+    await rig.tick()
+    assert rig.told == [], "one failure is retried, not reported"
+    for _ in range(4):
+        await rig.tick()
+
+    assert rig.told == [(SESSION, "no Codex daemon")]
+
+
+async def test_permission_failure_seen_while_a_caller_waits_is_told_too() -> None:
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.server.failures = ["timed out", "timed out"]
+
+    assert (await rig.apply_pass.wait_ready(SESSION, PROVIDER)).unapplied == "timed out"
+    await rig.tick()
+
+    assert rig.told == [(SESSION, "timed out")]
+
+
+async def test_permission_failure_of_an_unbound_session_is_told_with_that_reason() -> None:
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.gave_up.add(str(SESSION))
+
+    await rig.tick()
+    await rig.tick()
+
+    assert rig.told == [(SESSION, UNBOUND_REASON)]
+
+
+async def test_permission_failure_of_a_rollovers_successor_is_left_to_the_rollover() -> None:
+    """The rollover ends `permissions-failed` and says so itself: no second notice."""
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.rollover_successors.add(SESSION)
+    rig.server.failures = ["timed out", "timed out"]
+
+    assert (await rig.apply_pass.wait_ready(SESSION, PROVIDER)).unapplied == "timed out"
+    await rig.tick()
+
+    assert rig.told == []
+    assert rig.bindings.states[SESSION].failure == "timed out", "recorded all the same"
+
+
+async def test_permission_failure_notice_that_raises_costs_only_the_notice() -> None:
+    rig = Rig(_record(resumed_from="missing"), _record(SECOND, resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.bindings.pending(SECOND, PermissionPreset.ASK)
+    rig.notify_error = RuntimeError("the bot is away")
+
+    await rig.tick()
+    await rig.tick()
+
+    assert rig.bindings.states[SESSION].failure is not None
+    assert rig.bindings.states[SECOND].applied is PermissionPreset.ASK
+
+
+async def test_permission_failure_from_before_a_service_restart_is_not_told_again() -> None:
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.states[SESSION] = PermissionState(PermissionPreset.ASK, None, None, "timed out")
+
+    for _ in range(3):
+        await rig.tick()
+
+    assert rig.told == []
+
+
+async def test_permission_failure_watch_learns_on_its_first_look_then_reports_each_once() -> None:
+    """The console is another process and reads the store. A console opened later is not the
+    moment to report an old failure, which the bot has said and `doctor` still counts."""
+    rig = Rig(_record(), _record(SECOND))
+    rig.bindings.states[SESSION] = PermissionState(PermissionPreset.ASK, None, None, "timed out")
+    rig.bindings.pending(SECOND, PermissionPreset.ASK)
+    watch = PermissionFailureWatch(rig.bindings, rig._sessions)
+
+    assert await watch.newly_failed() == ()
+
+    await rig.bindings.mark_failed(SECOND, "no Codex daemon", requested=PermissionPreset.ASK)
+    fresh = await watch.newly_failed()
+
+    assert [(record.session_id, reason) for record, reason in fresh] == [
+        (SECOND, "no Codex daemon")
+    ]
+    assert await watch.newly_failed() == ()
+
+
+async def test_permission_failure_watch_reports_a_session_that_fails_again_after_it_cleared() -> (
+    None
+):
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    watch = PermissionFailureWatch(rig.bindings, rig._sessions)
+    assert await watch.newly_failed() == ()
+    await rig.bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.ASK)
+    assert len(await watch.newly_failed()) == 1
+
+    await rig.bindings.set_requested(SESSION, PermissionPreset.FULL_ACCESS)
+    assert await watch.newly_failed() == ()
+    await rig.bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.FULL_ACCESS)
+
+    assert len(await watch.newly_failed()) == 1
+
+
+def test_permission_failure_or_success_reads_as_one_inspection_line() -> None:
+    ask = PermissionPreset.ASK
+    default = PermissionPreset.PROVIDER_DEFAULT
+
+    assert permission_state_line(ask, PermissionState(ask, ask, "d", None)) == "applied"
+    assert (
+        permission_state_line(ask, PermissionState(ask, None, None, "no Codex daemon"))
+        == "not applied: no Codex daemon"
+    )
+    # A re-apply that failed after a daemon restart: what the pane had is gone.
+    assert (
+        permission_state_line(ask, PermissionState(ask, ask, "d", "timed out"))
+        == "not applied: timed out"
+    )
+    assert permission_state_line(ask, PermissionState(ask, None, None, None)) == "not applied yet"
+    assert permission_state_line(default, PermissionState(default, None, None, None)) == "applied"
+    assert (
+        permission_state_line(ask, None)
+        == "launched with flags (v0.69.0); relaunch for Remote Control"
+    )
+    # Launched before this version with no flag at all: it is on the daemon already.
+    assert permission_state_line(default, None) is None
+    # No snapshot either: nothing is known about how it was launched.
+    assert permission_state_line(None, None) is None
 
 
 # --- The pass as `serve` builds it: over the real binding store and the real state rows. ---

@@ -87,6 +87,7 @@ from remote_agents.application.host_remote_control import (
     HostRemoteControlCommand,
     PairCommand,
 )
+from remote_agents.application.permission_apply import permissions_notice
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import (
     CatalogProject,
@@ -932,6 +933,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         )
         if self._services.backend.unbound_watch is not None:
             self.set_interval(_UNBOUND_WATCH_SECONDS, self._tell_unbound)
+        if self._services.backend.permission_failures is not None:
+            self.set_interval(_UNBOUND_WATCH_SECONDS, self._tell_permission_failures)
         # The theme is remembered by `watch_theme`, not here: the signal is published through
         # `call_next`, a turn after the switch, and the Settings row reads the file back at once.
         self.theme_changed_signal.subscribe(self, self._restyle_console_bar)
@@ -1147,6 +1150,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 self.announce(unbound_notice(record, name), severity="warning")
         except Exception:
             _LOG.exception("could not read which sessions gave up their binding")
+
+    async def _tell_permission_failures(self) -> None:
+        """Say once that a session's permissions were not applied. Never raises."""
+        try:
+            failed = await self._services.backend.permission_failures.newly_failed()
+            for record, reason in failed:
+                name = project_name(str(record.project_id), self._catalogue)
+                self.announce(permissions_notice(record, name, reason), severity="warning")
+        except Exception:
+            _LOG.exception("could not read which sessions' permissions were not applied")
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Announce something that did not happen, without taking the position off screen.

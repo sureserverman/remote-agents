@@ -70,6 +70,68 @@ class Readiness:
 READY = Readiness()
 
 
+def permissions_notice(record: SessionRecord, project_name: str, reason: str) -> str:
+    """The one sentence both surfaces say about a session whose preset was not applied
+    (DEC-091). `reason` is the port's own: short, and holding no secret."""
+    return (
+        f"{record.profile_id} in {project_name} #{record.display.sequence} could not be given "
+        f"its permissions: {reason}. It runs on the agent's own configuration, and nothing "
+        "automatic is typed into it."
+    )
+
+
+def permission_state_line(
+    launched_with: PermissionPreset | None, state: PermissionState | None
+) -> str | None:
+    """What session inspection says about the preset on the server, on both surfaces, or None
+    when there is nothing to say. `launched_with` is the launch snapshot."""
+    if state is None:
+        # No state row: launched before presets were applied on the server. A preset was then
+        # a launch flag, which runs the pane off the shared server; the provider's own default
+        # added no flag, and a session with no snapshot says nothing about its launch.
+        if launched_with is None or launched_with is PermissionPreset.PROVIDER_DEFAULT:
+            return None
+        return "launched with flags (v0.69.0); relaunch for Remote Control"
+    if state.failure is not None:
+        return f"not applied: {state.failure}"
+    if state.requested is PermissionPreset.PROVIDER_DEFAULT or state.applied is state.requested:
+        return "applied"
+    return "not applied yet"
+
+
+class PermissionFailureWatch:
+    """Which sessions' presets failed to apply since this surface last looked.
+
+    The console is another process and is not told by the pass, so it reads the store, as
+    `UnboundWatch` does. Its first look only learns what is already there. A session whose
+    failure cleared and came back is news again.
+    """
+
+    def __init__(
+        self,
+        bindings: PermissionBindings,
+        sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
+    ) -> None:
+        self._bindings = bindings
+        self._sessions = sessions
+        self._seen: set[str] | None = None
+
+    async def newly_failed(self) -> tuple[tuple[SessionRecord, str], ...]:
+        failed = []
+        for record in await self._sessions():
+            state = await self._bindings.state(record.session_id)
+            if state is not None and state.failure is not None:
+                failed.append((record, state.failure))
+        keys = {str(record.session_id) for record, _ in failed}
+        fresh = (
+            ()
+            if self._seen is None
+            else tuple(pair for pair in failed if str(pair[0].session_id) not in self._seen)
+        )
+        self._seen = keys
+        return fresh
+
+
 class ApplyStep(Enum):
     """What one look at a session found."""
 
@@ -101,6 +163,8 @@ class PermissionApplyPass:
         thread_of: Callable[[str, str], str | None],
         unbound: Callable[[str], bool] | None = None,
         bound: Callable[..., Awaitable[bool]] | None = None,
+        notify: Callable[[SessionRecord, str], Awaitable[None]] | None = None,
+        told_elsewhere: Callable[[SessionId], Awaitable[bool]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -108,7 +172,8 @@ class PermissionApplyPass:
 
         `thread_of` names a fresh session's bound thread, given the session and its profile,
         and `unbound` says its binding gave up; both read files, so they run off the loop.
-        `bound` is the binder's own wait.
+        `bound` is the binder's own wait. `notify` tells the owner about a failure that now
+        stands, once, unless `told_elsewhere` says another report will name it (a rollover's).
         """
         self._bindings = bindings
         self._sessions = sessions
@@ -116,6 +181,8 @@ class PermissionApplyPass:
         self._thread_of = thread_of
         self._unbound = unbound
         self._bound = bound
+        self._notify = notify
+        self._told_elsewhere = told_elsewhere
         self._now = now
         self._sleep = sleep
         self._attempts: dict[str, _Attempt] = {}
@@ -142,7 +209,7 @@ class PermissionApplyPass:
             if str(record.profile_id) not in self._appliers:
                 continue
             try:
-                await self._step(record)
+                await self._look(record)
             except Exception:
                 # One session's store or server trouble must not cost the others their preset.
                 _LOG.exception("the permission pass could not look at %s", record.session_id)
@@ -178,7 +245,7 @@ class PermissionApplyPass:
             if record is None or record.state not in LIVE_STATES:
                 return Readiness(bound=bound, unapplied=ENDED_REASON)
             step = (
-                await self._step(record)
+                await self._look(record)
                 if record.state is SessionState.RUNNING
                 else ApplyStep.WAITING
             )
@@ -196,6 +263,21 @@ class PermissionApplyPass:
         return next(
             (seen for seen in await self._sessions() if seen.session_id == session_id), None
         )
+
+    async def _look(self, record: SessionRecord) -> ApplyStep:
+        """One look at a session, telling the owner when it found a failure that now stands."""
+        step = await self._step(record)
+        if step is ApplyStep.FAILED and self._notify is not None:
+            try:
+                elsewhere = self._told_elsewhere is not None and await self._told_elsewhere(
+                    record.session_id
+                )
+                state = None if elsewhere else await self._bindings.state(record.session_id)
+                if state is not None and state.failure is not None:
+                    await self._notify(record, state.failure)
+            except Exception:
+                _LOG.exception("the permission notice for %s could not be sent", record.session_id)
+        return step
 
     async def _step(self, record: SessionRecord) -> ApplyStep:
         applier = self._appliers.get(str(record.profile_id))

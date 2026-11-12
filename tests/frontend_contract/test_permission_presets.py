@@ -17,6 +17,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import LaunchSelection
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen
 from remote_agents.adapters.tui.screens.resume import ResumeConversationsScreen
+from remote_agents.application.permission_apply import permission_state_line
 from remote_agents.application.permission_presets import (
     PERMISSION_CHOICES,
     PERMISSION_TITLE,
@@ -43,6 +44,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.profiles import PermissionPreset
+from remote_agents.ports.permission_bindings import PermissionState
 
 PROJECT = CatalogProject("a" * 24, "fixture", "infra", "Registered")
 CODEX = ProfileId("codex")
@@ -85,6 +87,12 @@ class Sessions(SessionUseCaseDouble):
 
     async def permission_preset(self, session_id):
         return PermissionPreset.ASK
+
+    state = None
+    """The session's permission state row; None is a session launched with flags."""
+
+    async def permission_state(self, session_id):
+        return self.state
 
 
 class Conversations:
@@ -324,6 +332,43 @@ async def test_session_inspection_names_the_snapshot_instead_of_the_new_default(
         from tui_feedback import status
 
         assert "Launch permissions" in status(app) and "Ask me" in status(app)
+
+
+@pytest.mark.parametrize(
+    ("state", "said"),
+    [
+        (PermissionState(PermissionPreset.ASK, PermissionPreset.ASK, "d", None), "applied"),
+        (
+            PermissionState(PermissionPreset.ASK, None, None, "no Codex daemon"),
+            "not applied: no Codex daemon",
+        ),
+        (PermissionState(PermissionPreset.ASK, None, None, None), "not applied yet"),
+        (None, "launched with flags (v0.69.0); relaunch for Remote Control"),
+    ],
+)
+async def test_session_inspection_says_whether_the_permissions_were_applied_on_both_surfaces(
+    settings, state, said
+):
+    """One sentence, from `application/`, after the launch snapshot (DEC-091)."""
+
+    class Existing(Sessions):
+        async def list_sessions(self):
+            return (self.record,)
+
+    sessions = Existing()
+    sessions.state = state
+    assert permission_state_line(PermissionPreset.ASK, state) == said
+    expected = f"Launch permissions: Ask me (requested at launch); {said}"
+
+    screen = await bot_for(settings, sessions)._detail_reply(str(sessions.record.session_id))
+    assert expected in screen.text
+    app = app_for(settings, sessions)
+    async with app.run_test() as pilot:
+        await app.show_detail(str(sessions.record.session_id))
+        await pilot.pause()
+        from tui_feedback import status
+
+        assert expected in status(app)
 
 
 async def test_stale_override_for_an_unsupported_agent_is_refused_before_launch(settings):

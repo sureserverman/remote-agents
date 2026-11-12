@@ -299,6 +299,13 @@ async def test_the_permission_pass_is_wired_beside_the_binder(tmp_path, monkeypa
     assert isinstance(apply_pass._bindings, SQLitePermissionBindings)
     assert apply_pass._bound == composition.thread_binder.wait_bound
     assert apply_pass._unbound is not None
+    # The owner is told through the bot's own notifier, and a rollover's successor is left to
+    # the rollover; the console learns from the store.
+    assert apply_pass._notify == composition.binding_notifier.notify_permissions
+    assert apply_pass._told_elsewhere is not None
+    from remote_agents.application.permission_apply import PermissionFailureWatch
+
+    assert isinstance(composition.boundary.backend.permission_failures, PermissionFailureWatch)
 
 
 async def test_the_serve_loop_starts_the_permission_pass() -> None:

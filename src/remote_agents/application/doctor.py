@@ -117,6 +117,7 @@ def production_doctor(
     console_marks: tuple[tuple[str, str, bool], ...] | None = None,
     worktrees: tuple[tuple[str, str, str], ...] | None = None,
     unbound_sessions: int | None = None,
+    permission_failures: int | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -277,6 +278,10 @@ def production_doctor(
     if unbound_sessions is not None:
         # A count, and never a verdict: an unbound session works, and only its handoffs refuse.
         report["unbound_sessions"] = unbound_sessions
+    if permission_failures is not None:
+        # A count, and never a verdict: the session works, on its agent's own configuration,
+        # and nothing automatic is typed into it until its preset is applied.
+        report["permission_failures"] = permission_failures
     if worktrees is not None:
         # Every session worktree recorded and not removed, as `path · branch · reason kept`
         # (BL-116). Reported beside `console` and for its reason: a worktree kept because its

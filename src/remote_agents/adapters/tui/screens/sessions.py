@@ -2007,17 +2007,25 @@ class SessionDetailScreen(ChoiceScreen):
         permission_fact = ""
         settings = self.services.backend.permission_presets
         if settings is not None and record.profile_id in settings.profiles:
+            from remote_agents.application.permission_apply import permission_state_line
             from remote_agents.application.permission_presets import permission_label
 
             try:
-                preset = await self.services.backend.sessions.permission_preset(record.session_id)
+                sessions = self.services.backend.sessions
+                preset = await sessions.permission_preset(record.session_id)
                 label = (
                     permission_label(preset) if preset is not None else "unknown (legacy session)"
                 )
+                # Whether the daemon confirmed it, in the sentence both surfaces share.
+                applied = permission_state_line(
+                    preset, await sessions.permission_state(record.session_id)
+                )
             except Exception:
                 _LOG.exception("the launch permission snapshot could not be read")
-                label = "unknown (snapshot unavailable)"
-            permission_fact = f" Launch permissions: {label} (requested at launch)."
+                label, applied = "unknown (snapshot unavailable)", None
+            permission_fact = f" Launch permissions: {label} (requested at launch)" + (
+                "." if applied is None else f"; {applied}."
+            )
         self.set_status(
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
             + permission_fact

@@ -555,7 +555,10 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     # 24 -> 25: both surfaces share the persisted permission preset use case.
     # Twenty-six since `unbound_watch` joined them (`2026-10-31-codex-thread-binding-plan.md`, Task
     # 3.3): the console is another process, and the binding pass tells only the bot.
-    assert len(fields) == 26, (
+    # Twenty-seven since `permission_failures` joined them
+    # (`2026-11-12-codex-permissions-on-the-daemon-plan.md`, Task 2.4), for the same reason: the
+    # permission pass tells only the bot.
+    assert len(fields) == 27, (
         f"`Backend` now declares {len(fields)} fields, not 25. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."

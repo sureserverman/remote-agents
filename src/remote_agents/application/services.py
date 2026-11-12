@@ -54,6 +54,7 @@ from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.host_remote_control import DaemonGuard
+from remote_agents.ports.permission_bindings import PermissionState
 from remote_agents.ports.remote_control_default import RemoteControlDefaultPort
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import (
@@ -764,6 +765,15 @@ class SessionService:
             None
             if self._permissions is None
             else await self._permissions.bindings.for_session(session_id)
+        )
+
+    async def permission_state(self, session_id: SessionId) -> PermissionState | None:
+        """What the session asked for and what its daemon confirmed; None for a session
+        launched before presets were applied on the daemon."""
+        return (
+            None
+            if self._permissions is None
+            else await self._permissions.bindings.state(session_id)
         )
 
     async def remember_permissions(self) -> None:

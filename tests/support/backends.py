@@ -157,6 +157,11 @@ class SessionUseCaseDouble:
         del session_id
         return TrustState.UNKNOWN
 
+    async def permission_state(self, session_id: object) -> None:
+        """No state row: a session from before presets were applied on the daemon."""
+        del session_id
+        return None
+
     async def project_usage(self) -> tuple[()]:
         """No launch history, so the catalogue keeps the order it was built in."""
         return ()

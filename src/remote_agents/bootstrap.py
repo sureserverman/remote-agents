@@ -807,6 +807,29 @@ def _kept_worktrees(config) -> tuple[tuple[str, str, str], ...] | None:
         return None
 
 
+def _permission_failures(config) -> int | None:
+    """How many running sessions' permission presets are not applied, for `doctor`. Read-only.
+
+    A diagnostic never raises: any failure answers None, and `doctor` omits the line. A store
+    from before the state table has no such sessions to count, and answers None too.
+    """
+    try:
+        if not database_is_ready(config.database_path):
+            return None
+        connection = sqlite3.connect(f"{config.database_path.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            return connection.execute(
+                """SELECT COUNT(*) FROM session_permission_state p
+                   JOIN sessions s ON s.session_id = p.session_id
+                   WHERE p.failure IS NOT NULL AND s.state = ?""",
+                (SessionState.RUNNING.value,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return None
+
+
 def _unbound_sessions(config, paths: ProductionPaths) -> int | None:
     """How many live sessions would be refused a handoff, for `doctor`. Read-only.
 
@@ -882,6 +905,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         console_marks=_console_marks(),
         worktrees=_kept_worktrees(config),
         unbound_sessions=_unbound_sessions(config, paths),
+        permission_failures=_permission_failures(config),
         telegram_ready=_telegram_credentials_are_private(paths),
         service_ready=_command_succeeds(supervisor.liveness_command()),
         profiles=profiles,

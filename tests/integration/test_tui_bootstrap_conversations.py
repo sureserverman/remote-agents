@@ -256,6 +256,8 @@ def test_no_further_capability_leaked_into_the_context() -> None:
     shared = {
         # Thread-binding Task3.4: both surfaces share the persisted binding-give-up notice.
         "unbound_watch",
+        # Codex permissions Task 2.4: both surfaces share the failed-apply notice.
+        "permission_failures",
         # Sub-plan1 adds the shared launch permission Settings capability.
         "permission_presets",
         # Added by sub-plan 02's Task 1.3, and listed here because this is where growing the

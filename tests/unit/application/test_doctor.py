@@ -456,3 +456,82 @@ def test_kept_worktrees_are_listed_with_their_reasons_and_never_move_the_verdict
 def test_no_kept_worktree_is_an_empty_list_and_an_unreadable_one_omits_it() -> None:
     assert _healthy_doctor(worktrees=())["worktrees"] == []
     assert "worktrees" not in _healthy_doctor(worktrees=None)
+
+
+def test_doctor_counts_permission_failures_without_moving_the_verdict() -> None:
+    """A count, like the unbound one: the session works, on its agent's own configuration."""
+
+    def report(**fields) -> dict[str, object]:
+        return production_doctor(
+            core_ready=True,
+            database_ready=True,
+            tmux_ready=True,
+            telegram_ready=True,
+            service_ready=True,
+            profiles=(),
+            registered_projects=1,
+            discovered_projects=1,
+            catalogue_projects=1,
+            **fields,
+        )
+
+    bare = report()
+    counted = report(permission_failures=2)
+
+    assert "permission_failures" not in bare
+    assert counted["permission_failures"] == 2
+    assert counted["healthy"] == bare["healthy"]
+    assert report(permission_failures=0)["permission_failures"] == 0
+
+
+async def test_doctor_counts_only_running_sessions_whose_permission_failure_stands(
+    tmp_path,
+) -> None:
+    """Read from the store read-only, as `doctor` runs beside a live service."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.bootstrap import _permission_failures
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionId,
+        SessionRecord,
+        SessionState,
+    )
+    from remote_agents.domain.profiles import PermissionPreset
+
+    path = tmp_path / "state.sqlite3"
+    config = SimpleNamespace(database_path=path)
+    assert _permission_failures(config) is None, "no store yet: the line is omitted"
+
+    connection = open_database(path, migrations=MIGRATIONS)
+    store, bindings = SQLiteSessionStore(connection), SQLitePermissionBindings(connection)
+
+    async def launch(state: SessionState, failure: str | None) -> None:
+        record = SessionRecord(
+            SessionId.new(),
+            ProjectId("p"),
+            ProfileId("codex"),
+            SessionDisplayIdentity("p", "codex", "regular", 1),
+            state,
+            datetime(2026, 11, 12, tzinfo=UTC),
+        )
+        await store.save(record, permissions=PermissionPreset.ASK)
+        if failure is not None:
+            assert await bindings.mark_failed(
+                record.session_id, failure, requested=PermissionPreset.ASK
+            )
+
+    await launch(SessionState.RUNNING, "timed out")
+    await launch(SessionState.RUNNING, "no Codex daemon")
+    await launch(SessionState.RUNNING, None)
+    await launch(SessionState.ENDED, "timed out")
+    connection.close()
+
+    assert _permission_failures(config) == 2

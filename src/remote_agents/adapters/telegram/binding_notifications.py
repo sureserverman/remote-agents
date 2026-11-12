@@ -1,4 +1,4 @@
-"""The one message for a session that could not bind its thread.
+"""The one message for a session that could not bind its thread, or be given its permissions.
 
 The restart notice's shape (`restart_notifications.py`): sent apart from the live view, at once
 when the bot is attached, else held until it attaches, and given up with one journal line after
@@ -17,6 +17,7 @@ from html import escape
 from telegram.constants import ParseMode
 
 from remote_agents.adapters.telegram.flood import FloodGate
+from remote_agents.application.permission_apply import permissions_notice
 from remote_agents.application.thread_binding import unbound_notice
 from remote_agents.domain.models import SessionRecord
 
@@ -56,6 +57,14 @@ class BindingNotifier:
     async def notify(self, record: SessionRecord) -> None:
         self._pending.append(
             escape(unbound_notice(record, self._project_name(str(record.project_id))))
+        )
+        await self.pass_once()
+
+    async def notify_permissions(self, record: SessionRecord, reason: str) -> None:
+        """The same queue, so the two notices about one session keep their order. The reason
+        is the daemon's words in part, and is escaped with the rest (DEC-014)."""
+        self._pending.append(
+            escape(permissions_notice(record, self._project_name(str(record.project_id)), reason))
         )
         await self.pass_once()
 

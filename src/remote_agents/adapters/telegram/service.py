@@ -112,6 +112,7 @@ from remote_agents.application.limits_source import (
     next_cursor_limits_source,
     next_limits_source,
 )
+from remote_agents.application.permission_apply import permission_state_line
 from remote_agents.application.permission_presets import (
     PERMISSION_CHOICES,
     PERMISSION_EFFECT,
@@ -3150,10 +3151,15 @@ class PrivateBotBoundary:
                 label = (
                     permission_label(preset) if preset is not None else "unknown (legacy session)"
                 )
+                # Whether the daemon confirmed it, in the sentence both surfaces share.
+                applied = permission_state_line(
+                    preset, await self.backend.sessions.permission_state(record.session_id)
+                )
             except Exception:
                 _LOG.exception("the launch permission snapshot could not be read")
-                label = "unknown (snapshot unavailable)"
-            facts.append(("permissions", f"Launch permissions: {label} (requested at launch)"))
+                label, applied = "unknown (snapshot unavailable)", None
+            fact = f"Launch permissions: {label} (requested at launch)"
+            facts.append(("permissions", fact if applied is None else f"{fact}; {applied}"))
         for value in await self._usage_lines(record):
             facts.append(("context", value))
         facts.extend(git_facts(await self._git_read(record)))
