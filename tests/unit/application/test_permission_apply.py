@@ -1298,3 +1298,14 @@ async def test_wait_ready_is_not_satisfied_by_a_confirmation_of_a_replaced_prese
     readiness = await rig.apply_pass.wait_ready(SESSION)
     assert readiness.unapplied is None
     assert rig.server.calls[-1] == (THREAD, PermissionPreset.FULL_ACCESS)
+
+
+def test_inspection_names_the_mode_a_live_change_moved_the_session_to() -> None:
+    ask, full = PermissionPreset.ASK, PermissionPreset.FULL_ACCESS
+    assert permission_state_line(ask, PermissionState(full, full, "d", None)) == (
+        "now Full access; applied"
+    )
+    assert permission_state_line(ask, PermissionState(full, None, None, None)) == (
+        "now Full access; not applied yet"
+    )
+    assert permission_state_line(ask, PermissionState(ask, ask, "d", None)) == "applied"

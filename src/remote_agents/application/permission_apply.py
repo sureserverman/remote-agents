@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 
+from remote_agents.application.permission_presets import permission_label
 from remote_agents.application.thread_binding import LIVE_STATES
 from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.profiles import PermissionPreset
@@ -103,10 +104,15 @@ def permission_state_line(
             return None
         return "launched with flags (v0.69.0); relaunch for Remote Control"
     if state.failure is not None:
-        return f"not applied: {state.failure}"
-    if state.requested is PermissionPreset.PROVIDER_DEFAULT or state.applied is state.requested:
-        return "applied"
-    return "not applied yet"
+        outcome = f"not applied: {state.failure}"
+    elif state.requested is PermissionPreset.PROVIDER_DEFAULT or state.applied is state.requested:
+        outcome = "applied"
+    else:
+        outcome = "not applied yet"
+    if launched_with is not None and state.requested is not launched_with:
+        # A live change moved it since launch: the launch snapshot no longer says what it asks.
+        return f"now {permission_label(state.requested)}; {outcome}"
+    return outcome
 
 
 async def preset_owed(bindings: PermissionBindings, session_id: SessionId) -> bool:

@@ -61,7 +61,8 @@ from remote_agents.application.session_actions import (
     rollover_outcome,
 )
 from remote_agents.application.session_views import SessionGit, git_line
-from remote_agents.domain.models import SessionId, SessionRecord
+from remote_agents.domain.models import SessionId, SessionRecord, SessionState
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
 
 _LOG = logging.getLogger(__name__)
@@ -2098,6 +2099,11 @@ class SessionDetailScreen(ChoiceScreen):
         # `SessionService.rename` does not gate on one — naming a session that has just ended is
         # harmless, and the row it is on is still listed until reconciliation removes it.
         entries.append(("rename", "Rename"))
+        # Permissions (DEC-033): the bot's twin, one row then one pick. A row, never a key
+        # (DEC-095). Offered where a change could be asked for; the use case refuses the rest
+        # by name.
+        if self._live_permissions_offered(record):
+            entries.append(("permissions", "Permissions"))
         # No "Trust this project" row, deliberately: DEC-047. The console exchanges its left
         # pane with the agent's (DEC-040), so the owner is looking at the trust dialog and
         # answers it there. `trust_available` is the shared policy and still says yes for
@@ -2129,6 +2135,8 @@ class SessionDetailScreen(ChoiceScreen):
             await self.show_inspect()
         elif key == "rename":
             await self.show_rename()
+        elif key == "permissions":
+            await self.show_permissions()
         elif key in _REMOTE_CONTROL_DIRECTIONS:
             await self.confirm_remote_control()
         elif key in ROLLOVER_ACTION_LABELS:
@@ -2385,6 +2393,67 @@ class SessionDetailScreen(ChoiceScreen):
                 return
             text = capture_for_pane(captured, self.services.capture_redactions)
             await self.advance_to(InspectScreen(text or "This session has produced no output yet."))
+
+    def _live_permissions_offered(self, record: SessionRecord) -> bool:
+        settings = self.services.backend.permission_presets
+        return (
+            record.state is SessionState.RUNNING
+            and settings is not None
+            and record.profile_id in settings.profiles
+        )
+
+    async def show_permissions(self) -> None:
+        """Re-read the session, then open the three live choices with its current one.
+
+        The pick runs from that screen's handler, so the change and its wait run on the app's
+        pump (DEC-025), and its outcome is the sentence the bot says too (DEC-091).
+        """
+        from remote_agents.adapters.tui.screens.permissions import PermissionsScreen
+        from remote_agents.application.permission_presets import (
+            LIVE_CHOICES,
+            permission_change_sentence,
+        )
+
+        backend = self.services.backend
+        async with self.holding_the_guard():
+            try:
+                record = await self.tui.current_record(self.session_value)
+            except Exception as error:
+                self.tui.report_store_failure(error, self)
+                return
+            if record is None or not self._live_permissions_offered(record):
+                await self.refuse()
+                return
+            try:
+                state = await backend.sessions.permission_state(record.session_id)
+            except Exception:
+                _LOG.exception("the permission state could not be read")
+                state = None
+
+            async def change(preset: PermissionPreset | None) -> None:
+                try:
+                    outcome = await backend.change_session_permissions(record.session_id, preset)
+                except Exception:
+                    _LOG.exception("the permission change could not be recorded")
+                    self.announce(
+                        "not changed: the change could not be recorded", severity="warning"
+                    )
+                    return
+                self.announce(
+                    permission_change_sentence(outcome),
+                    severity="information" if outcome.changed else "warning",
+                )
+
+            await self.advance_to(
+                PermissionsScreen(
+                    None if state is None else state.requested,
+                    change,
+                    choices=LIVE_CHOICES,
+                    status="Change this session's mode now. Its continuations keep it; the "
+                    "Settings default stays unchanged.",
+                    title="Permissions",
+                )
+            )
 
     async def show_rename(self) -> None:
         """Re-read the session, then open the entry that names it.
