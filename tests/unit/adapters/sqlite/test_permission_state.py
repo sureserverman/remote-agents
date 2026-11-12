@@ -154,9 +154,11 @@ async def test_an_applied_preset_records_the_daemon_and_clears_an_earlier_failur
     )
 
 
-async def test_a_failure_keeps_what_was_applied_before_it(connection) -> None:
-    """A re-apply that fails after a daemon restart must not erase the record of the preset the
-    pane last had: the owner is told about the failure, not shown a session that never had one."""
+async def test_a_failure_forgets_what_was_applied_before_it(connection) -> None:
+    """An apply that timed out may still have landed, so after a failure what the server holds
+    is unknown. Kept, an earlier confirmation would let a later request for that same preset
+    read as applied with no apply at all (Stage 2 handoff, item b). Inspection says the
+    failure either way: it reads `failure` first."""
     await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
     bindings = SQLitePermissionBindings(connection)
     await bindings.mark_applied(SESSION, PermissionPreset.ASK, "boot-1:1")
@@ -165,8 +167,8 @@ async def test_a_failure_keeps_what_was_applied_before_it(connection) -> None:
 
     assert await bindings.state(SESSION) == PermissionState(
         requested=PermissionPreset.ASK,
-        applied=PermissionPreset.ASK,
-        daemon="boot-1:1",
+        applied=None,
+        daemon=None,
         failure="no Codex daemon",
     )
 
@@ -183,10 +185,7 @@ async def test_a_new_request_replaces_the_requested_preset_and_clears_the_failur
 
     assert await bindings.requested(SESSION) == PermissionPreset.FULL_ACCESS
     assert await bindings.state(SESSION) == PermissionState(
-        requested=PermissionPreset.FULL_ACCESS,
-        applied=PermissionPreset.ASK,
-        daemon="boot-1:1",
-        failure=None,
+        requested=PermissionPreset.FULL_ACCESS, applied=None, daemon=None, failure=None
     )
     # The launch snapshot is history, not the live request: it does not move.
     assert await bindings.for_session(SESSION) == PermissionPreset.ASK
@@ -250,3 +249,24 @@ async def test_the_table_refuses_a_preset_outside_the_closed_vocabulary(
         connection.execute(
             f"UPDATE session_permission_state SET {column} = 'root'"  # noqa: S608 - a test constant
         )
+
+
+async def test_a_restore_asks_for_the_earlier_preset_afresh_only_over_its_own_change(
+    connection,
+) -> None:
+    await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
+    bindings = SQLitePermissionBindings(connection)
+    await bindings.set_requested(SESSION, PermissionPreset.FULL_ACCESS)
+    await bindings.mark_applied(SESSION, PermissionPreset.FULL_ACCESS, "boot-1:1")
+
+    assert not await bindings.restore_requested(
+        SESSION, PermissionPreset.ASK, replacing=PermissionPreset.APPROVE_FOR_ME
+    )
+    assert (await bindings.state(SESSION)).requested is PermissionPreset.FULL_ACCESS
+
+    assert await bindings.restore_requested(
+        SESSION, PermissionPreset.ASK, replacing=PermissionPreset.FULL_ACCESS
+    )
+    assert await bindings.state(SESSION) == PermissionState(
+        requested=PermissionPreset.ASK, applied=None, daemon=None, failure=None
+    )

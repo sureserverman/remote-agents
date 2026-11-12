@@ -42,11 +42,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from remote_agents.application.permission_presets import PermissionSettings
+from remote_agents.application.permission_presets import PermissionChange, PermissionSettings
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import SessionGit
 from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
+from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
 
@@ -336,3 +337,14 @@ class Backend:
     def __post_init__(self) -> None:
         if self.max_label_length < 1:
             raise ValueError("label length bound must be positive")
+
+    async def change_session_permissions(
+        self, session_id: SessionId, preset: PermissionPreset
+    ) -> PermissionChange:
+        """Change a running session's permissions, for both surfaces: one action, one pick
+        (DEC-033). The outcome is said with `permission_change_sentence`."""
+        if self.sessions is None:
+            return PermissionChange(
+                False, PermissionPreset(preset), "permission presets are unavailable"
+            )
+        return await self.sessions.change_session_permissions(session_id, preset)

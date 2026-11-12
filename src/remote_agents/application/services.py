@@ -28,7 +28,7 @@ from remote_agents.application.errors import (
     SessionNotFoundError,
     StopNotPermittedError,
 )
-from remote_agents.application.permission_presets import SessionPermissions
+from remote_agents.application.permission_presets import PermissionChange, SessionPermissions
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.session_actions import (
     CLEANUP,
@@ -758,6 +758,15 @@ class SessionService:
             if self._permissions is None
             else await self._permissions.bindings.for_session(session_id)
         )
+
+    async def change_session_permissions(
+        self, session_id: SessionId, preset: PermissionPreset
+    ) -> PermissionChange:
+        if self._permissions is None:
+            return PermissionChange(
+                False, PermissionPreset(preset), "permission presets are unavailable"
+            )
+        return await self._permissions.change(session_id, preset)
 
     async def permission_state(self, session_id: SessionId) -> PermissionState | None:
         """What the session asked for and what its daemon confirmed; None for a session

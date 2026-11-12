@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.application.permission_presets import PERMISSION_CHOICES, PermissionSettings
+from remote_agents.application.permission_presets import (
+    PERMISSION_CHOICES,
+    PermissionSettings,
+    permission_label,
+)
 from remote_agents.composition.limits_source import ConfigPermissionSetting
 from remote_agents.config import ConfigError, read_codex_permissions
 from remote_agents.domain.profiles import PermissionPreset
@@ -213,3 +217,285 @@ def test_the_no_pick_choice_names_the_current_default_and_no_saved_snapshot():
     from remote_agents.application.permission_presets import permission_label
 
     assert permission_label(None) == "Current default"
+
+
+# --- Live change (Task 3.2, OD-3; supersedes part of DEC-133) ----------------------------------
+
+
+class _ChangeRig:
+    """A running Codex session over the real store, and a stand-in for `serve`'s apply pass:
+    each wait the change takes runs `pass_step` once, as one pass would."""
+
+    def __init__(self, tmp_path: Path, *, profile: str = "codex", state: str = "running"):
+        from datetime import UTC, datetime
+
+        from remote_agents.adapters.sqlite.database import open_database
+        from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
+        from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+        from remote_agents.application.permission_presets import SessionPermissions
+        from remote_agents.domain.models import (
+            ProfileId,
+            ProjectId,
+            SessionDisplayIdentity,
+            SessionId,
+            SessionRecord,
+            SessionState,
+        )
+
+        self.connection = open_database(tmp_path / "sessions.sqlite3")
+        self.store = SQLiteSessionStore(self.connection)
+        self.bindings = SQLitePermissionBindings(self.connection)
+        path = tmp_path / "config.toml"
+        path.write_text('[codex]\ndefault_permissions = "approve_for_me"\n')
+        self.settings = PermissionSettings(
+            ConfigPermissionSetting(path), profiles={ProfileId("codex"): tuple(PermissionPreset)}
+        )
+        self.clock = 0.0
+        self.waits = 0
+        self.pass_step = None
+        self.session = SessionId.new()
+        self.record = SessionRecord(
+            self.session,
+            ProjectId("fixture-project"),
+            ProfileId(profile),
+            SessionDisplayIdentity("fixture-project", profile, "regular", 1),
+            SessionState(state),
+            datetime.now(UTC),
+        )
+
+        async def sleep(seconds: float) -> None:
+            self.waits += 1
+            self.clock += seconds
+            if self.pass_step is not None:
+                await self.pass_step(self)
+
+        self.permissions = SessionPermissions(
+            self.settings, self.bindings, self.store, sleep=sleep, clock=lambda: self.clock
+        )
+
+    async def launch(self, preset=PermissionPreset.ASK, *, legacy: bool = False) -> None:
+        from remote_agents.domain.models import ProfileId
+
+        if legacy or self.record.profile_id != ProfileId("codex"):
+            # Launched by v0.69.0, or by a provider with no presets: no state row is written.
+            await self.store.save(self.record)
+            if legacy:
+                self.connection.execute(
+                    "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
+                    (str(self.session), preset.value),
+                )
+                self.connection.commit()
+            return
+        await self.store.save(self.record, permissions=preset)
+        await self.bindings.mark_applied(self.session, preset, "daemon-1")
+
+
+async def _applies(rig) -> None:
+    state = await rig.bindings.state(rig.session)
+    await rig.bindings.mark_applied(rig.session, state.requested, "daemon-1")
+
+
+async def _fails(rig) -> None:
+    state = await rig.bindings.state(rig.session)
+    await rig.bindings.mark_failed(rig.session, "no Codex daemon", requested=state.requested)
+
+
+@pytest.fixture
+def change_rig(tmp_path):
+    rig = _ChangeRig(tmp_path)
+    yield rig
+    rig.connection.close()
+
+
+def test_change_offers_exactly_the_three_explicit_modes():
+    from remote_agents.application.permission_presets import LIVE_CHOICES
+
+    assert tuple(choice.value for choice in LIVE_CHOICES) == (
+        PermissionPreset.APPROVE_FOR_ME,
+        PermissionPreset.ASK,
+        PermissionPreset.FULL_ACCESS,
+    )
+    assert {choice.label for choice in LIVE_CHOICES} <= {c.label for c in PERMISSION_CHOICES}
+
+
+@pytest.mark.parametrize(
+    "preset",
+    [PermissionPreset.APPROVE_FOR_ME, PermissionPreset.FULL_ACCESS],
+)
+async def test_change_sets_the_request_and_reports_the_pass_outcome(change_rig, preset):
+    from remote_agents.application.permission_presets import permission_change_sentence
+
+    await change_rig.launch(PermissionPreset.ASK)
+    change_rig.pass_step = _applies
+    outcome = await change_rig.permissions.change(change_rig.session, preset)
+    assert outcome.changed and outcome.preset is preset
+    assert permission_change_sentence(outcome) == f"now {permission_label(preset)}"
+    state = await change_rig.bindings.state(change_rig.session)
+    assert (state.requested, state.applied, state.failure) == (preset, preset, None)
+    # The launch snapshot is history and does not move.
+    assert await change_rig.bindings.for_session(change_rig.session) is PermissionPreset.ASK
+
+
+async def test_change_refuses_the_provider_default_by_name(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    outcome = await change_rig.permissions.change(
+        change_rig.session, PermissionPreset.PROVIDER_DEFAULT
+    )
+    assert not outcome.changed
+    assert "Use Codex configuration" in outcome.reason
+    assert (await change_rig.bindings.state(change_rig.session)).requested is PermissionPreset.ASK
+    assert change_rig.waits == 0
+
+
+async def test_change_refuses_a_session_of_a_provider_with_no_presets(tmp_path):
+    rig = _ChangeRig(tmp_path, profile="claude")
+    try:
+        await rig.launch()
+        outcome = await rig.permissions.change(rig.session, PermissionPreset.ASK)
+        assert not outcome.changed
+        assert "claude" in outcome.reason
+    finally:
+        rig.connection.close()
+
+
+@pytest.mark.parametrize("state", ["ended", "stop_requested", "starting", "untrusted"])
+async def test_change_refuses_a_session_that_is_not_running_by_name(tmp_path, state):
+    rig = _ChangeRig(tmp_path, state=state)
+    try:
+        await rig.launch()
+        outcome = await rig.permissions.change(rig.session, PermissionPreset.FULL_ACCESS)
+        assert not outcome.changed
+        assert "ended" in outcome.reason or "not running" in outcome.reason
+        assert (await rig.bindings.state(rig.session)).requested is PermissionPreset.ASK
+    finally:
+        rig.connection.close()
+
+
+async def test_change_refuses_a_session_launched_with_flags_by_name(change_rig):
+    from remote_agents.application.permission_presets import permission_change_sentence
+
+    await change_rig.launch(PermissionPreset.FULL_ACCESS, legacy=True)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
+    assert not outcome.changed
+    assert permission_change_sentence(outcome) == (
+        "not changed: launched with flags; relaunch to change permissions"
+    )
+    assert await change_rig.bindings.state(change_rig.session) is None
+
+
+async def test_a_failed_change_restores_the_earlier_mode_and_returns_the_reason(change_rig):
+    from remote_agents.application.permission_presets import permission_change_sentence
+
+    await change_rig.launch(PermissionPreset.ASK)
+    change_rig.pass_step = _fails
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    assert not outcome.changed
+    assert permission_change_sentence(outcome) == "not changed: no Codex daemon"
+    state = await change_rig.bindings.state(change_rig.session)
+    assert state.requested is PermissionPreset.ASK
+    # What the server holds is unknown after a failed apply, so the pass applies the earlier
+    # mode again rather than trusting a confirmation that may no longer hold.
+    assert state.applied is None and state.failure is None
+
+
+async def test_a_change_with_no_outcome_in_ten_seconds_restores_the_earlier_mode(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    assert not outcome.changed
+    assert outcome.reason
+    assert change_rig.clock <= 10.0
+    state = await change_rig.bindings.state(change_rig.session)
+    assert (state.requested, state.applied) == (PermissionPreset.ASK, None)
+
+
+async def test_a_late_failure_after_a_restore_is_not_recorded_against_the_earlier_mode(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    # The pass's apply of the abandoned mode reports late: it is not about what is asked now.
+    assert not await change_rig.bindings.mark_failed(
+        change_rig.session, "timed out", requested=PermissionPreset.FULL_ACCESS
+    )
+    assert (await change_rig.bindings.state(change_rig.session)).failure is None
+
+
+async def test_a_rollover_after_a_change_inherits_the_changed_preset(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    change_rig.pass_step = _applies
+    assert (
+        await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    ).changed
+    await change_rig.settings.set(PermissionPreset.APPROVE_FOR_ME)
+    inherited = await change_rig.permissions.resolve(
+        change_rig.record.profile_id, None, change_rig.session
+    )
+    assert inherited is PermissionPreset.FULL_ACCESS
+
+
+async def test_the_backend_change_reaches_the_session_use_case(change_rig):
+    from remote_agents.adapters.tmux.fake import FakeTerminal
+    from remote_agents.application.backend import Backend
+    from remote_agents.application.services import SessionService
+
+    await change_rig.launch(PermissionPreset.ASK)
+    change_rig.pass_step = _applies
+    backend = Backend(
+        sessions=SessionService(
+            change_rig.store, FakeTerminal(), permissions=change_rig.permissions
+        )
+    )
+    outcome = await backend.change_session_permissions(
+        change_rig.session, PermissionPreset.APPROVE_FOR_ME
+    )
+    assert outcome.changed
+    assert await Backend().change_session_permissions(
+        change_rig.session, PermissionPreset.ASK
+    ) == outcome.__class__(False, PermissionPreset.ASK, "permission presets are unavailable")
+
+
+async def test_change_refuses_while_another_change_is_being_applied(change_rig):
+    """Two surfaces at once: the second must not make the first's unconfirmed request the
+    preset its own failure restores (Tier-1 review, Critical)."""
+    await change_rig.launch(PermissionPreset.ASK)
+    await change_rig.bindings.set_requested(change_rig.session, PermissionPreset.FULL_ACCESS)
+    outcome = await change_rig.permissions.change(
+        change_rig.session, PermissionPreset.APPROVE_FOR_ME
+    )
+    assert not outcome.changed and "still being applied" in outcome.reason
+    assert change_rig.waits == 0
+    state = await change_rig.bindings.state(change_rig.session)
+    assert (state.requested, state.applied) == (PermissionPreset.FULL_ACCESS, PermissionPreset.ASK)
+
+
+async def test_a_failure_restores_what_was_confirmed_not_an_unconfirmed_request(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    change_rig.pass_step = _fails
+    await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    assert (await change_rig.bindings.state(change_rig.session)).requested is PermissionPreset.ASK
+
+
+async def test_a_change_to_the_confirmed_preset_needs_no_wait(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
+    assert outcome.changed and change_rig.waits == 0
+
+
+async def test_a_late_confirmation_of_an_abandoned_preset_is_not_recorded(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    assert not await change_rig.bindings.mark_applied(
+        change_rig.session, PermissionPreset.FULL_ACCESS, "daemon-1"
+    )
+    state = await change_rig.bindings.state(change_rig.session)
+    assert (state.requested, state.applied) == (PermissionPreset.ASK, None)
+
+
+async def test_change_refuses_a_session_on_the_providers_own_configuration_by_name(change_rig):
+    """OD-12: nothing on the server means "the provider's own configuration", so a failed
+    change could not be undone there. Refused before anything is asked for."""
+    await change_rig.launch(PermissionPreset.PROVIDER_DEFAULT)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    assert not outcome.changed
+    assert "Use Codex configuration" in outcome.reason and "relaunch" in outcome.reason
+    assert change_rig.waits == 0
+    state = await change_rig.bindings.state(change_rig.session)
+    assert state.requested is PermissionPreset.PROVIDER_DEFAULT

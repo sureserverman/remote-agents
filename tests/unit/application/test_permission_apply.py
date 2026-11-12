@@ -111,11 +111,14 @@ class FakeBindings:
 
     async def mark_applied(
         self, session_id: SessionId, preset: PermissionPreset, daemon: str
-    ) -> None:
+    ) -> bool:
+        if self.states[session_id].requested is not preset:
+            return False
         self.writes.append(("applied", session_id))
         self.states[session_id] = replace(
             self.states[session_id], applied=preset, daemon=daemon, failure=None
         )
+        return True
 
     async def mark_failed(
         self, session_id: SessionId, reason: str, *, requested: PermissionPreset
@@ -123,11 +126,21 @@ class FakeBindings:
         if self.states[session_id].requested is not requested:
             return False
         self.writes.append(("failed", session_id))
-        self.states[session_id] = replace(self.states[session_id], failure=reason)
+        self.states[session_id] = replace(
+            self.states[session_id], failure=reason, applied=None, daemon=None
+        )
         return True
 
     async def set_requested(self, session_id: SessionId, preset: PermissionPreset) -> None:
         self.states[session_id] = replace(self.states[session_id], requested=preset, failure=None)
+
+    async def restore_requested(
+        self, session_id: SessionId, preset: PermissionPreset, *, replacing: PermissionPreset
+    ) -> bool:
+        if self.states[session_id].requested is not replacing:
+            return False
+        self.states[session_id] = PermissionState(preset, None, None, None)
+        return True
 
 
 class Rig:
@@ -1246,3 +1259,42 @@ async def test_serve_tells_a_failed_binding_once_through_the_permission_notice(t
     service.connection.execute("UPDATE session_permission_state SET requested = 'provider_default'")
     service.connection.commit()
     assert await binder._told_elsewhere(SESSION) is False, "owed nothing: the binder speaks"
+
+
+async def test_a_preset_asked_for_during_an_apply_is_applied_next_not_read_as_confirmed() -> None:
+    """The owner changed the preset while the launch's apply was in flight. The confirmation
+    that comes back is for the old one: it is refused, and the next pass applies the new one."""
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.threads[str(SESSION)] = THREAD
+
+    async def change_meanwhile() -> None:
+        await rig.bindings.set_requested(SESSION, PermissionPreset.FULL_ACCESS)
+
+    rig.server.during_apply.append(change_meanwhile)
+    await rig.tick()
+    state = await rig.bindings.state(SESSION)
+    assert (state.requested, state.applied) == (PermissionPreset.FULL_ACCESS, None)
+
+    await rig.tick()
+    assert rig.server.calls == [
+        (THREAD, PermissionPreset.ASK),
+        (THREAD, PermissionPreset.FULL_ACCESS),
+    ]
+    assert (await rig.bindings.state(SESSION)).applied is PermissionPreset.FULL_ACCESS
+
+
+async def test_wait_ready_is_not_satisfied_by_a_confirmation_of_a_replaced_preset() -> None:
+    """Automatic work waits for the preset the session asks for now, not the one an apply in
+    flight was confirming when the owner changed it."""
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.threads[str(SESSION)] = THREAD
+
+    async def change_meanwhile() -> None:
+        await rig.bindings.set_requested(SESSION, PermissionPreset.FULL_ACCESS)
+
+    rig.server.during_apply.append(change_meanwhile)
+    readiness = await rig.apply_pass.wait_ready(SESSION)
+    assert readiness.unapplied is None
+    assert rig.server.calls[-1] == (THREAD, PermissionPreset.FULL_ACCESS)

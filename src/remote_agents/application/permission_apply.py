@@ -365,9 +365,11 @@ class PermissionApplyPass:
             else:
                 self._attempts.pop(key, None)
                 self._failed_under.pop(key, None)
-                await self._bindings.mark_applied(
+                if not await self._bindings.mark_applied(
                     record.session_id, state.requested, identity or ""
-                )
+                ):
+                    # Another preset was asked for during the apply: that one is owed now.
+                    return ApplyStep.WAITING
                 return ApplyStep.APPLIED
             attempt.failures += 1
             attempt.failed_at = self._now()

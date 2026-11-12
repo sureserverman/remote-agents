@@ -47,15 +47,18 @@ class SQLitePermissionBindings:
 
     async def mark_applied(
         self, session_id: SessionId, preset: PermissionPreset, daemon: str
-    ) -> None:
+    ) -> bool:
         # An UPDATE, never an upsert: a session with no row was launched by an older build.
+        # Checked and written in one statement, as `mark_failed` is.
+        preset = PermissionPreset(preset)
         with self._connection:
-            self._connection.execute(
+            changed = self._connection.execute(
                 """UPDATE session_permission_state
                    SET applied = ?, daemon = ?, failure = NULL, updated_at = ?
-                   WHERE session_id = ?""",
-                (PermissionPreset(preset).value, daemon, self._stamp(), str(session_id)),
-            )
+                   WHERE session_id = ? AND requested = ?""",
+                (preset.value, daemon, self._stamp(), str(session_id), preset.value),
+            ).rowcount
+        return bool(changed)
 
     async def mark_failed(
         self, session_id: SessionId, reason: str, *, requested: PermissionPreset
@@ -64,7 +67,8 @@ class SQLitePermissionBindings:
         # and a preset asked for meanwhile must not inherit the old one's failure.
         with self._connection:
             changed = self._connection.execute(
-                """UPDATE session_permission_state SET failure = ?, updated_at = ?
+                """UPDATE session_permission_state
+                   SET failure = ?, applied = NULL, daemon = NULL, updated_at = ?
                    WHERE session_id = ? AND requested = ?""",
                 (reason, self._stamp(), str(session_id), PermissionPreset(requested).value),
             ).rowcount
@@ -80,6 +84,26 @@ class SQLitePermissionBindings:
             ).rowcount
         if not changed:
             raise LookupError("session has no permission state")
+
+    async def restore_requested(
+        self, session_id: SessionId, preset: PermissionPreset, *, replacing: PermissionPreset
+    ) -> bool:
+        # One statement checks and writes, as `mark_failed` does: another surface's change made
+        # meanwhile is never overwritten by this one's undo.
+        with self._connection:
+            changed = self._connection.execute(
+                """UPDATE session_permission_state
+                   SET requested = ?, applied = NULL, daemon = NULL, failure = NULL,
+                       updated_at = ?
+                   WHERE session_id = ? AND requested = ?""",
+                (
+                    PermissionPreset(preset).value,
+                    self._stamp(),
+                    str(session_id),
+                    PermissionPreset(replacing).value,
+                ),
+            ).rowcount
+        return bool(changed)
 
     def _stamp(self) -> str:
         return self._clock().astimezone(UTC).isoformat()
