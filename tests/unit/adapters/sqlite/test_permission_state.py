@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -29,7 +30,9 @@ from remote_agents.domain.models import (
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.permission_bindings import PermissionState
 
-SESSION = SessionId("s-codex-1")
+SESSION = SessionId(UUID("6f1c2a52-3b7e-4c1d-9a57-0d2f6f1b8e01"))
+CLAUDE = SessionId(UUID("6f1c2a52-3b7e-4c1d-9a57-0d2f6f1b8e02"))
+OLD = SessionId(UUID("6f1c2a52-3b7e-4c1d-9a57-0d2f6f1b8e03"))
 STATE_MIGRATION = 26
 TABLES = ("sessions", "session_permissions", "session_permission_state")
 
@@ -89,11 +92,10 @@ async def test_a_failed_save_leaves_no_session_no_snapshot_and_no_state(
 
 
 async def test_a_session_saved_without_a_preset_gets_no_state_row(connection) -> None:
-    claude = SessionId("s-claude-1")
-    await SQLiteSessionStore(connection).save(_record(claude, "claude"))
+    await SQLiteSessionStore(connection).save(_record(CLAUDE, "claude"))
 
     assert _rows(connection, "session_permission_state") == []
-    assert await SQLitePermissionBindings(connection).state(claude) is None
+    assert await SQLitePermissionBindings(connection).state(CLAUDE) is None
 
 
 async def test_a_database_from_the_release_before_migrates_with_no_state_rows(tmp_path) -> None:
@@ -112,11 +114,13 @@ async def test_a_database_from_the_release_before_migrates_with_no_state_rows(tm
     # The older build's save: the session and its snapshot, and no state row.
     before.execute(
         "INSERT INTO sessions(session_id, project_id, profile_id, display_identity, state,"
-        " created_at) VALUES ('s-old', 'p', 'codex', 'p/codex/regular/1', 'running',"
-        " '2026-11-01T00:00:00+00:00')"
+        " created_at) VALUES (?, 'p', 'codex', 'p/codex/regular/1', 'running',"
+        " '2026-11-01T00:00:00+00:00')",
+        (str(OLD),),
     )
     before.execute(
-        "INSERT INTO session_permissions(session_id, preset) VALUES ('s-old', 'full_access')"
+        "INSERT INTO session_permissions(session_id, preset) VALUES (?, 'full_access')",
+        (str(OLD),),
     )
     before.commit()
     before.close()
@@ -125,9 +129,9 @@ async def test_a_database_from_the_release_before_migrates_with_no_state_rows(tm
     bindings = SQLitePermissionBindings(after)
 
     assert _rows(after, "session_permission_state") == []
-    assert await bindings.state(SessionId("s-old")) is None
-    assert await bindings.requested(SessionId("s-old")) is None
-    assert await bindings.for_session(SessionId("s-old")) == PermissionPreset.FULL_ACCESS
+    assert await bindings.state(OLD) is None
+    assert await bindings.requested(OLD) is None
+    assert await bindings.for_session(OLD) == PermissionPreset.FULL_ACCESS
 
 
 async def test_an_applied_preset_records_the_daemon_and_clears_an_earlier_failure(
@@ -136,7 +140,7 @@ async def test_an_applied_preset_records_the_daemon_and_clears_an_earlier_failur
     await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
     bindings = SQLitePermissionBindings(connection)
 
-    await bindings.mark_failed(SESSION, "timed out")
+    await bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.ASK)
     assert await bindings.state(SESSION) == PermissionState(
         requested=PermissionPreset.ASK, applied=None, daemon=None, failure="timed out"
     )
@@ -157,7 +161,7 @@ async def test_a_failure_keeps_what_was_applied_before_it(connection) -> None:
     bindings = SQLitePermissionBindings(connection)
     await bindings.mark_applied(SESSION, PermissionPreset.ASK, "boot-1:1")
 
-    await bindings.mark_failed(SESSION, "no Codex daemon")
+    await bindings.mark_failed(SESSION, "no Codex daemon", requested=PermissionPreset.ASK)
 
     assert await bindings.state(SESSION) == PermissionState(
         requested=PermissionPreset.ASK,
@@ -173,7 +177,7 @@ async def test_a_new_request_replaces_the_requested_preset_and_clears_the_failur
     await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
     bindings = SQLitePermissionBindings(connection)
     await bindings.mark_applied(SESSION, PermissionPreset.ASK, "boot-1:1")
-    await bindings.mark_failed(SESSION, "timed out")
+    await bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.ASK)
 
     await bindings.set_requested(SESSION, PermissionPreset.FULL_ACCESS)
 
@@ -188,6 +192,22 @@ async def test_a_new_request_replaces_the_requested_preset_and_clears_the_failur
     assert await bindings.for_session(SESSION) == PermissionPreset.ASK
 
 
+async def test_a_failure_is_recorded_only_against_the_request_it_failed(connection) -> None:
+    """The apply ran for seconds and the owner asked for another preset meanwhile. The check
+    and the write are one statement, so no request can slip between them."""
+    await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
+    bindings = SQLitePermissionBindings(connection)
+    await bindings.set_requested(SESSION, PermissionPreset.FULL_ACCESS)
+
+    assert not await bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.ASK)
+    assert await bindings.state(SESSION) == PermissionState(
+        requested=PermissionPreset.FULL_ACCESS, applied=None, daemon=None, failure=None
+    )
+
+    assert await bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.FULL_ACCESS)
+    assert (await bindings.state(SESSION)).failure == "timed out"
+
+
 async def test_every_write_stamps_the_moment_it_happened(connection) -> None:
     moments = iter(datetime(2026, 11, 12, 10, minute, tzinfo=UTC) for minute in (1, 2, 3))
     await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
@@ -196,7 +216,7 @@ async def test_every_write_stamps_the_moment_it_happened(connection) -> None:
     def stamp() -> str:
         return connection.execute("SELECT updated_at FROM session_permission_state").fetchone()[0]
 
-    await bindings.mark_failed(SESSION, "timed out")
+    await bindings.mark_failed(SESSION, "timed out", requested=PermissionPreset.ASK)
     assert stamp() == "2026-11-12T10:01:00+00:00"
     await bindings.mark_applied(SESSION, PermissionPreset.ASK, "boot-1:1")
     assert stamp() == "2026-11-12T10:02:00+00:00"
@@ -207,18 +227,17 @@ async def test_every_write_stamps_the_moment_it_happened(connection) -> None:
 async def test_a_session_without_a_state_row_is_never_given_one(connection) -> None:
     """No row means the session was launched with flags by an older build. Recording an outcome
     for it would make it look like one the service manages, so nothing writes a row for it."""
-    old = SessionId("s-old")
-    await SQLiteSessionStore(connection).save(_record(old))
+    await SQLiteSessionStore(connection).save(_record(OLD))
     bindings = SQLitePermissionBindings(connection)
 
-    await bindings.mark_applied(old, PermissionPreset.ASK, "boot-1:1")
-    await bindings.mark_failed(old, "timed out")
+    await bindings.mark_applied(OLD, PermissionPreset.ASK, "boot-1:1")
+    assert not await bindings.mark_failed(OLD, "timed out", requested=PermissionPreset.ASK)
     with pytest.raises(LookupError):
-        await bindings.set_requested(old, PermissionPreset.ASK)
+        await bindings.set_requested(OLD, PermissionPreset.ASK)
 
     assert _rows(connection, "session_permission_state") == []
-    assert await bindings.state(old) is None
-    assert await bindings.requested(old) is None
+    assert await bindings.state(OLD) is None
+    assert await bindings.requested(OLD) is None
 
 
 @pytest.mark.parametrize("column", ["requested", "applied"])

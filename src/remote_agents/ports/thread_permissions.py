@@ -27,3 +27,11 @@ class ThreadPermissions(Protocol):
     """Apply one preset to one thread, or raise `ThreadPermissionsError` saying why not."""
 
     async def apply(self, thread_id: str, preset: PermissionPreset) -> None: ...
+
+    async def server_identity(self) -> str | None:
+        """Which server instance is running, or None when that cannot be read.
+
+        Opaque, and equal only for the same running instance: a restarted server has forgotten
+        what was applied, so a changed identity means every thread is owed its preset again.
+        """
+        ...

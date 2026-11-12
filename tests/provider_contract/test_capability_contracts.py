@@ -128,6 +128,9 @@ def test_thread_permissions_contract(descriptor) -> None:
     assert inspect.iscoroutinefunction(getattr(permissions, "apply", None)), (
         f"{descriptor.profile_id}'s thread permissions cannot be awaited for apply"
     )
+    assert inspect.iscoroutinefunction(getattr(permissions, "server_identity", None)), (
+        f"{descriptor.profile_id}'s thread permissions cannot say which server is running"
+    )
 
 
 def test_remote_control_contract(descriptor) -> None:

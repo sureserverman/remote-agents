@@ -61,6 +61,7 @@ from remote_agents.composition.backend import (
 )
 from remote_agents.composition.service import (
     ServiceComposition,
+    build_permission_apply_pass,
     build_restart_resume,
     build_rollover_pass,
     build_thread_binder,
@@ -259,6 +260,15 @@ def _private_boundary(
         activity_directory=paths.activity_directory,
         notify=None if boundary.binding_notifier is None else boundary.binding_notifier.notify,
     )
+    # Beside the binder it follows: a preset is applied to a thread the binder has named, and
+    # automatic work waits on both.
+    permission_apply = build_permission_apply_pass(
+        connection=connection,
+        store=store,
+        descriptors=descriptors,
+        activity_directory=paths.activity_directory,
+        binder=thread_binder,
+    )
     # The fire pass (DEC-114): launches through the one session use case, types through the
     # terminal's guarded send, and tells the owner through the boundary's notifier. Wired only
     # where the backend manages schedules, which `compose_backend` always does in production.
@@ -365,6 +375,7 @@ def _private_boundary(
         # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.
         thread_binder=thread_binder,
         binding_notifier=boundary.binding_notifier,
+        permission_apply=permission_apply,
         rollover_pass=(
             None
             if backend.sessions is None

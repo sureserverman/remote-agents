@@ -78,6 +78,10 @@ _MAX_MESSAGE_BYTES = 1 << 20
 #: Pages of `thread/loaded/list` read before giving up; a repeated cursor stops sooner.
 _MAX_PAGES = 100
 _WEBSOCKET_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+#: Where Codex records the running daemon's process, relative to `CODEX_HOME`, and the most
+#: such a record can weigh (measured 2026-11-12 on 0.167.2: 434 bytes).
+_DAEMON_PID_RELATIVE_PATH = ("app-server-daemon", "app-server.pid")
+_DAEMON_PID_MAX_BYTES = 64 * 1024
 _CONTINUATION, _TEXT, _CLOSE, _PING, _PONG = 0x0, 0x1, 0x8, 0x9, 0xA
 
 #: The client this adapter says it is, in `initialize`. The daemon logs it; it is not a secret.
@@ -121,13 +125,22 @@ class CodexThreadPermissions:
     comes back out (`tests/architecture/test_every_parser_refuses_to_echo.py`).
 
     `apply` with `provider_default` is a successful no-op: that preset means "add nothing".
+
+    **Which daemon.** A restarted daemon has forgotten a thread's settings, so the caller
+    re-applies when `server_identity` changes. It is a digest of the process fields in the pid
+    file Codex writes under `CODEX_HOME`, read without talking to the daemon.
     """
 
     def __init__(
-        self, runner: CommandRunner | None = None, *, timeout: float = _TIMEOUT_SECONDS
+        self,
+        runner: CommandRunner | None = None,
+        *,
+        timeout: float = _TIMEOUT_SECONDS,
+        home: Path | None = None,
     ) -> None:
         self._runner: CommandRunner = runner or AsyncCommandRunner()
         self._timeout = timeout
+        self._home = home
 
     async def apply(self, thread_id: str, preset: PermissionPreset) -> None:
         """Set `thread_id`'s settings to `preset`'s. `thread_id` is the service's own binding."""
@@ -141,6 +154,58 @@ class CodexThreadPermissions:
             thread_id,
             (("thread/settings/update", {"threadId": thread_id, **_plain(params)}),),
         )
+
+    async def server_identity(self) -> str | None:
+        """Which daemon process serves this `CODEX_HOME`, or None when no record says.
+
+        Every failure is None, never a guess: a caller that cannot tell whether the daemon
+        changed leaves an applied preset alone. One stat and one read of a few hundred bytes,
+        so it stays on the loop, as `CodexHomeSettings` does.
+        """
+        try:
+            home = self._home
+            if home is None:
+                # As `codex` resolves it, so a drill's private home reads its own daemon.
+                configured = os.environ.get("CODEX_HOME")
+                home = Path(configured).expanduser() if configured else Path.home() / ".codex"
+            # One descriptor, never following a link: what is checked is what is read.
+            descriptor = os.open(
+                home.joinpath(*_DAEMON_PID_RELATIVE_PATH),
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            )
+        except (OSError, RuntimeError, ValueError):
+            # RuntimeError: a `~user` home that cannot be expanded.
+            return None
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
+                return None
+            raw = os.read(descriptor, _DAEMON_PID_MAX_BYTES + 1)
+        except OSError:
+            return None
+        finally:
+            os.close(descriptor)
+        if len(raw) > _DAEMON_PID_MAX_BYTES:
+            return None
+        try:
+            record = json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(record, dict):
+            return None
+        pid = record.get("pid")
+        started = record.get("processStartTime")
+        process = record.get("processIdentity")
+        boot = process.get("bootId") if isinstance(process, dict) else None
+        ticks = process.get("startTicks") if isinstance(process, dict) else None
+        started = started if isinstance(started, str) else None
+        boot = boot if isinstance(boot, str) else None
+        ticks = ticks if isinstance(ticks, int) and not isinstance(ticks, bool) else None
+        # A pid alone is reused; it names a process only together with when it started.
+        if not isinstance(pid, int) or isinstance(pid, bool) or (started is None and ticks is None):
+            return None
+        fields = json.dumps([pid, started, boot, ticks])
+        return hashlib.sha256(fields.encode()).hexdigest()[:32]
 
     async def loaded_threads(self) -> frozenset[str]:
         """The ids of every thread loaded on the daemon (`thread/loaded/list`, all pages)."""

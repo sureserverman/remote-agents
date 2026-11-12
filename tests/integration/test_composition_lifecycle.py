@@ -259,6 +259,53 @@ def test_the_service_composition_runs_the_binding_pass_and_tells_the_owner(
     assert backend.sessions._request_binding is not None
 
 
+async def test_the_permission_pass_is_wired_beside_the_binder(tmp_path, monkeypatch) -> None:
+    """Built over the registry's own answer to "which provider takes a preset after launch",
+    over the same store the launches write, and waiting on the binder it follows."""
+    from remote_agents.adapters.agents.codex.thread_settings import CodexThreadPermissions
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
+    from remote_agents.application.permission_apply import PermissionApplyPass
+    from remote_agents.bootstrap import _private_boundary
+    from remote_agents.config import AppConfig, load_secrets
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "11")
+    home = tmp_path / "home"
+    paths = ProductionPaths.for_home(home)
+    paths.ensure_directories()
+    (home / "dev").mkdir()
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
+    connection = open_database(paths.database_path, migrations=MIGRATIONS)
+    try:
+        composition = _private_boundary(
+            config, connection, paths, load_secrets(), ui_connection=_ui(paths)
+        )
+    finally:
+        connection.close()
+
+    apply_pass = composition.permission_apply
+    assert isinstance(apply_pass, PermissionApplyPass)
+    assert list(apply_pass._appliers) == ["codex"]
+    assert isinstance(apply_pass._appliers["codex"], CodexThreadPermissions)
+    assert isinstance(apply_pass._bindings, SQLitePermissionBindings)
+    assert apply_pass._bound == composition.thread_binder.wait_bound
+    assert apply_pass._unbound is not None
+
+
+async def test_the_serve_loop_starts_the_permission_pass() -> None:
+    """Read from the loop's own source, because `serve` needs a live bot to run."""
+    import inspect
+
+    from remote_agents.composition import service
+
+    source = inspect.getsource(service._serve_with_reconciliation)
+    assert "_apply_permissions_periodically(composition" in source
+
+
 async def test_the_serve_loop_starts_the_binding_pass() -> None:
     """Read from the loop's own source, because `serve` needs a live bot to run."""
     import inspect

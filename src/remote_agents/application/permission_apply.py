@@ -1,0 +1,258 @@
+"""Set each launched session's permission preset on its provider's shared server.
+
+A preset is not a launch argument (`domain.profiles.PermissionPreset`): a provider whose threads
+live on a shared server takes it after launch, through `ports.thread_permissions`. So a launch
+records what it asked for (`PermissionBindings.state`), its pane comes up on the provider's own
+default, and this pass applies the preset once the session's thread is known.
+
+**Which thread.** Only the session's own: the id it was resumed from, or the thread its binding
+names (DEC-138). Never a thread picked by folder or by time (DEC-128, DEC-134); the pass cannot
+even ask the server what is loaded.
+
+**Which sessions.** Running ones that have a state row. A session with no row was launched with
+flags by an older build and runs off the shared server, so nothing is applied to it. The
+provider's own default asks for nothing and counts as applied.
+
+**When it gives up.** One failure is retried on the next pass. A second is recorded with its
+reason and stands: it is not tried again until the owner asks for a preset again or the server
+is a different one. A server that restarted has forgotten the setting, so a changed server
+identity re-applies an applied preset once.
+
+It is a pass in `serve`, like the binder it follows, because only `serve` acts on panes
+unattended (DEC-115) and a restart finds the state rows and carries on.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import Enum, StrEnum
+
+from remote_agents.application.thread_binding import LIVE_STATES
+from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.profiles import PermissionPreset
+from remote_agents.ports.permission_bindings import PermissionBindings, PermissionState
+from remote_agents.ports.thread_permissions import ThreadPermissions, ThreadPermissionsError
+
+_LOG = logging.getLogger(__name__)
+
+#: The least time between a failed apply and its one retry: one pass of `serve`. A caller
+#: waiting on a session looks more often than that, and must not spend both tries at once.
+RETRY_SECONDS = 3.0
+#: How long a caller about to type automatic work waits for a bound session's preset.
+APPLY_PATIENCE_SECONDS = 30.0
+#: How often such a caller looks again.
+_WAIT_SECONDS = 1.0
+_TRIES = 2
+
+UNBOUND_REASON = "its thread could not be bound"
+_UNEXPECTED_REASON = "the apply failed unexpectedly"
+
+
+class Readiness(StrEnum):
+    """Whether automatic work may be typed into a session."""
+
+    READY = "ready"
+    UNBOUND = "unbound"
+    """Its thread is not bound, so its handoffs would refuse."""
+    UNAPPLIED = "unapplied"
+    """Its preset is not on the server: the pane runs on the provider's own default."""
+
+
+class ApplyStep(Enum):
+    """What one look at a session found."""
+
+    APPLIED = "applied"
+    """Nothing is owed: applied, or a session this pass never touches."""
+    WAITING = "waiting"
+    FAILED = "failed"
+    """The failure was recorded on this look."""
+    OVER = "over"
+    """A failure recorded earlier stands."""
+
+
+@dataclass(slots=True)
+class _Attempt:
+    requested: PermissionPreset
+    failures: int = 0
+    failed_at: datetime | None = None
+
+
+class PermissionApplyPass:
+    """One pass over running sessions that are owed a preset. Everything outside is handed in."""
+
+    def __init__(
+        self,
+        bindings: PermissionBindings,
+        *,
+        sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
+        appliers: Mapping[str, ThreadPermissions],
+        thread_of: Callable[[str, str], str | None],
+        unbound: Callable[[str], bool] | None = None,
+        bound: Callable[..., Awaitable[bool]] | None = None,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        """`appliers` maps each profile that takes a preset after launch to its port.
+
+        `thread_of` names a fresh session's bound thread, given the session and its profile,
+        and `unbound` says its binding gave up; both read files, so they run off the loop.
+        `bound` is the binder's own wait.
+        """
+        self._bindings = bindings
+        self._sessions = sessions
+        self._appliers = dict(appliers)
+        self._thread_of = thread_of
+        self._unbound = unbound
+        self._bound = bound
+        self._now = now
+        self._sleep = sleep
+        self._attempts: dict[str, _Attempt] = {}
+        #: The server a standing failure was recorded under, None when it could not be read.
+        self._failed_under: dict[str, str | None] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @property
+    def tracked(self) -> frozenset[str]:
+        """The sessions this pass holds anything in memory for."""
+        return frozenset(self._attempts) | frozenset(self._failed_under) | frozenset(self._locks)
+
+    async def run_once(self) -> None:
+        records = await self._sessions()
+        # From a list that was read: an empty stand-in for a failed read would forget everyone.
+        live = {str(record.session_id) for record in records}
+        for key in self.tracked - live:
+            self._attempts.pop(key, None)
+            self._failed_under.pop(key, None)
+            self._locks.pop(key, None)
+        for record in records:
+            if record.state is not SessionState.RUNNING:
+                continue
+            if str(record.profile_id) not in self._appliers:
+                continue
+            try:
+                await self._step(record)
+            except Exception:
+                # One session's store or server trouble must not cost the others their preset.
+                _LOG.exception("the permission pass could not look at %s", record.session_id)
+
+    async def wait_ready(
+        self, session_id: SessionId, profile_id: ProfileId, *, tell: bool = False
+    ) -> Readiness:
+        """Whether this session may be typed automatic work: bound, then applied. Bounded.
+
+        The bound is the binder's own wait, then `APPLY_PATIENCE_SECONDS` of looking again, plus
+        the time the applies themselves take: at most two, each under the port's own deadline.
+        `tell` is the binder's: whether it reports an unbound session itself.
+        """
+        if self._bound is not None and not await self._bound(session_id, profile_id, tell=tell):
+            return Readiness.UNBOUND
+        if str(profile_id) not in self._appliers:
+            return Readiness.READY
+        waited = 0.0
+        while True:
+            record = next(
+                (seen for seen in await self._sessions() if seen.session_id == session_id), None
+            )
+            if record is None or record.state not in LIVE_STATES:
+                return Readiness.UNAPPLIED
+            step = (
+                await self._step(record)
+                if record.state is SessionState.RUNNING
+                else ApplyStep.WAITING
+            )
+            if step is ApplyStep.APPLIED:
+                return Readiness.READY
+            if step is not ApplyStep.WAITING or waited >= APPLY_PATIENCE_SECONDS:
+                return Readiness.UNAPPLIED
+            await self._sleep(_WAIT_SECONDS)
+            waited += _WAIT_SECONDS
+
+    async def _step(self, record: SessionRecord) -> ApplyStep:
+        applier = self._appliers.get(str(record.profile_id))
+        if applier is None:
+            return ApplyStep.APPLIED
+        key = str(record.session_id)
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            state = await self._bindings.state(record.session_id)
+            if state is None or state.requested is PermissionPreset.PROVIDER_DEFAULT:
+                return ApplyStep.APPLIED
+            identity = await self._identity(applier)
+            if state.failure is None:
+                self._failed_under.pop(key, None)
+                if state.applied is state.requested and identity in (None, state.daemon):
+                    self._attempts.pop(key, None)
+                    return ApplyStep.APPLIED
+            elif key not in self._failed_under:
+                # Recorded by an earlier run of the service, which told the owner then.
+                self._failed_under[key] = identity
+                return ApplyStep.OVER
+            elif identity is None or identity == self._failed_under[key]:
+                return ApplyStep.OVER
+            thread = record.resume_source_id or await asyncio.to_thread(
+                self._thread_of, key, str(record.profile_id)
+            )
+            if thread is None:
+                # Not bound yet, or never asked to be. A launch that writes a state row asks
+                # for a binding too, so a session that waits here for ever is one whose launch
+                # was interrupted between the two, and its pane never came up.
+                if self._unbound is None or not await asyncio.to_thread(self._unbound, key):
+                    return ApplyStep.WAITING
+                return await self._fail(record.session_id, state, UNBOUND_REASON, identity)
+            attempt = self._attempts.get(key)
+            if attempt is None or attempt.requested is not state.requested:
+                attempt = self._attempts[key] = _Attempt(state.requested)
+            if (
+                attempt.failed_at is not None
+                and (self._now() - attempt.failed_at).total_seconds() < RETRY_SECONDS
+            ):
+                return ApplyStep.WAITING
+            try:
+                await applier.apply(thread, state.requested)
+            except ThreadPermissionsError as error:
+                reason = error.reason
+            except Exception:
+                # Not the port's error, so not its vetted reason: the text stays in the log.
+                _LOG.exception("applying permissions to %s failed unexpectedly", key)
+                reason = _UNEXPECTED_REASON
+            else:
+                self._attempts.pop(key, None)
+                self._failed_under.pop(key, None)
+                await self._bindings.mark_applied(
+                    record.session_id, state.requested, identity or ""
+                )
+                return ApplyStep.APPLIED
+            attempt.failures += 1
+            attempt.failed_at = self._now()
+            if attempt.failures < _TRIES:
+                return ApplyStep.WAITING
+            return await self._fail(record.session_id, state, reason, identity)
+
+    async def _fail(
+        self, session_id: SessionId, state: PermissionState, reason: str, identity: str | None
+    ) -> ApplyStep:
+        """Record a failure that stands. News only when none stood before.
+
+        `state` was read before the apply, which can run for seconds. A preset asked for since
+        then does not inherit this failure: nothing is recorded and the next look starts over.
+        """
+        key = str(session_id)
+        self._attempts.pop(key, None)
+        if state.failure != reason and not await self._bindings.mark_failed(
+            session_id, reason, requested=state.requested
+        ):
+            self._failed_under.pop(key, None)
+            return ApplyStep.WAITING
+        self._failed_under[key] = identity
+        return ApplyStep.FAILED if state.failure is None else ApplyStep.OVER
+
+    @staticmethod
+    async def _identity(applier: ThreadPermissions) -> str | None:
+        try:
+            return await applier.server_identity()
+        except Exception:
+            _LOG.exception("the server identity could not be read")
+            return None

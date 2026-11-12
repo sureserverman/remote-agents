@@ -41,7 +41,12 @@ class PermissionBindings(Protocol):
         self, session_id: SessionId, preset: PermissionPreset, daemon: str
     ) -> None: ...
 
-    async def mark_failed(self, session_id: SessionId, reason: str) -> None: ...
+    async def mark_failed(
+        self, session_id: SessionId, reason: str, *, requested: PermissionPreset
+    ) -> bool:
+        """Record why applying `requested` failed. False, and nothing written, when the session
+        asks for another preset by now: that failure is not about what it asks for."""
+        ...
 
     async def set_requested(self, session_id: SessionId, preset: PermissionPreset) -> None:
         """Raises `LookupError` for a session with no state: its request cannot be kept."""

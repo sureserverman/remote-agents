@@ -21,9 +21,14 @@ from functools import partial
 from pathlib import Path
 
 from remote_agents.adapters.agents.registry import profiles_bound_by_thread
-from remote_agents.adapters.agents.thread_binding import FileThreadBindings
+from remote_agents.adapters.agents.thread_binding import (
+    FileThreadBindings,
+    UntrustedBinding,
+    thread_of,
+)
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
@@ -50,6 +55,7 @@ from remote_agents.application.interrupted_resume import (
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import prune_outcomes
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
+from remote_agents.application.permission_apply import RETRY_SECONDS, PermissionApplyPass
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.resume_flow import resume_capable
 from remote_agents.application.rollover import RolloverPass, RolloverReport
@@ -82,6 +88,7 @@ from remote_agents.ports.reported_roots import ReportedRoots
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.state_events import StoreChanged
 from remote_agents.ports.terminal import PromptDelivery
+from remote_agents.ports.thread_binding import PendingBinding
 from remote_agents.ports.turn_markers import ConversationMarks, StartedMarks, TurnMarkers
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
@@ -131,6 +138,8 @@ _PRUNE_FIRST_DELAY_SECONDS = 60.0
 _ROLLOVER_POLL_SECONDS = 30.0
 #: A fresh pane's composer comes up in seconds, and the handoff template waits on what this finds.
 _THREAD_BINDING_POLL_SECONDS = 3.0
+#: The same beat as the binding it follows, and the spacing the pass keeps between its two tries.
+_PERMISSION_APPLY_POLL_SECONDS = RETRY_SECONDS
 #: How often `serve` looks for a session worktree it may remove (BL-116). Nothing waits on a
 #: removal: a merged, ended folder that stays a minute longer costs disk, never work.
 _WORKTREE_POLL_SECONDS = 60.0
@@ -303,6 +312,11 @@ class ServiceComposition:
 
     binding_notifier: object | None = None
     """Where the binding pass's notices go, retried each tick while one is held, or None."""
+
+    permission_apply: PermissionApplyPass | None = None
+    """The pass that sets a launched session's permission preset on its provider's shared
+    server, or None. The bot's composition only, as `thread_binder` is: whichever process
+    launched, `serve` applies."""
 
     rollover_notifier: RolloverNotifier | None = None
     """Where the pass's failure notices go, retried each tick while one is held, or None."""
@@ -611,6 +625,12 @@ async def _serve_with_reconciliation(
                 _bind_threads_periodically(composition, _THREAD_BINDING_POLL_SECONDS)
             )
         )
+    if composition.permission_apply is not None:
+        periodic.append(
+            asyncio.create_task(
+                _apply_permissions_periodically(composition, _PERMISSION_APPLY_POLL_SECONDS)
+            )
+        )
     if composition.rollover_pass is not None:
         # Its own task and clock, like the schedule pass beside it: a pass that raises costs
         # one tick, and every step is taken again from what is persisted.
@@ -869,6 +889,16 @@ async def _fire_schedules_periodically(composition: ServiceComposition, interval
                 _LOG.exception("a held schedule notice could not be resent")
 
 
+async def _apply_permissions_periodically(composition: ServiceComposition, interval: float) -> None:
+    """Apply presets that sessions are owed, on a clock of their own -- never raising."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await composition.permission_apply.run_once()
+        except Exception:
+            _LOG.exception("the permission pass failed; it will be retried")
+
+
 async def _bind_threads_periodically(composition: ServiceComposition, interval: float) -> None:
     """Look for sessions wanting a binding, on a clock of their own -- never raising."""
     while True:
@@ -1099,6 +1129,54 @@ def build_thread_binder(
         line_for=lambda session, nonce: bind_thread_line(activity_directory, session, nonce),
         notify=notify,
         told_elsewhere=successor_of_a_rollover,
+    )
+
+
+def build_permission_apply_pass(
+    *,
+    store: SessionStore,
+    descriptors: tuple[ProviderDescriptor, ...],
+    activity_directory: Path,
+    connection,
+    binder: ThreadBinder | None = None,
+) -> PermissionApplyPass:
+    """The permission pass `serve` runs beside the binder, and only `serve` (DEC-115)."""
+    bindings = FileThreadBindings(activity_directory)
+    hooks = profiles_bound_by_thread(descriptors)
+
+    async def sessions_seen() -> Sequence[SessionRecord]:
+        return await store.list(LIVE_STATES)
+
+    def bound_thread(session_id: str, profile_id: str) -> str | None:
+        # Only a thread the binder itself would call bound (DEC-138): the file alone is not
+        # that answer, since the session's own mark can still veto it.
+        hook = hooks.get(profile_id)
+        if hook is None:
+            return None
+        try:
+            thread = thread_of(activity_directory, session_id)
+            # Read on both sides of the check, so the thread returned is the one it vetted:
+            # a second try at the binding forgets the first thread.
+            if thread is None or not bindings.names(session_id, hook):
+                return None
+            return thread if thread_of(activity_directory, session_id) == thread else None
+        except (OSError, UntrustedBinding):
+            return None
+
+    def gave_up(session_id: str) -> bool:
+        return bindings.state(session_id) in (PendingBinding.GAVE_UP, PendingBinding.UNTRUSTED)
+
+    return PermissionApplyPass(
+        SQLitePermissionBindings(connection),
+        sessions=sessions_seen,
+        appliers={
+            str(descriptor.profile_id): descriptor.thread_permissions
+            for descriptor in descriptors
+            if descriptor.thread_permissions is not None
+        },
+        thread_of=bound_thread,
+        unbound=gave_up,
+        bound=None if binder is None else binder.wait_bound,
     )
 
 

@@ -81,13 +81,18 @@ class SQLitePermissionBindings:
                 (PermissionPreset(preset).value, daemon, self._stamp(), str(session_id)),
             )
 
-    async def mark_failed(self, session_id: SessionId, reason: str) -> None:
+    async def mark_failed(
+        self, session_id: SessionId, reason: str, *, requested: PermissionPreset
+    ) -> bool:
+        # One statement checks the request and writes the failure: an apply runs for seconds,
+        # and a preset asked for meanwhile must not inherit the old one's failure.
         with self._connection:
-            self._connection.execute(
+            changed = self._connection.execute(
                 """UPDATE session_permission_state SET failure = ?, updated_at = ?
-                   WHERE session_id = ?""",
-                (reason, self._stamp(), str(session_id)),
-            )
+                   WHERE session_id = ? AND requested = ?""",
+                (reason, self._stamp(), str(session_id), PermissionPreset(requested).value),
+            ).rowcount
+        return bool(changed)
 
     async def set_requested(self, session_id: SessionId, preset: PermissionPreset) -> None:
         with self._connection:
