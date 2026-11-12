@@ -388,14 +388,16 @@ async def _call(
 #: plainly a word: up to 14 ASCII letters, lower case after an optional capital, with a short
 #: apostrophe ending allowed; a single letter, an acronym of 2-4 capitals or a number of up to 3
 #: digits, never two of these in a row; the refused method's own name; or a
-#: backtick-quoted single name of letters and `_` (how Codex quotes a field). Each may open with
+#: backtick-quoted field name in lowerCamelCase or snake_case with short parts, as Codex quotes
+#: `threadId` or `approval_policy` (so `dXNlcjpwYXNz`, base64, cannot pass). Each may open with
 #: a bracket and end in plain punctuation. Anything else -- digits mixed with letters, a hyphen,
 #: `=`, `@`, a slash, any non-ASCII or invisible character -- becomes `…`.
 _KEPT_WORD = re.compile(
     r"""\(?(?:
         (?P<word>[aAI]|[A-Za-z][a-z]{1,13}(?:'[a-z]{1,2})?)
       | (?P<code>[A-Z]{2,4}|\d{1,3}|[b-zB-HJ-Z])
-      | `[A-Za-z_]{1,24}`
+      | `[a-z]{1,14}(?:[A-Z][a-z]{1,14}){0,3}`
+      | `[a-z]{1,14}(?:_[a-z]{1,14}){1,3}`
     )[.,;:!?)]*""",
     re.VERBOSE,
 )

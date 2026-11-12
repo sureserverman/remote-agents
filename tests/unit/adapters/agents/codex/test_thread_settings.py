@@ -536,6 +536,8 @@ LEAKS = {
     "short pin": ("your pin is 482", "482"),
     "short otp": ("otp 482", "482"),
     "three non-ASCII digits": ("enter \u0664\u0668\u0662 now", "\u0664\u0668\u0662"),
+    "backticked base64": ("bad `dXNlcjpwYXNz` value", "dXNlcjpwYXNz"),
+    "backticked hex": ("bad `deadbeefcafebabe` value", "deadbeefcafebabe"),
 }
 
 
