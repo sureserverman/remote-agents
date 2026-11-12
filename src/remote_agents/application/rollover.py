@@ -81,6 +81,7 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.notification_policy import rollover_told
+from remote_agents.application.permission_apply import Readiness
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.rollover_destinations import DestinationRefused
 from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_RETRIES
@@ -159,6 +160,9 @@ SUCCESSOR_UNTRUSTED = "successor-untrusted"
 NOT_TYPED = "not-typed"
 BINDING_FAILED = "binding-failed"
 """The successor's thread was never bound, so its handoff would refuse. Nothing was typed."""
+PERMISSIONS_FAILED = "permissions-failed"
+"""The successor's permission preset is not on its provider's server, so its pane runs on the
+provider's own default. Nothing was typed, and the detail says why it was not applied."""
 ADOPTION_TIMEOUT = "adoption-timeout"
 STOP_UNCONFIRMED = "stop-unconfirmed"
 NOT_ROLLABLE = "not-rollable"
@@ -256,7 +260,7 @@ class RolloverPass:
         idle: Callable[[SessionId], Awaitable[bool]],
         launch: Callable[[LaunchCommand], Awaitable[object]],
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
-        bound: Callable[[SessionId, ProfileId], Awaitable[bool]] | None = None,
+        ready: Callable[[SessionId, ProfileId], Awaitable[Readiness]] | None = None,
         graceful_stop: Callable[[GracefulStopCommand], Awaitable[TerminalObservation]],
         notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -283,7 +287,7 @@ class RolloverPass:
         #: held to `^h-[0-9a-f]{20}$`; it never supplies text. Its keys are the rollable set.
         self._templates = dict(adopt_templates)
         self._rollable = frozenset(self._templates)
-        self._bound = bound
+        self._ready = ready
         self._sessions = sessions
         self._handoff_root = handoff_root
         #: The root of every session bound to a worktree, read once per pass (BL-126): None
@@ -869,9 +873,11 @@ class RolloverPass:
         if record.state not in _UP:
             await self._fail(starting, seen, SUCCESSOR_FAILED, record.state.value)
             return
-        # Before the template: its adoption asks `session-id`, which refuses an unbound thread.
-        if not await self._is_bound(record.session_id, rollover.profile_id):
-            await self._fail(starting, seen, BINDING_FAILED)
+        # Before the template: its adoption asks `session-id`, which refuses an unbound thread,
+        # and its work must not start on permissions the launch did not ask for.
+        held = await self._held(record.session_id, rollover.profile_id)
+        if held is not None:
+            await self._fail(starting, seen, *held)
             return
         # The launch and a binding's wait can last a minute, and two sessions must not work one
         # plan. Every provider, so a turn begun since the check before the launch is not raced.
@@ -891,15 +897,24 @@ class RolloverPass:
             return
         await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
 
-    async def _is_bound(self, session_id: SessionId, profile_id: ProfileId) -> bool:
-        """Whether this successor may be typed its template. Never raises into the pass."""
-        if self._bound is None:
-            return True
+    async def _held(
+        self, session_id: SessionId, profile_id: ProfileId
+    ) -> tuple[str, str | None] | None:
+        """Why this successor may not be typed its template, as a failure code and its detail,
+        or None when it may. Never raises into the pass."""
+        if self._ready is None:
+            return None
         try:
-            return await self._bound(session_id, profile_id)
+            readiness = await self._ready(session_id, profile_id)
         except Exception:
-            _LOG.exception("waiting for the binding of %s failed", session_id)
-            return False
+            _LOG.exception("waiting for %s to be ready failed", session_id)
+            return BINDING_FAILED, None
+        if not readiness.bound:
+            # The cause when both hold: an unbound thread is also why no preset was applied.
+            return BINDING_FAILED, None
+        if readiness.unapplied is not None:
+            return PERMISSIONS_FAILED, readiness.unapplied
+        return None
 
     async def _type_template(
         self,
@@ -994,8 +1009,9 @@ class RolloverPass:
             return
         # Before ADOPTING, which a restart reads as "typed", so this can still fail cleanly. And
         # before the idle check below, so a wait here cannot make that check stale.
-        if not await self._is_bound(rollover.successor_session_id, rollover.profile_id):
-            await self._fail(rollover, seen, BINDING_FAILED)
+        held = await self._held(rollover.successor_session_id, rollover.profile_id)
+        if held is not None:
+            await self._fail(rollover, seen, *held)
             return
         # The hold can last hours, and the owner may have gone back to the old session: its
         # handoff is then stale, and two sessions would work one plan. So the predecessor must

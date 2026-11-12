@@ -29,7 +29,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum, StrEnum
+from enum import Enum
 
 from remote_agents.application.thread_binding import LIVE_STATES
 from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
@@ -49,17 +49,25 @@ _WAIT_SECONDS = 1.0
 _TRIES = 2
 
 UNBOUND_REASON = "its thread could not be bound"
+NOT_IN_TIME_REASON = "its permissions were not applied in time"
+ENDED_REASON = "the session has ended"
+#: What a caller records when it did not type because of this: a key each surface words.
+PERMISSIONS_HELD = "permissions"
 _UNEXPECTED_REASON = "the apply failed unexpectedly"
 
 
-class Readiness(StrEnum):
-    """Whether automatic work may be typed into a session."""
+@dataclass(frozen=True, slots=True)
+class Readiness:
+    """Whether automatic work may be typed into a session, and what stands in the way."""
 
-    READY = "ready"
-    UNBOUND = "unbound"
-    """Its thread is not bound, so its handoffs would refuse."""
-    UNAPPLIED = "unapplied"
-    """Its preset is not on the server: the pane runs on the provider's own default."""
+    bound: bool = True
+    """Its thread is bound, or it needs no binding. Unbound, its handoffs would refuse."""
+    unapplied: str | None = None
+    """Why its preset is not on the server, so the pane runs on the provider's own default.
+    None when nothing is owed. Owner-readable, and holds no secret."""
+
+
+READY = Readiness()
 
 
 class ApplyStep(Enum):
@@ -140,36 +148,54 @@ class PermissionApplyPass:
                 _LOG.exception("the permission pass could not look at %s", record.session_id)
 
     async def wait_ready(
-        self, session_id: SessionId, profile_id: ProfileId, *, tell: bool = False
+        self, session_id: SessionId, profile_id: ProfileId | None = None, *, tell: bool = False
     ) -> Readiness:
         """Whether this session may be typed automatic work: bound, then applied. Bounded.
 
         The bound is the binder's own wait, then `APPLY_PATIENCE_SECONDS` of looking again, plus
         the time the applies themselves take: at most two, each under the port's own deadline.
+        A resumed session is never asked for a binding: its thread is the one it resumed.
         `tell` is the binder's: whether it reports an unbound session itself.
         """
-        if self._bound is not None and not await self._bound(session_id, profile_id, tell=tell):
-            return Readiness.UNBOUND
-        if str(profile_id) not in self._appliers:
-            return Readiness.READY
+        record = await self._record(session_id)
+        profile = profile_id if profile_id is not None else getattr(record, "profile_id", None)
+        if profile is None:
+            return Readiness(unapplied=ENDED_REASON)
+        bound = True
+        if self._bound is not None and (record is None or record.resume_source_id is None):
+            try:
+                bound = await self._bound(session_id, profile, tell=tell)
+            except Exception:
+                # Unbound is the safe reading of a wait that failed, and it says nothing about
+                # permissions: a provider that takes no preset is still owed none.
+                _LOG.exception("waiting for the binding of %s failed", session_id)
+                bound = False
+        if str(profile) not in self._appliers:
+            return Readiness(bound=bound)
         waited = 0.0
         while True:
-            record = next(
-                (seen for seen in await self._sessions() if seen.session_id == session_id), None
-            )
+            record = await self._record(session_id)
             if record is None or record.state not in LIVE_STATES:
-                return Readiness.UNAPPLIED
+                return Readiness(bound=bound, unapplied=ENDED_REASON)
             step = (
                 await self._step(record)
                 if record.state is SessionState.RUNNING
                 else ApplyStep.WAITING
             )
             if step is ApplyStep.APPLIED:
-                return Readiness.READY
-            if step is not ApplyStep.WAITING or waited >= APPLY_PATIENCE_SECONDS:
-                return Readiness.UNAPPLIED
+                return Readiness(bound=bound)
+            # Unbound, the binder has already waited: one look says whether a preset is owed.
+            if step is not ApplyStep.WAITING or not bound or waited >= APPLY_PATIENCE_SECONDS:
+                state = await self._bindings.state(session_id)
+                failure = None if state is None else state.failure
+                return Readiness(bound=bound, unapplied=failure or NOT_IN_TIME_REASON)
             await self._sleep(_WAIT_SECONDS)
             waited += _WAIT_SECONDS
+
+    async def _record(self, session_id: SessionId) -> SessionRecord | None:
+        return next(
+            (seen for seen in await self._sessions() if seen.session_id == session_id), None
+        )
 
     async def _step(self, record: SessionRecord) -> ApplyStep:
         applier = self._appliers.get(str(record.profile_id))

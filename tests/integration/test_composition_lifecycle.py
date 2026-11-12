@@ -252,8 +252,13 @@ def test_the_service_composition_runs_the_binding_pass_and_tells_the_owner(
     assert binder._hooks == {"codex": "codex"}
     assert isinstance(composition.binding_notifier, BindingNotifier)
     assert binder._notify == composition.binding_notifier.notify
-    assert composition.rollover_pass._bound == binder.wait_bound
-    assert composition.schedule_pass._bound is not None
+    # Each automatic typer waits on the permission pass, which waits on the binder first.
+    ready = composition.permission_apply.wait_ready
+    assert composition.permission_apply._bound == binder.wait_bound
+    assert composition.rollover_pass._ready == ready
+    assert composition.schedule_pass._ready is not None
+    assert composition.restart_resume.resume._ready == ready
+    assert composition.limit_lift_watcher._resume._ready == ready
     backend = composition.boundary.backend
     assert isinstance(backend.unbound_watch, UnboundWatch)
     assert backend.sessions._request_binding is not None

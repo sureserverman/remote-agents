@@ -21,6 +21,7 @@ from pathlib import Path
 from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS, ResumeCommand
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
 from remote_agents.application.limit_resume import NUDGE
+from remote_agents.application.permission_apply import PERMISSIONS_HELD, Readiness
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedules import RETRY_SECONDS, STARTUP_RETRIES
 from remote_agents.application.services import ResumeOutcome
@@ -344,6 +345,7 @@ class InterruptedResumePass:
         key_claimed: Callable[[str], Awaitable[bool]],
         bound_folder_of: Callable[[SessionId], Awaitable[Path | None]] | None = None,
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
+        ready: Callable[[SessionId], Awaitable[Readiness]] | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         stopping: Callable[[], bool] = lambda: False,
         now: Callable[[], datetime],
@@ -356,6 +358,7 @@ class InterruptedResumePass:
         self._bound_folder_of = bound_folder_of
         self._key_claimed = key_claimed
         self._send = send
+        self._ready = ready
         self._sleep = sleep
         self._stopping = stopping
         self._now = now
@@ -431,7 +434,12 @@ class InterruptedResumePass:
         if not report.outcome.startswith(f"{NUDGING}:"):
             return report
         assert report.new_session_id is not None  # only a resumed report holds the intent
-        reason = "stopping" if stopping else await self._nudge(report.new_session_id)
+        if stopping:
+            reason = "stopping"
+        elif await self._permissions_held(report.new_session_id):
+            reason = PERMISSIONS_HELD
+        else:
+            reason = await self._nudge(report.new_session_id)
         resumed = f"{RESUMED}:{report.new_session_id}"
         final = resumed if reason is None else f"{resumed}; {NOT_NUDGED}:{reason}"
         try:
@@ -444,6 +452,17 @@ class InterruptedResumePass:
             # unconfirmed -- the safe reading, never a second send.
             _LOG.exception("the nudge outcome for %s could not be written", report.new_session_id)
         return ResumeReport(report.record, final, report.new_session_id, report.nudge)
+
+    async def _permissions_held(self, session_id: SessionId) -> bool:
+        """Whether the resumed session's permissions are not applied, so nothing is typed into
+        it. A wait that fails cannot tell, and counts as held. Never raises."""
+        if self._ready is None:
+            return False
+        try:
+            return (await self._ready(session_id)).unapplied is not None
+        except Exception:
+            _LOG.exception("waiting for %s to be ready failed", session_id)
+            return True
 
     async def _nudge(self, session_id: SessionId) -> str | None:
         """None once the nudge landed, else why it was not typed. Never raises.

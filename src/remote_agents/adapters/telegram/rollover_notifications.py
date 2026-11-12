@@ -71,6 +71,7 @@ _WHY = {
     "successor-failed": "the successor failed or went away",
     "not-typed": "the handoff command was not typed into the successor",
     "binding-failed": "the successor's thread could not be bound, so its handoff would refuse",
+    "permissions-failed": "the successor's permissions could not be applied, so it was not started",
     "adoption-timeout": f"the successor did not take over within {_MINUTES_ADOPT} minutes",
     "id-mismatch": "the successor was handed the wrong handoff",
     "no-ready": "the successor found no handoff to take over",
@@ -105,6 +106,7 @@ _SUCCESSOR_LEFT_OPEN = frozenset(
     {
         "not-typed",
         "binding-failed",
+        "permissions-failed",
         "successor-untrusted",
         "adoption-timeout",
         "id-mismatch",
@@ -136,7 +138,7 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
             "stop this session when it is done, or force stop it"
         )
     why = _WHY.get(code, escape(code) or "it did not complete")
-    if code == "not-typed" and rollover.failure_detail:
+    if code in ("not-typed", "permissions-failed") and rollover.failure_detail:
         why = f"{why} ({escape(rollover.failure_detail)})"
     text = f"Rollover failed: {session} — {why}"
     if code not in _PREDECESSOR_NOT_KEPT:

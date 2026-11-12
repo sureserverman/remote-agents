@@ -23,6 +23,7 @@ from telegram.constants import ParseMode
 
 from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.application.notification_policy import schedule_told
+from remote_agents.application.permission_apply import PERMISSIONS_HELD
 from remote_agents.application.relative_time import span
 from remote_agents.application.schedules import STARTUP_PATIENCE, FireOutcome, FireReport
 
@@ -43,6 +44,7 @@ _NOT_TYPED = {
     "no_composer": "this agent's composer cannot be read",
     "menu": "this agent's command menu cannot be read, so the / command was not typed",
     "empty": "it is empty",
+    PERMISSIONS_HELD: "the new session's permissions could not be applied",
 }
 _NOT_STARTED = {
     "not_ready": "the agent did not become ready",

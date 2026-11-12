@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+from remote_agents.application.permission_apply import PERMISSIONS_HELD, Readiness
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.limit_stop_outcomes import (
@@ -97,6 +98,8 @@ class NotResumed(StrEnum):
     COMPOSING = "composing"
     UNRECOGNISED = "unrecognised"
     UNCONFIRMED = "unconfirmed"
+    PERMISSIONS = PERMISSIONS_HELD
+    """The session's permission preset is not applied, so nothing automatic is typed into it."""
 
 
 def not_resumed(reason: NotResumed) -> str:
@@ -132,9 +135,11 @@ class LimitResume:
         enabled: Callable[[], Awaitable[bool]],
         settled: Callable[[LimitStop], Awaitable[bool]],
         amend: Callable[[LimitStop, str], Awaitable[bool]],
+        ready: Callable[[SessionId], Awaitable[Readiness]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._send = send
+        self._ready = ready
         self._enabled = enabled
         self.settled = settled
         self.amend = amend
@@ -181,8 +186,20 @@ class LimitResume:
         self._decided.pop((stop.session_id, stop.stamp), None)
 
     async def _attempt(self, stop: LimitStop, key: tuple[str, str]) -> Nudge:
+        session_id = SessionId.parse(stop.session_id)
+        if self._ready is not None:
+            # A session whose preset is not applied runs on its provider's default, so it is
+            # not told to carry on. A wait that failed cannot say, and nothing is typed on a doubt.
+            try:
+                held = (await self._ready(session_id)).unapplied is not None
+            except Exception:
+                _LOG.exception("waiting for %s to be ready failed", session_id)
+                held = True
+            if held:
+                self._busy_since.pop(key, None)
+                return _given_up(NotResumed.PERMISSIONS)
         try:
-            delivery = await self._send(SessionId.parse(stop.session_id), NUDGE)
+            delivery = await self._send(session_id, NUDGE)
         except Exception:
             # The send never raises by contract; a raise here may have typed, so it is given
             # up rather than tried again.

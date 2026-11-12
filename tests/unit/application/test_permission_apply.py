@@ -15,7 +15,12 @@ from uuid import UUID
 
 from remote_agents.application.permission_apply import (
     APPLY_PATIENCE_SECONDS,
+    ENDED_REASON,
+    NOT_IN_TIME_REASON,
+    PERMISSIONS_HELD,
+    READY,
     RETRY_SECONDS,
+    UNBOUND_REASON,
     PermissionApplyPass,
     Readiness,
 )
@@ -126,6 +131,7 @@ class Rig:
         self.threads: dict[str, str] = {}
         self.gave_up: set[str] = set()
         self.bound_answers: list[bool] = []
+        self.bound_asked: list[tuple[SessionId, ProfileId, bool]] = []
         self.now = START
         self.slept: list[float] = []
         self.apply_pass = PermissionApplyPass(
@@ -147,6 +153,7 @@ class Rig:
         return tuple(self.records)
 
     async def _bound(self, session_id: SessionId, profile_id: ProfileId, *, tell: bool) -> bool:
+        self.bound_asked.append((session_id, profile_id, tell))
         return self.bound_answers.pop(0) if self.bound_answers else True
 
     async def _sleep(self, seconds: float) -> None:
@@ -213,7 +220,7 @@ async def test_the_provider_default_gets_no_call_and_counts_as_applied() -> None
 
     assert rig.server.calls == []
     assert rig.bindings.writes == []
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.READY
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == READY
 
 
 async def test_a_session_with_no_state_row_is_never_touched() -> None:
@@ -224,7 +231,7 @@ async def test_a_session_with_no_state_row_is_never_touched() -> None:
 
     assert rig.server.calls == []
     assert rig.bindings.writes == []
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.READY
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == READY
 
 
 async def test_a_provider_without_the_capability_is_never_touched() -> None:
@@ -234,7 +241,7 @@ async def test_a_provider_without_the_capability_is_never_touched() -> None:
     await rig.tick()
 
     assert rig.server.calls == []
-    assert await rig.apply_pass.wait_ready(SESSION, OTHER) is Readiness.READY
+    assert await rig.apply_pass.wait_ready(SESSION, OTHER) == READY
 
 
 async def test_an_applied_session_is_left_alone_on_later_passes() -> None:
@@ -301,7 +308,7 @@ async def test_the_retry_waits_for_the_next_pass_even_when_a_caller_is_waiting()
     rig.bindings.pending(SESSION, PermissionPreset.ASK)
     rig.server.failures = ["thread is not loaded"]
 
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.READY
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == READY
 
     assert len(rig.server.calls) == 2
     assert sum(rig.slept) >= RETRY_SECONDS
@@ -471,7 +478,7 @@ async def test_a_fresh_session_whose_binding_gave_up_is_recorded_as_failed_witho
     await rig.tick()
 
     assert rig.server.calls == []
-    assert rig.bindings.states[SESSION].failure == "its thread could not be bound"
+    assert rig.bindings.states[SESSION].failure == UNBOUND_REASON
     assert rig.bindings.writes == [("failed", SESSION)]
 
 
@@ -515,7 +522,7 @@ async def test_wait_ready_is_bound_then_applied() -> None:
     rig.bindings.pending(SESSION, PermissionPreset.ASK)
     rig.threads[str(SESSION)] = THREAD
 
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.READY
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == READY
     assert rig.server.calls == [(THREAD, PermissionPreset.ASK)]
 
 
@@ -524,7 +531,9 @@ async def test_wait_ready_says_unbound_before_it_tries_to_apply() -> None:
     rig.bindings.pending(SESSION, PermissionPreset.ASK)
     rig.bound_answers = [False]
 
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.UNBOUND
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == Readiness(
+        bound=False, unapplied=NOT_IN_TIME_REASON
+    )
     assert rig.server.calls == []
 
 
@@ -533,10 +542,11 @@ async def test_wait_ready_says_unapplied_once_the_failure_stands() -> None:
     rig.bindings.pending(SESSION, PermissionPreset.ASK)
     rig.server.failures = ["timed out", "timed out"]
 
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.UNAPPLIED
+    held = Readiness(bound=True, unapplied="timed out")
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == held
     assert rig.bindings.states[SESSION].failure == "timed out"
     # And again, without another try: the failure stands.
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.UNAPPLIED
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == held
     assert len(rig.server.calls) == 2
 
 
@@ -545,7 +555,9 @@ async def test_wait_ready_is_bounded_when_the_session_never_becomes_ready() -> N
     rig = Rig(_record())
     rig.bindings.pending(SESSION, PermissionPreset.ASK)
 
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.UNAPPLIED
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == Readiness(
+        bound=True, unapplied=NOT_IN_TIME_REASON
+    )
 
     assert rig.server.calls == []
     assert APPLY_PATIENCE_SECONDS <= sum(rig.slept) <= APPLY_PATIENCE_SECONDS + 1.0
@@ -555,8 +567,65 @@ async def test_wait_ready_for_an_ended_session_is_unapplied_at_once() -> None:
     rig = Rig(_record(state=SessionState.ENDED, resumed_from=THREAD))
     rig.bindings.pending(SESSION, PermissionPreset.ASK)
 
-    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) is Readiness.UNAPPLIED
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == Readiness(
+        bound=True, unapplied=ENDED_REASON
+    )
     assert rig.slept == []
+
+
+async def test_wait_ready_never_asks_the_binder_about_a_resumed_session() -> None:
+    """A resumed session's thread is the conversation it resumed. It asked for no binding, so
+    the binder would call it unbound for ever."""
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.bound_answers = [False]
+
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == READY
+    assert rig.bound_asked == []
+
+
+async def test_wait_ready_finds_the_profile_itself_when_the_caller_has_only_the_session() -> None:
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.threads[str(SESSION)] = THREAD
+
+    assert await rig.apply_pass.wait_ready(SESSION) == READY
+    assert rig.bound_asked == [(SESSION, PROVIDER, False)]
+    assert await rig.apply_pass.wait_ready(SECOND) == Readiness(unapplied=ENDED_REASON)
+
+
+async def test_a_binder_that_fails_reads_as_unbound_and_says_nothing_about_permissions() -> None:
+    """So a provider that takes no preset still gets its owner's scheduled prompt, as before."""
+    rig = Rig(_record(profile=OTHER))
+
+    async def broken(session_id, profile_id, *, tell):
+        raise RuntimeError("the store went away")
+
+    rig.apply_pass._bound = broken
+
+    assert await rig.apply_pass.wait_ready(SESSION, OTHER) == Readiness(bound=False)
+
+
+async def test_an_unbound_session_that_is_owed_nothing_is_only_unbound() -> None:
+    """The provider's own default asks for nothing, so its owner's work may still be typed."""
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.PROVIDER_DEFAULT)
+    rig.bound_answers = [False]
+
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == Readiness(bound=False)
+
+
+async def test_an_unbound_session_that_is_owed_a_preset_is_unapplied_too_and_says_why() -> None:
+    rig = Rig(_record())
+    rig.bindings.pending(SESSION, PermissionPreset.FULL_ACCESS)
+    rig.bound_answers = [False]
+    rig.gave_up.add(str(SESSION))
+
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER, tell=True) == Readiness(
+        bound=False, unapplied=UNBOUND_REASON
+    )
+    assert rig.bound_asked == [(SESSION, PROVIDER, True)]
+    assert rig.slept == [], "one look: the binder has already waited"
 
 
 async def test_a_session_that_ends_is_forgotten_and_a_reused_key_starts_clean() -> None:
@@ -667,3 +736,156 @@ async def test_serve_records_a_binding_that_gave_up_as_a_failure(tmp_path) -> No
 
     assert service.server.calls == []
     assert (await service.state.state(SESSION)).failure == "its thread could not be bound"
+
+
+# --- Everything that types on its own waits for the apply (OD-2). ---
+
+UNAPPLIED = Readiness(unapplied="timed out")
+
+
+def _answers(readiness: Readiness | Exception):
+    """A `ready` that answers `readiness`, taking the session and, where given, its profile."""
+
+    async def ready(session_id, profile_id=None):
+        if isinstance(readiness, Exception):
+            raise readiness
+        return readiness
+
+    return ready
+
+
+async def _drive_rollover(readiness, tmp_path) -> list:
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
+
+    from .test_rollover_binding import _gate
+    from .test_rollover_pass import Rig as RolloverRig
+
+    rig = RolloverRig(SQLiteRolloverStore(open_database(tmp_path / "rollover.sqlite3")))
+    _gate(rig, _answers(readiness))
+    rig.ready()
+    await rig.run(passes=3)
+    return rig.sends
+
+
+async def _drive_schedule(readiness, tmp_path) -> list:
+    from .test_schedule_pass import FIRE, MemoryScheduleStore, _run, _schedule
+    from .test_schedule_pass import Rig as ScheduleRig
+
+    rig = ScheduleRig(ready=_answers(readiness))
+    await _run(MemoryScheduleStore(_schedule()), rig, FIRE)
+    return rig.sends
+
+
+async def _drive_restart_nudge(readiness, tmp_path) -> list:
+    from remote_agents.application.interrupted_resume import (
+        NUDGING,
+        InterruptedResumePass,
+        ResumeReport,
+    )
+    from remote_agents.ports.terminal import PromptDelivery, PromptOutcome
+
+    sends: list = []
+    recorded: dict[str, str] = {}
+
+    class Outcomes:
+        async def record(self, session: str, outcome: str, *, decided_at) -> bool:
+            recorded[session] = outcome
+            return True
+
+    async def send(session_id, text):
+        sends.append((session_id, text))
+        return PromptDelivery(PromptOutcome.SENT)
+
+    async def unused(*_args, **_kwargs):
+        raise AssertionError("the nudge step calls nothing else")
+
+    restart = InterruptedResumePass(
+        Outcomes(),
+        resume=unused,
+        folder_of=unused,
+        key_claimed=unused,
+        send=send,
+        ready=_answers(readiness),
+        now=lambda: START,
+    )
+    old = _record(SECOND, state=SessionState.ENDED)
+    report = await restart._nudged(
+        ResumeReport(old, f"{NUDGING}:{SESSION}", SESSION, True), stopping=False
+    )
+    assert recorded[str(SECOND)] == report.outcome
+    if not sends:
+        assert report.outcome == f"resumed:{SESSION}; not nudged:{PERMISSIONS_HELD}"
+    return sends
+
+
+async def _drive_limit_nudge(readiness, tmp_path) -> list:
+    from remote_agents.application.limit_resume import LimitResume, NotResumed
+    from remote_agents.ports.limit_stop_outcomes import LimitStop
+    from remote_agents.ports.terminal import PromptDelivery, PromptOutcome
+
+    sends: list = []
+
+    async def send(session_id, text):
+        sends.append((session_id, text))
+        return PromptDelivery(PromptOutcome.SENT)
+
+    async def yes(*_args) -> bool:
+        return True
+
+    resume = LimitResume(send=send, enabled=yes, settled=yes, amend=yes, ready=_answers(readiness))
+    stop = LimitStop(str(SESSION), START, None, START.isoformat())  # type: ignore[arg-type]
+    verdict = await resume.nudge(stop)
+    if not sends:
+        assert verdict.reason is NotResumed.PERMISSIONS
+        assert (await resume.nudge(stop)) == verdict, "given up for this stop, not tried again"
+    return sends
+
+
+#: Every application module that is handed a way to type into a pane, and what it is.
+#: A driver types through the module's own pass; the others say why they need no gate.
+AUTOMATIC_TYPERS = {
+    "rollover.py": _drive_rollover,
+    "schedules.py": _drive_schedule,
+    "interrupted_resume.py": _drive_restart_nudge,
+    "limit_resume.py": _drive_limit_nudge,
+}
+NOT_AUTOMATIC_WORK = {
+    "prompt_relay.py": "the owner's own message, relayed when they send it",
+    "thread_binding.py": "the binding line, which the apply itself waits on",
+    "prompt_delivery.py": "reads what a send came to, and sends nothing",
+}
+
+
+def _modules_that_can_type() -> set[str]:
+    import re
+    from pathlib import Path
+
+    import remote_agents.application as application
+
+    typing = re.compile(r"\b(PromptDelivery|send_prompt|send_binding_line)\b")
+    return {
+        path.name
+        for path in Path(application.__file__).parent.glob("*.py")
+        if typing.search(path.read_text(encoding="utf-8"))
+    }
+
+
+async def test_every_automatic_typer_is_held_until_permissions_are_applied(tmp_path) -> None:
+    """Enumerated from the source, so a new module that can type is red until it is listed,
+    and a listed one is driven for real: nothing typed while the preset is not applied, or
+    while that cannot be told; typed once it is."""
+    found = _modules_that_can_type()
+    assert found, "the enumeration found nothing, so it proves nothing"
+    assert found == set(AUTOMATIC_TYPERS) | set(NOT_AUTOMATIC_WORK), (
+        "a module that can type into a pane is neither held behind wait_ready nor explained"
+    )
+
+    for index, (module, drive) in enumerate(AUTOMATIC_TYPERS.items()):
+        for held in (UNAPPLIED, Readiness(bound=False, unapplied=UNBOUND_REASON), RuntimeError()):
+            folder = tmp_path / f"{index}-held-{type(held).__name__}-{getattr(held, 'bound', 0)}"
+            folder.mkdir()
+            assert await drive(held, folder) == [], f"{module} typed into an unapplied session"
+        folder = tmp_path / f"{index}-ready"
+        folder.mkdir()
+        assert len(await drive(READY, folder)) == 1, f"{module} typed nothing when ready"

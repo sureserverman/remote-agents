@@ -55,7 +55,11 @@ from remote_agents.application.interrupted_resume import (
 from remote_agents.application.limit_lifts import LimitLiftWatcher
 from remote_agents.application.limit_resume import prune_outcomes
 from remote_agents.application.limit_stops import LimitScreenWatcher, LimitStopClassifier
-from remote_agents.application.permission_apply import RETRY_SECONDS, PermissionApplyPass
+from remote_agents.application.permission_apply import (
+    RETRY_SECONDS,
+    PermissionApplyPass,
+    Readiness,
+)
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.resume_flow import resume_capable
 from remote_agents.application.rollover import RolloverPass, RolloverReport
@@ -399,6 +403,7 @@ def build_restart_resume(
     notify: Callable[[tuple[ResumeReport, ...], int], Awaitable[None]] | None,
     stopping: Callable[[], bool],
     lock_path: Path | None = None,
+    ready: Callable[[SessionId], Awaitable[Readiness]] | None = None,
     remember_permissions: Callable[[], Awaitable[None]] | None = None,
 ) -> RestartResume:
     """The restart resume pass over the bot's stores and terminal (DEC-127)."""
@@ -505,6 +510,7 @@ def build_restart_resume(
             bound_folder_of=bound_folder_of,
             key_claimed=key_claimed,
             send=send,
+            ready=ready,
             stopping=stopping,
             now=lambda: datetime.now(UTC),
         ),
@@ -1180,12 +1186,26 @@ def build_permission_apply_pass(
     )
 
 
+def _binding_alone(
+    binder: ThreadBinder | None,
+) -> Callable[[SessionId, ProfileId], Awaitable[Readiness]] | None:
+    """A binder's answer as a readiness, for a composition with no permission pass."""
+    if binder is None:
+        return None
+
+    async def ready(session_id: SessionId, profile_id: ProfileId) -> Readiness:
+        return Readiness(bound=await binder.wait_bound(session_id, profile_id))
+
+    return ready
+
+
 def build_rollover_pass(
     *,
     connection,
     sessions: SessionService,
     terminal: TmuxTerminal,
     binder: ThreadBinder | None = None,
+    ready: Callable[[SessionId, ProfileId], Awaitable[Readiness]] | None = None,
     enabled: Callable[[], Awaitable[bool]],
     project_paths: Mapping[ProjectId, Path],
     adopt_templates: Mapping[ProfileId, str],
@@ -1268,7 +1288,7 @@ def build_rollover_pass(
         idle=terminal.pane_idle,
         launch=sessions.launch,
         send=terminal.send_prompt,
-        bound=None if binder is None else binder.wait_bound,
+        ready=ready if ready is not None else _binding_alone(binder),
         graceful_stop=sessions.graceful_stop,
         # Only failures are told (DEC-031); the notifier decides which, and words them.
         notify=notify,

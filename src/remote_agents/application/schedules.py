@@ -35,6 +35,7 @@ from enum import StrEnum
 
 from remote_agents.application.commands import UNATTENDED_LAUNCH_WAIT_SECONDS, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
+from remote_agents.application.permission_apply import PERMISSIONS_HELD, Readiness
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.schedule_times import next_fire
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
@@ -123,7 +124,7 @@ class SchedulePass:
         *,
         launch: Callable[[LaunchCommand], Awaitable[object]],
         send: Callable[[SessionId, str], Awaitable[PromptDelivery]],
-        bound: Callable[[SessionId, ProfileId], Awaitable[bool]] | None = None,
+        ready: Callable[[SessionId, ProfileId], Awaitable[Readiness]] | None = None,
         limit_stopped: Callable[[ProfileId], Awaitable[bool]],
         working: Callable[[str], Awaitable[bool]],
         notify: Callable[[FireReport], Awaitable[None]],
@@ -134,7 +135,7 @@ class SchedulePass:
         self._store = store
         self._launch = launch
         self._send = send
-        self._bound = bound
+        self._ready = ready
         self._limit_stopped = limit_stopped
         self._working = working
         self._notify = notify
@@ -211,13 +212,17 @@ class SchedulePass:
         """Type a started session's prompt, and say what that came to. Never raises: a fault
         here may have typed, so it is reported unconfirmed and never tried again."""
         session_id = SessionId.parse(str(report.session_id))
-        if self._bound is not None:
-            # Its answer changes nothing here: an unbound session can still do the owner's work,
-            # and the owner has been told its handoffs will refuse.
+        if self._ready is not None:
+            # An unbound session can still do the owner's work, and the owner has been told its
+            # handoffs will refuse. One whose permissions are not applied runs on its provider's
+            # default, so its prompt is held; and a wait that failed cannot say which it is.
             try:
-                await self._bound(session_id, report.schedule.profile_id)
+                held = (await self._ready(session_id, report.schedule.profile_id)).unapplied
             except Exception:
-                _LOG.exception("waiting for the binding of %s failed", session_id)
+                _LOG.exception("waiting for %s to be ready failed", session_id)
+                held = PERMISSIONS_HELD
+            if held is not None:
+                return replace(report, outcome=FireOutcome.NOT_TYPED, reason=PERMISSIONS_HELD)
         try:
             reason = await self._first_prompt(session_id, report.schedule)
         except Exception:

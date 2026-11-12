@@ -12,6 +12,7 @@ from schedule_fakes import MemoryScheduleStore
 
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError, MutationsDraining
+from remote_agents.application.permission_apply import PERMISSIONS_HELD, READY, Readiness
 from remote_agents.application.schedules import (
     MISSED_GRACE,
     STARTUP_PATIENCE,
@@ -62,6 +63,8 @@ class Rig:
     launch_error: Exception | None = None
     launched_state: SessionState = SessionState.RUNNING
     clock: list[datetime] = field(default_factory=list)
+    ready: object | None = None
+    """What the pass waits on before it types, when a test hands one in."""
 
     async def launch(self, command: LaunchCommand):
         self.launches.append(command)
@@ -101,6 +104,7 @@ class Rig:
             store,
             launch=self.launch,
             send=self.send,
+            ready=self.ready,
             limit_stopped=self.limit_stopped,
             working=self.is_working,
             notify=self.notify,
@@ -627,21 +631,79 @@ async def test_deliver_typing_goes_on_while_another_fires_notice_is_held() -> No
     }
 
 
-@pytest.mark.parametrize("answer", [True, False, RuntimeError("the store went away")])
+@pytest.mark.parametrize("answer", [True, False])
 async def test_the_first_prompt_waits_for_the_binding_and_is_typed_whatever_it_answers(
     answer,
 ) -> None:
+    """A wait that raises is no longer typed through: it cannot say whether the session's
+    permissions are applied (the tests below). A binder that fails is read as unbound before
+    it gets here (`PermissionApplyPass.wait_ready`)."""
     store, rig = MemoryScheduleStore(_schedule()), Rig()
     fire_pass = rig.pass_for(store, FIRE + timedelta(seconds=20))
     asked = []
 
-    async def bound(session_id, profile_id):
+    async def ready(session_id, profile_id):
         asked.append(list(rig.sends))
+        return Readiness(bound=answer)
+
+    fire_pass._ready = ready
+    await fire_pass.run()
+    assert asked == [[]], "asked once, before anything was typed"
+    assert len(rig.sends) == 1
+
+
+# --- The first prompt waits for the session's permissions (OD-2). ---
+
+
+def _readiness(answer, asked: list | None = None):
+    async def ready(session_id, profile_id):
+        if asked is not None:
+            asked.append((session_id, profile_id))
         if isinstance(answer, Exception):
             raise answer
         return answer
 
-    fire_pass._bound = bound
-    await fire_pass.run()
-    assert asked == [[]], "asked once, before anything was typed"
+    return ready
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        Readiness(unapplied="timed out"),
+        Readiness(bound=False, unapplied="its thread could not be bound"),
+        RuntimeError("the store went away"),
+    ],
+)
+async def test_a_prompt_is_not_typed_while_permissions_are_not_applied_and_is_reported(
+    answer,
+) -> None:
+    store, rig = MemoryScheduleStore(_schedule()), Rig(ready=_readiness(answer))
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert rig.sends == []
+    assert report.outcome is FireOutcome.NOT_TYPED
+    assert report.reason == PERMISSIONS_HELD
+    assert rig.reports == [report], "the owner is told, once"
+    assert len(rig.launches) == 1
+
+
+async def test_applied_permissions_let_the_prompt_be_typed_after_the_wait() -> None:
+    asked: list = []
+    store, rig = MemoryScheduleStore(_schedule()), Rig(ready=_readiness(READY, asked))
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.STARTED
+    assert [text for _, text in rig.sends] == ["reply with OK"]
+    assert [profile for _, profile in asked] == [ProfileId("claude")]
+
+
+async def test_an_unbound_session_owed_no_permissions_is_still_typed_its_prompt() -> None:
+    """As before: it can do the owner's work, and the owner was told its handoffs will refuse."""
+    store, rig = MemoryScheduleStore(_schedule()), Rig(ready=_readiness(Readiness(bound=False)))
+
+    (report,) = await _run(store, rig, FIRE)
+
+    assert report.outcome is FireOutcome.STARTED
     assert len(rig.sends) == 1

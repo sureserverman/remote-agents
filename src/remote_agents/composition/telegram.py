@@ -282,8 +282,9 @@ def _private_boundary(
             launch=backend.sessions.launch,
             send=terminal.send_prompt,
             # Before its prompt: a first turn running for minutes could not be bound until it
-            # ended, and a handoff inside that turn would refuse.
-            bound=lambda session_id, profile_id: thread_binder.wait_bound(
+            # ended, and a handoff inside that turn would refuse. And its permissions first:
+            # the prompt is not typed into a session running on its provider's default (OD-2).
+            ready=lambda session_id, profile_id: permission_apply.wait_ready(
                 session_id, profile_id, tell=True
             ),
             limit_stopped=limit_stopped_in(store, limit_stops),
@@ -350,6 +351,9 @@ def _private_boundary(
             # session through the terminal's guarded send -- never the owner's relay queue.
             resume=LimitResume(
                 send=terminal.send_prompt,
+                # A daemon that restarted while the session sat stopped has forgotten its
+                # preset; it is applied again before the session is told to carry on.
+                ready=permission_apply.wait_ready,
                 enabled=_resume_switch(
                     backend.resume_after_limit, config.path or paths.config_path
                 ),
@@ -386,6 +390,7 @@ def _private_boundary(
                 sessions=backend.sessions,
                 terminal=terminal,
                 binder=thread_binder,
+                ready=permission_apply.wait_ready,
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
                 adopt_templates=adopt_templates(descriptors),
@@ -441,6 +446,8 @@ def _private_boundary(
                     None if boundary.restart_notifier is None else boundary.restart_notifier.notify
                 ),
                 stopping=lambda: locks.draining,
+                # The nudge waits for the resumed session's permissions (OD-2).
+                ready=permission_apply.wait_ready,
                 # Beside the store both processes share, so a second `serve` resumes nothing.
                 lock_path=config.database_path.with_name("restart-resume.lock"),
             )

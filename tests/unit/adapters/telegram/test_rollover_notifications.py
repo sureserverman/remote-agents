@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.telegram.rollover_notifications import rollover_message
+from remote_agents.adapters.telegram.rollover_notifications import _WHY, rollover_message
 from remote_agents.application import rollover as rollover_module
-from remote_agents.application.rollover import RolloverReport
+from remote_agents.application.rollover import PERMISSIONS_FAILED, RolloverReport
 from remote_agents.domain import rollover as domain_rollover
 from remote_agents.domain.models import (
     ProfileId,
@@ -180,3 +180,32 @@ def test_an_untrusted_successor_is_said_to_have_waited_out_the_trust_patience() 
 
     assert "was not trusted within 2 hours" in text
     assert "waiting on its folder-trust question" not in text
+
+
+# --- A successor whose permissions were not applied (OD-2). ---
+
+
+def test_a_permission_failed_rollover_names_the_cause_and_what_is_left_open() -> None:
+    text = rollover_message(
+        _report(
+            RolloverState.FAILED,
+            PERMISSIONS_FAILED,
+            detail="thread/settings/update refused <b>(code -32600)</b>",
+            successor=_record(4),
+        ),
+        project_name="p",
+    )
+
+    assert "the successor's permissions could not be applied" in text
+    assert "predecessor preserved" in text
+    assert "Its successor #4 is still open" in text
+    # The daemon's words are data, never markup.
+    assert "&lt;b&gt;(code -32600)&lt;/b&gt;" in text
+    assert "<b>" not in text
+
+
+def test_a_permission_failed_rollover_is_not_shown_as_its_code() -> None:
+    text = rollover_message(_report(RolloverState.FAILED, PERMISSIONS_FAILED), project_name="p")
+
+    assert PERMISSIONS_FAILED not in text
+    assert PERMISSIONS_FAILED in _WHY

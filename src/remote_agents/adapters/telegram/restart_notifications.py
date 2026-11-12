@@ -22,6 +22,7 @@ from telegram.constants import ParseMode
 
 from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.application.interrupted_resume import DEFERRED, NOT_NUDGED, ResumeReport
+from remote_agents.application.permission_apply import PERMISSIONS_HELD
 from remote_agents.ports.interrupted_resumes import RESUMED, SKIPPED
 
 _LOG = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ _WHY_SKIPPED = {
 #: pass's own `not_ready` and `stopping`. A reason missing here is shown as itself, so a test
 #: walks those sources against this table.
 _WHY_NOT_NUDGED = {
+    PERMISSIONS_HELD: "its permissions could not be applied",
     "dialog": "a dialog was showing",
     "menu": "a menu was showing",
     "not_ready": "the agent was not ready in time",

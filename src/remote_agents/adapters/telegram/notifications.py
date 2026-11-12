@@ -154,6 +154,7 @@ _NOT_RESUMED_WORDS: dict[str, str] = {
     NotResumed.COMPOSING: f"didn't send “{NUDGE}”: its composer held a draft",
     NotResumed.UNRECOGNISED: f"didn't send “{NUDGE}”: its screen wasn't recognised",
     NotResumed.UNCONFIRMED: f"“{NUDGE}” was typed but not seen to land",
+    NotResumed.PERMISSIONS: f"didn't send “{NUDGE}”: its permissions could not be applied",
 }
 """What a lifted stop's line says when the service's nudge was not sent (DEC-043: the
 application hands over the key, this surface words it). Appended to the retired headline."""

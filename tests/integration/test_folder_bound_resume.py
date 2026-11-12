@@ -522,7 +522,14 @@ async def test_upgrade_adds_no_fabricated_root_provenance(tmp_path):
         SessionState.ENDED,
         NOW,
     )
-    await SQLiteSessionStore(old).save(record, permissions=PermissionPreset.ASK)
+    # As that build saved it: the session and its preset snapshot. Today's save also writes
+    # the permission state row, a table this schema does not have yet.
+    await SQLiteSessionStore(old).save(record)
+    old.execute(
+        "INSERT INTO session_permissions(session_id, preset) VALUES (?, ?)",
+        (str(record.session_id), PermissionPreset.ASK.value),
+    )
+    old.commit()
     old.close()
     upgraded = open_database(path)
     try:
