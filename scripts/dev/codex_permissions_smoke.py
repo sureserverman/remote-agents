@@ -84,7 +84,10 @@ async def smoke() -> None:
         open_pane(folder)
         at_composer = True
         thread = await _own_thread(client, before, folder)
-        for preset, label in LABELS.items():
+        order = list(LABELS.items())
+        if order[0][1] in screen():
+            order.append(order.pop(0))  # the pane already shows the first label: start elsewhere
+        for preset, label in order:
             if label in screen():
                 raise SmokeFailed(f"{preset}: {label!r} was on screen before the apply")
             await client.apply(thread, preset)
@@ -100,8 +103,11 @@ async def smoke() -> None:
             # up, and `Enter` would answer it.
             tmux("send-keys", "-t", SESSION, "/exit", "Enter")
             time.sleep(1)
-            tmux("send-keys", "-t", SESSION, "Enter")
-            time.sleep(1)
+            if "? for shortcuts" in screen():
+                # Still on the composer, so this `Enter` confirms the exit; a dialog that came up
+                # mid-run gets no key at all.
+                tmux("send-keys", "-t", SESSION, "Enter")
+                time.sleep(1)
         tmux("kill-session", "-t", SESSION)
         shutil.rmtree(folder, ignore_errors=True)
 

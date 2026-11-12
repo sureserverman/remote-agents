@@ -21,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import stat
 import struct
 from collections.abc import Mapping
@@ -73,8 +74,10 @@ CODEX_THREAD_SETTINGS: Mapping[PermissionPreset, Mapping[str, object]] = Mapping
 #: settings answer.
 _TIMEOUT_SECONDS = 10.0
 _MAX_MESSAGE_BYTES = 1 << 20
+#: Pages of `thread/loaded/list` read before giving up; a repeated cursor stops sooner.
+_MAX_PAGES = 100
 _WEBSOCKET_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-_CONTINUATION, _TEXT, _BINARY, _CLOSE, _PING, _PONG = 0x0, 0x1, 0x2, 0x8, 0x9, 0xA
+_CONTINUATION, _TEXT, _CLOSE, _PING, _PONG = 0x0, 0x1, 0x8, 0x9, 0xA
 
 #: The client this adapter says it is, in `initialize`. The daemon logs it; it is not a secret.
 _CLIENT_INFO = MappingProxyType({"name": "remote-agents", "version": "1"})
@@ -106,10 +109,11 @@ class CodexThreadPermissions:
     `method`, carries that request's integer id, and holds exactly one of `result` and `error`;
     a server-to-client request reusing the id is not mistaken for success.
 
-    **Refusals say what they mean, never what the daemon printed.** Provider output does not
-    come back out of an error (`tests/architecture/test_every_parser_refuses_to_echo.py`): a
-    refusal names the method, the caller's own thread id and the JSON-RPC code, and a thread or
-    method the daemon lacks is said in this adapter's words.
+    **Refusals say what they mean, and what Codex said, cleaned.** A refusal names the method,
+    the caller's own thread id and the JSON-RPC code, plus a bounded excerpt of the daemon's own
+    first line with every path and secret-shaped piece removed (`_excerpt`, owner OD-9). A thread
+    or method the daemon lacks is said in this adapter's words. Nothing else the daemon printed
+    comes back out (`tests/architecture/test_every_parser_refuses_to_echo.py`).
 
     `apply` with `provider_default` is a successful no-op: that preset means "add nothing".
     """
@@ -137,7 +141,8 @@ class CodexThreadPermissions:
         """The ids of every thread loaded on the daemon (`thread/loaded/list`, all pages)."""
         threads: set[str] = set()
         cursor: str | None = None
-        while True:
+        seen: set[str] = set()
+        for _page in range(_MAX_PAGES):
             params: dict[str, object] = {} if cursor is None else {"cursor": cursor}
             (result,) = await self._session(None, (("thread/loaded/list", params),))
             data = result.get("data") if isinstance(result, dict) else None
@@ -147,6 +152,10 @@ class CodexThreadPermissions:
             cursor = result.get("nextCursor")
             if not isinstance(cursor, str) or not cursor:
                 return frozenset(threads)
+            if cursor in seen:
+                break
+            seen.add(cursor)
+        raise ThreadPermissionsError("unexpected reply from the Codex daemon")
 
     async def thread_folder(self, thread_id: str) -> Path:
         """The working folder the daemon recorded for `thread_id` (`thread/read`, no turns)."""
@@ -299,7 +308,7 @@ async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -
         final, reserved, opcode = bool(first & 0x80), first & 0x70, first & 0x0F
         length = second & 0x7F
         control = opcode >= _CLOSE
-        if reserved or opcode == _BINARY or (control and (length > 125 or not final)):
+        if reserved or (control and (length > 125 or not final)):
             raise _Closed
         if length == 126:
             (length,) = struct.unpack(">H", await reader.readexactly(2))
@@ -319,9 +328,11 @@ async def _message(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -
             continue
         if control:
             continue  # a pong, or a reserved control opcode
+        if opcode not in (_CONTINUATION, _TEXT):
+            raise _Closed  # 0x3-0x7: reserved data opcodes, never negotiated here
         if (opcode == _CONTINUATION) is (parts is None):
             raise _Closed  # a continuation with nothing to continue, or a text frame mid-message
-        parts = (parts or []) + [data]
+        parts = [*(parts or ()), data]
         if final:
             try:
                 return _json_object(b"".join(parts))
@@ -361,8 +372,48 @@ async def _call(
         return message["result"]
 
 
+#: What a cleaned excerpt may never carry: an absolute or home path, a `key=value` or `key: value`
+#: whose key names a credential, a bearer-style token, any long unbroken run of letters and
+#: digits (keys, ids, hashes), and a pairing-code-shaped group (`ABCD-EFGH`).
+_SECRET_SHAPES = (
+    re.compile(r"(?<![\w.~/])(?:~|\.{1,2})?/[^\s'\"`]*"),
+    re.compile(
+        r"(?i)\b(?:token|secret|password|passwd|api[_-]?key|key|auth|cookie|bearer|code)"
+        r"\b\s*[:=]\s*\S+"
+    ),
+    re.compile(r"(?i)\bbearer\s+\S+"),
+    re.compile(r"\b[A-Za-z0-9_\-]{20,}\b"),
+    re.compile(r"\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b"),
+)
+_EXCERPT_CHARS = 120
+
+
+def _excerpt(text: object) -> str | None:
+    """A short, cleaned excerpt of the daemon's own message, or None when nothing safe is left.
+
+    The owner chose to see what Codex said when it refuses a change (2026-11-12, OD-9), against
+    this project's habit of never echoing provider output. So only the first line is kept, every
+    secret-shaped piece is replaced by `…`, anything unprintable is dropped, and the result is
+    bounded. The pairing code Remote Control mints is never in a settings reply; its shape is
+    stripped anyway.
+    """
+    if not isinstance(text, str):
+        return None
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    for shape in _SECRET_SHAPES:
+        line = shape.sub("…", line)
+    line = "".join(character for character in line if character.isprintable())
+    line = re.sub(r"\s+", " ", line).strip(" :")
+    if len(line) > _EXCERPT_CHARS:
+        line = line[: _EXCERPT_CHARS - 1].rstrip() + "…"
+    return line if line.strip("… ") else None
+
+
 def _refusal(error: object, method: str, thread_id: str | None) -> str:
-    """Say what a refusal means in this adapter's words; the daemon's text never comes back."""
+    """Say what a refusal means: the method, the caller's thread, the code and a cleaned excerpt.
+
+    The thread is always the caller's own id, never one read from the reply.
+    """
     text = error.get("message") if isinstance(error, dict) else None
     code = error.get("code") if isinstance(error, dict) else None
     subject = "" if thread_id is None else f" for thread {thread_id}"
@@ -370,8 +421,10 @@ def _refusal(error: object, method: str, thread_id: str | None) -> str:
         return f"thread {thread_id} is not loaded on the Codex daemon"
     if isinstance(text, str) and "unknown variant" in text and method in text:
         return f"this Codex does not offer {method}"
-    if code == -32602:
-        return f"this Codex refused the parameters of {method}{subject} (error -32602)"
-    if isinstance(code, int) and not isinstance(code, bool):
-        return f"the Codex daemon refused {method}{subject} (error {code})"
-    return f"the Codex daemon refused {method}{subject}"
+    what = "the parameters of " if code == -32602 else ""
+    numbered = isinstance(code, int) and not isinstance(code, bool)
+    reason = f"the Codex daemon refused {what}{method}{subject}"
+    if numbered:
+        reason += f" (error {code})"
+    said = _excerpt(text)
+    return f"{reason}: Codex said “{said}”" if said else reason

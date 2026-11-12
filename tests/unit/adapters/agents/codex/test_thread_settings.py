@@ -432,8 +432,8 @@ async def test_a_daemon_request_reusing_the_id_is_not_taken_for_success() -> Non
 
     reason = await _refused(_on_update(replies))
     assert (
-        reason
-        == f"the Codex daemon refused thread/settings/update for thread {THREAD} (error -32600)"
+        reason == f"the Codex daemon refused thread/settings/update for thread {THREAD} "
+        "(error -32600): Codex said “refused”"
     )
 
 
@@ -466,10 +466,44 @@ async def test_a_reply_nested_past_the_parser_is_contained() -> None:
     assert await _refused(_on_update(nested)) == "unexpected reply from the Codex daemon"
 
 
-async def test_a_refused_parameter_names_the_thread_and_never_the_daemons_words() -> None:
+async def test_a_refused_parameter_names_the_thread_and_never_a_secret() -> None:
     error = {"code": -32602, "message": POISON}
     reason = await _refused(_on_update(lambda request_id: ({"id": request_id, "error": error},)))
-    assert THREAD in reason and "-32602" in reason and "sk-abcdef" not in reason
+    assert THREAD in reason and "-32602" in reason
+    assert "sk-abcdef" not in reason and "auth.json" not in reason and "/home" not in reason
+
+
+async def test_a_refusal_carries_a_cleaned_excerpt_of_what_codex_said() -> None:
+    """Owner, 2026-11-12 (OD-9): "Show a cleaned excerpt"."""
+    said = (
+        "Invalid params: unknown field `approvalsReviewr` in thread/settings/update "
+        "(config at /home/operator/.codex/config.toml, token=sk-abcdef0123456789)\nsecond line"
+    )
+    error = {"code": -32602, "message": said}
+    reason = await _refused(_on_update(lambda request_id: ({"id": request_id, "error": error},)))
+    assert "Codex said “Invalid params: unknown field `approvalsReviewr`" in reason
+    assert "thread/settings/update" in reason.split("Codex said")[1]
+    for secret in ("/home", "config.toml", "sk-abcdef", "token=", "second line"):
+        assert secret not in reason
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "pairing code ABCD-EFGH-IJKL expired",
+        "bearer eyJhbGciOiJIUzI1NiJ9 rejected",
+        "key: 0123456789abcdef0123456789abcdef",
+        "see ~/.codex/auth.json",
+        "x" * 500,
+    ],
+)
+def test_the_excerpt_strips_every_secret_shape_and_stays_bounded(said) -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import _refusal
+
+    reason = _refusal({"code": -32000, "message": said}, "thread/settings/update", "T1")
+    for piece in ("ABCD-EFGH", "eyJhbGci", "0123456789abcdef", "auth.json", "x" * 30):
+        assert piece not in reason
+    assert len(reason) < 260
 
 
 async def test_a_hung_daemon_probe_times_out_within_the_same_bound() -> None:
@@ -540,3 +574,48 @@ async def test_thread_folder_reads_the_threads_recorded_cwd() -> None:
     async with FakeDaemon(answer) as daemon:
         client, _ = _client(daemon.path)
         assert await client.thread_folder(THREAD) == Path("/srv/x")
+
+
+def _raw(first: int, second: int, payload: bytes = b"") -> bytes:
+    return bytes([first, second]) + payload
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [
+        pytest.param((_raw(0x80, 2, b"{}"),), id="continuation-with-nothing-to-continue"),
+        pytest.param((_raw(0x01, 2, b'{"'), _raw(0x81, 2, b"{}")), id="text-frame-mid-message"),
+        pytest.param((_raw(0xC1, 2, b"{}"),), id="reserved-bit-set"),
+        pytest.param((_raw(0x89, 126) + struct.pack(">H", 200) + b"p" * 200,), id="oversized-ping"),
+        pytest.param((_raw(0x09, 1, b"p"),), id="fragmented-ping"),
+        pytest.param((_raw(0x83, 2, b"{}"),), id="reserved-data-opcode"),
+    ],
+)
+async def test_every_framing_violation_ends_the_connection(frames) -> None:
+    assert await _refused(_on_update(*frames)) == "the Codex daemon closed the connection"
+
+
+async def test_a_socket_owned_by_another_user_is_never_spoken_to(monkeypatch) -> None:
+    import os
+
+    async with FakeDaemon(_cooperative) as daemon:
+        monkeypatch.setattr(os, "getuid", lambda: os.stat(daemon.path).st_uid + 1)
+        client, _ = _client(daemon.path)
+        with pytest.raises(ThreadPermissionsError) as raised:
+            await client.apply(THREAD, PermissionPreset.ASK)
+    assert raised.value.reason == "the Codex daemon socket is not this user's"
+    assert daemon.connections == 0
+
+
+async def test_a_repeated_cursor_ends_the_paging() -> None:
+    def answer(message):
+        if message.get("method") != "thread/loaded/list":
+            return _cooperative(message)
+        return ({"id": message["id"], "result": {"data": ["a"], "nextCursor": "same"}},)
+
+    async with FakeDaemon(answer) as daemon:
+        client, _ = _client(daemon.path)
+        with pytest.raises(ThreadPermissionsError) as raised:
+            await client.loaded_threads()
+    assert raised.value.reason == "unexpected reply from the Codex daemon"
+    assert daemon.connections == 2
