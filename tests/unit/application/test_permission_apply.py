@@ -16,6 +16,7 @@ from uuid import UUID
 from remote_agents.application.permission_apply import (
     APPLY_PATIENCE_SECONDS,
     ENDED_REASON,
+    LOAD_GRACE_SECONDS,
     NOT_IN_TIME_REASON,
     PERMISSIONS_HELD,
     READY,
@@ -26,6 +27,7 @@ from remote_agents.application.permission_apply import (
     Readiness,
     permission_state_line,
     permissions_notice,
+    preset_owed,
 )
 from remote_agents.domain.models import (
     ProfileId,
@@ -86,7 +88,9 @@ class FakeServer:
         if self.failures:
             raise ThreadPermissionsError(self.failures.pop(0))
         if thread_id not in self.loaded:
-            raise ThreadPermissionsError(f"thread {thread_id} is not loaded on the daemon")
+            raise ThreadPermissionsError(
+                f"thread {thread_id} is not loaded on the daemon", not_loaded=True
+            )
 
     async def server_identity(self) -> str | None:
         return self.identity
@@ -656,6 +660,172 @@ async def test_a_session_that_ends_is_forgotten_and_a_reused_key_starts_clean() 
     assert rig.apply_pass.tracked == frozenset()
 
 
+# --- A thread that is not on the server yet is waited for, not failed (Stage 2 gate). ---
+
+LATE = "01a1c7a4-0000-7000-8000-00000000001a"
+
+
+async def test_a_thread_that_loads_a_little_late_is_applied_and_never_recorded_as_failed() -> None:
+    """A resumed pane is RUNNING before its agent has loaded the conversation, and after a
+    daemon restart every pane reloads its thread. Neither is a failure: two tries three
+    seconds apart would make both permanent."""
+    rig = Rig(_record(resumed_from=LATE))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+
+    for _ in range(4):
+        await rig.tick()
+    assert rig.bindings.states[SESSION] == PermissionState(PermissionPreset.ASK, None, None, None)
+    assert rig.told == []
+
+    rig.server.loaded[LATE] = "/srv/project"
+    await rig.tick()
+
+    assert rig.bindings.states[SESSION] == PermissionState(
+        PermissionPreset.ASK, PermissionPreset.ASK, "daemon-A", None
+    )
+    assert rig.told == [] and rig.bindings.writes == [("applied", SESSION)]
+
+
+async def test_a_thread_that_never_loads_is_a_failure_once_the_grace_is_over() -> None:
+    rig = Rig(_record(resumed_from=LATE))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    passes = int(LOAD_GRACE_SECONDS // RETRY_SECONDS)
+
+    for _ in range(passes):
+        await rig.tick()
+    assert rig.bindings.states[SESSION].failure is None, "still inside the grace"
+
+    for _ in range(3):
+        await rig.tick()
+
+    reason = f"thread {LATE} is not loaded on the daemon"
+    assert rig.bindings.states[SESSION].failure == reason
+    assert rig.told == [(SESSION, reason)]
+    calls = len(rig.server.calls)
+    await rig.tick()
+    assert len(rig.server.calls) == calls, "the failure stands: no further try"
+
+
+async def test_a_caller_waiting_on_a_thread_not_loaded_yet_is_held_without_a_failure() -> None:
+    """The caller's patience is shorter than the grace: its work is held, nothing is recorded,
+    and the pass keeps waiting for the thread."""
+    assert APPLY_PATIENCE_SECONDS < LOAD_GRACE_SECONDS
+    rig = Rig(_record(resumed_from=LATE))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+
+    assert await rig.apply_pass.wait_ready(SESSION, PROVIDER) == Readiness(
+        unapplied=NOT_IN_TIME_REASON
+    )
+    assert rig.bindings.states[SESSION].failure is None and rig.told == []
+
+
+async def test_the_tries_are_spaced_while_a_thread_is_not_loaded() -> None:
+    rig = Rig(_record(resumed_from=LATE))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+
+    await rig.apply_pass.wait_ready(SESSION, PROVIDER)
+
+    # One a second would be thirty; spaced by the retry gap it is about ten.
+    assert len(rig.server.calls) <= APPLY_PATIENCE_SECONDS // RETRY_SECONDS + 1
+
+
+async def test_a_real_failure_after_a_late_thread_still_gets_its_two_tries() -> None:
+    rig = Rig(_record(resumed_from=LATE))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    await rig.tick()
+    rig.server.loaded[LATE] = "/srv/project"
+    rig.server.failures = ["timed out", "timed out"]
+
+    await rig.tick()
+    assert rig.bindings.states[SESSION].failure is None
+    await rig.tick()
+    assert rig.bindings.states[SESSION].failure == "timed out"
+
+
+async def test_a_clock_that_steps_back_does_not_block_the_retry() -> None:
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.server.failures = ["timed out"]
+    await rig.tick()
+
+    rig.now -= timedelta(hours=1)
+    await rig.tick()
+    await rig.tick()
+
+    assert rig.bindings.states[SESSION].applied is PermissionPreset.ASK
+
+
+# --- One notice for one cause (Stage 2 gate). ---
+
+
+async def test_preset_owed_is_true_only_for_a_session_asking_for_an_explicit_preset() -> None:
+    rig = Rig()
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.bindings.pending(SECOND, PermissionPreset.PROVIDER_DEFAULT)
+
+    assert await preset_owed(rig.bindings, SESSION) is True
+    assert await preset_owed(rig.bindings, SECOND) is False
+    assert await preset_owed(rig.bindings, SessionId.new()) is False, "no state row"
+
+
+async def test_the_unbound_reason_says_what_else_follows_from_it() -> None:
+    """The binder's own notice is not sent for a session owed a preset, so this one sentence
+    carries both facts: no permissions, and handoffs that will refuse."""
+    assert UNBOUND_REASON == "its thread could not be bound, so its handoffs will refuse too"
+
+
+async def test_the_unbound_watch_leaves_a_session_to_the_permission_notice_when_told_so() -> None:
+    from remote_agents.application.thread_binding import UnboundWatch
+    from remote_agents.ports.thread_binding import PendingBinding
+
+    owed, plain = _record(), _record(SECOND)
+    states = {str(owed.session_id): PendingBinding.NONE, str(plain.session_id): PendingBinding.NONE}
+
+    class Bindings:
+        def state(self, session_id: str) -> PendingBinding:
+            return states[session_id]
+
+    async def sessions():
+        return (owed, plain)
+
+    async def told_elsewhere(session_id: SessionId) -> bool:
+        return session_id == owed.session_id
+
+    watch = UnboundWatch(Bindings(), sessions, told_elsewhere=told_elsewhere)
+    assert await watch.newly_given_up() == ()
+    states.update(dict.fromkeys(states, PendingBinding.GAVE_UP))
+
+    assert await watch.newly_given_up() == (plain,)
+    assert await watch.newly_given_up() == ()
+
+
+async def test_a_rollover_past_its_check_no_longer_speaks_for_its_successor() -> None:
+    """Only a rollover that has yet to ask about its successor will report the failure. One
+    already adopting never asks again, so the notice must not be left to it."""
+    from types import SimpleNamespace
+
+    from remote_agents.composition.service import reported_by_its_rollover
+    from remote_agents.domain.rollover import RolloverState
+
+    waiting, adopting = SessionId.new(), SessionId.new()
+
+    class Rollovers:
+        async def open_rollovers(self):
+            return (
+                SimpleNamespace(
+                    successor_session_id=waiting, state=RolloverState.SUCCESSOR_STARTING
+                ),
+                SimpleNamespace(successor_session_id=adopting, state=RolloverState.ADOPTING),
+                SimpleNamespace(successor_session_id=None, state=RolloverState.REQUESTED),
+            )
+
+    told_elsewhere = reported_by_its_rollover(Rollovers())
+
+    assert await told_elsewhere(waiting) is True
+    assert await told_elsewhere(adopting) is False
+    assert await told_elsewhere(SessionId.new()) is False
+
+
 # --- Telling the owner (Task 2.4). ---
 
 
@@ -724,8 +894,8 @@ async def test_permission_failure_notice_that_raises_costs_only_the_notice() -> 
     rig.bindings.pending(SECOND, PermissionPreset.ASK)
     rig.notify_error = RuntimeError("the bot is away")
 
-    await rig.tick()
-    await rig.tick()
+    for _ in range(int(LOAD_GRACE_SECONDS // RETRY_SECONDS) + 2):
+        await rig.tick()
 
     assert rig.bindings.states[SESSION].failure is not None
     assert rig.bindings.states[SECOND].applied is PermissionPreset.ASK
@@ -898,7 +1068,7 @@ async def test_serve_records_a_binding_that_gave_up_as_a_failure(tmp_path) -> No
     await service.apply_pass.run_once()
 
     assert service.server.calls == []
-    assert (await service.state.state(SESSION)).failure == "its thread could not be bound"
+    assert (await service.state.state(SESSION)).failure == UNBOUND_REASON
 
 
 # --- Everything that types on its own waits for the apply (OD-2). ---
@@ -1029,7 +1199,7 @@ def _modules_that_can_type() -> set[str]:
     typing = re.compile(r"\b(PromptDelivery|send_prompt|send_binding_line)\b")
     return {
         path.name
-        for path in Path(application.__file__).parent.glob("*.py")
+        for path in Path(application.__file__).parent.rglob("*.py")
         if typing.search(path.read_text(encoding="utf-8"))
     }
 
@@ -1052,3 +1222,27 @@ async def test_every_automatic_typer_is_held_until_permissions_are_applied(tmp_p
         folder = tmp_path / f"{index}-ready"
         folder.mkdir()
         assert len(await drive(READY, folder)) == 1, f"{module} typed nothing when ready"
+
+
+async def test_serve_tells_a_failed_binding_once_through_the_permission_notice(tmp_path) -> None:
+    """The binder gives up and the pass records why the preset cannot be applied. That is one
+    cause, so the binder leaves the telling to the permission notice when a preset is owed."""
+    from types import SimpleNamespace
+
+    from remote_agents.adapters.agents.registry import provider_descriptors
+    from remote_agents.composition.service import build_thread_binder
+
+    service = Service(tmp_path)
+    await service.launch(PermissionPreset.ASK)
+    binder = build_thread_binder(
+        store=service.store,
+        terminal=SimpleNamespace(send_binding_line=None),
+        descriptors=provider_descriptors(),
+        activity_directory=service.spool,
+        connection=service.connection,
+    )
+
+    assert await binder._told_elsewhere(SESSION) is True
+    service.connection.execute("UPDATE session_permission_state SET requested = 'provider_default'")
+    service.connection.commit()
+    assert await binder._told_elsewhere(SESSION) is False, "owed nothing: the binder speaks"

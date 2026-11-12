@@ -277,6 +277,31 @@ async def test_an_unloaded_thread_is_named_by_the_callers_own_id() -> None:
         with pytest.raises(ThreadPermissionsError) as raised:
             await client.apply(THREAD, PermissionPreset.ASK)
     assert THREAD in raised.value.reason and "not loaded" in raised.value.reason
+    # Said as a fact the caller can act on: the thread may simply not be loaded yet.
+    assert raised.value.not_loaded is True
+
+
+async def test_only_a_missing_thread_is_marked_not_loaded() -> None:
+    """Every other refusal, and every transport failure, is a failure: waiting does not fix a
+    method this Codex lacks, a refused parameter or a daemon that is not there."""
+
+    def refuse(message):
+        if message.get("method") == "thread/settings/update":
+            error = {"code": -32602, "message": "invalid params: unknown field"}
+            return ({"id": message["id"], "error": error},)
+        return _cooperative(message)
+
+    async with FakeDaemon(refuse) as daemon:
+        client, _ = _client(daemon.path)
+        with pytest.raises(ThreadPermissionsError) as raised:
+            await client.apply(THREAD, PermissionPreset.ASK)
+    assert raised.value.not_loaded is False
+
+    gone = CodexThreadPermissions(runner=FakeRunner(CommandResult(1, "", "")), timeout=1.0)
+    with pytest.raises(ThreadPermissionsError) as raised:
+        await gone.apply(THREAD, PermissionPreset.ASK)
+    assert raised.value.not_loaded is False
+    assert ThreadPermissionsError("timed out").not_loaded is False
 
 
 async def test_an_unknown_method_says_this_codex_does_not_offer_it_and_echoes_nothing() -> None:

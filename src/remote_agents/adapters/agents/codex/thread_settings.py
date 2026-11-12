@@ -443,7 +443,10 @@ async def _call(
         if ("result" in message) == ("error" in message):
             raise _Unexpected
         if "error" in message:
-            raise ThreadPermissionsError(_refusal(message["error"], method, thread_id))
+            raise ThreadPermissionsError(
+                _refusal(message["error"], method, thread_id),
+                not_loaded=_thread_not_found(message["error"], thread_id),
+            )
         return message["result"]
 
 
@@ -520,6 +523,12 @@ def _excerpt(text: object, method: str) -> str | None:
     return excerpt if any(word != "…" for word in excerpt.split()) else None
 
 
+def _thread_not_found(error: object, thread_id: str | None) -> bool:
+    """Whether the daemon refused because it does not have the caller's thread loaded."""
+    text = error.get("message") if isinstance(error, dict) else None
+    return isinstance(text, str) and text.startswith("thread not found") and thread_id is not None
+
+
 def _refusal(error: object, method: str, thread_id: str | None) -> str:
     """Say what a refusal means: the method, the caller's thread, the code and a cleaned excerpt.
 
@@ -528,7 +537,7 @@ def _refusal(error: object, method: str, thread_id: str | None) -> str:
     text = error.get("message") if isinstance(error, dict) else None
     code = error.get("code") if isinstance(error, dict) else None
     subject = "" if thread_id is None else f" for thread {thread_id}"
-    if isinstance(text, str) and text.startswith("thread not found") and thread_id is not None:
+    if _thread_not_found(error, thread_id):
         return f"thread {thread_id} is not loaded on the Codex daemon"
     if isinstance(text, str) and "unknown variant" in text and method in text:
         reason = f"this Codex does not offer {method}{subject}"

@@ -808,7 +808,7 @@ def _kept_worktrees(config) -> tuple[tuple[str, str, str], ...] | None:
 
 
 def _permission_failures(config) -> int | None:
-    """How many running sessions' permission presets are not applied, for `doctor`. Read-only.
+    """How many running sessions have a permission failure that stands, for `doctor`. Read-only.
 
     A diagnostic never raises: any failure answers None, and `doctor` omits the line. A store
     from before the state table has no such sessions to count, and answers None too.

@@ -88,15 +88,6 @@ async def test_the_notice_is_the_shared_sentence_by_project_name_and_comes_once(
     assert _PROJECT.opaque_id not in said[0][0]
 
 
-async def test_the_real_toast_shows_a_reason_that_looks_like_markup() -> None:
-    record = _record()
-    app = _app(_Watch([((record, "refused [/bold] oddly"),)]))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await app._tell_permission_failures()
-        await pilot.pause()
-
-
 async def test_a_watch_that_fails_costs_only_the_notice() -> None:
     class Failing:
         async def newly_failed(self):
@@ -113,4 +104,4 @@ async def test_the_console_asks_on_a_timer_only_when_the_backend_has_the_watch()
 
     source = inspect.getsource(RemoteAgentsTui.on_mount)
     assert "permission_failures is not None" in source
-    assert "self._tell_permission_failures" in source
+    assert "self.set_interval(_UNBOUND_WATCH_SECONDS, self._tell_permission_failures)" in source

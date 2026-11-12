@@ -279,6 +279,7 @@ def production_doctor(
         # A count, and never a verdict: an unbound session works, and only its handoffs refuse.
         report["unbound_sessions"] = unbound_sessions
     if permission_failures is not None:
+        # Running sessions whose apply failed and stands; one still waiting is not counted.
         # A count, and never a verdict: the session works, on its agent's own configuration,
         # and nothing automatic is typed into it until its preset is applied.
         report["permission_failures"] = permission_failures

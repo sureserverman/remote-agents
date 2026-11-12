@@ -16,11 +16,16 @@ from remote_agents.domain.profiles import PermissionPreset
 
 
 class ThreadPermissionsError(Exception):
-    """The preset could not be applied. `reason` is short, owner-readable and holds no secret."""
+    """The preset could not be applied. `reason` is short, owner-readable and holds no secret.
 
-    def __init__(self, reason: str) -> None:
+    `not_loaded` says the server does not have the thread, which a pane that is still starting,
+    or one reloading after the server restarted, fixes by itself: the caller may wait.
+    """
+
+    def __init__(self, reason: str, *, not_loaded: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.not_loaded = not_loaded
 
 
 class ThreadPermissions(Protocol):

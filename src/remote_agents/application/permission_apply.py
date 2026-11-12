@@ -14,9 +14,14 @@ flags by an older build and runs off the shared server, so nothing is applied to
 provider's own default asks for nothing and counts as applied.
 
 **When it gives up.** One failure is retried on the next pass. A second is recorded with its
-reason and stands: it is not tried again until the owner asks for a preset again or the server
-is a different one. A server that restarted has forgotten the setting, so a changed server
-identity re-applies an applied preset once.
+reason and stands: it is not tried again until the owner asks for a preset again or this run of
+the service sees the server become a different one. A server that restarted has forgotten the
+setting, so a changed server identity re-applies an applied preset once.
+
+**A thread the server does not have yet is waited for.** A resumed pane is running before its
+agent has loaded the conversation, and after a server restart every pane loads its thread
+again. For `LOAD_GRACE_SECONDS` that refusal is tried again each pass and counts as nothing;
+only after it is it a failure.
 
 It is a pass in `serve`, like the binder it follows, because only `serve` acts on panes
 unattended (DEC-115) and a restart finds the state rows and carries on.
@@ -42,13 +47,18 @@ _LOG = logging.getLogger(__name__)
 #: The least time between a failed apply and its one retry: one pass of `serve`. A caller
 #: waiting on a session looks more often than that, and must not spend both tries at once.
 RETRY_SECONDS = 3.0
+#: How long a thread may be missing from the server before that is a failure. Longer than a
+#: caller's patience, so a caller's work is held while the pass still waits for the thread.
+LOAD_GRACE_SECONDS = 60.0
 #: How long a caller about to type automatic work waits for a bound session's preset.
 APPLY_PATIENCE_SECONDS = 30.0
 #: How often such a caller looks again.
 _WAIT_SECONDS = 1.0
 _TRIES = 2
 
-UNBOUND_REASON = "its thread could not be bound"
+#: Said in the one notice a failed binding gets when a preset is owed (`preset_owed`), so it
+#: carries what the binder's own notice would have said too.
+UNBOUND_REASON = "its thread could not be bound, so its handoffs will refuse too"
 NOT_IN_TIME_REASON = "its permissions were not applied in time"
 ENDED_REASON = "the session has ended"
 #: What a caller records when it did not type because of this: a key each surface words.
@@ -97,6 +107,16 @@ def permission_state_line(
     if state.requested is PermissionPreset.PROVIDER_DEFAULT or state.applied is state.requested:
         return "applied"
     return "not applied yet"
+
+
+async def preset_owed(bindings: PermissionBindings, session_id: SessionId) -> bool:
+    """Whether this session asks for a preset the server must be given.
+
+    For such a session a binding that gave up is reported once, by the permission notice, so
+    whoever would tell the unbound notice asks this first.
+    """
+    state = await bindings.state(session_id)
+    return state is not None and state.requested is not PermissionPreset.PROVIDER_DEFAULT
 
 
 class PermissionFailureWatch:
@@ -149,6 +169,8 @@ class _Attempt:
     requested: PermissionPreset
     failures: int = 0
     failed_at: datetime | None = None
+    not_loaded_since: datetime | None = None
+    """When the server first said it does not have the thread, while that is still waited out."""
 
 
 class PermissionApplyPass:
@@ -313,15 +335,29 @@ class PermissionApplyPass:
             attempt = self._attempts.get(key)
             if attempt is None or attempt.requested is not state.requested:
                 attempt = self._attempts[key] = _Attempt(state.requested)
-            if (
-                attempt.failed_at is not None
-                and (self._now() - attempt.failed_at).total_seconds() < RETRY_SECONDS
-            ):
-                return ApplyStep.WAITING
+            if attempt.failed_at is not None:
+                since = (self._now() - attempt.failed_at).total_seconds()
+                if since < 0:
+                    # The clock stepped back: the gap starts again, and is never waited twice.
+                    attempt.failed_at = self._now()
+                    return ApplyStep.WAITING
+                if since < RETRY_SECONDS:
+                    return ApplyStep.WAITING
             try:
                 await applier.apply(thread, state.requested)
             except ThreadPermissionsError as error:
                 reason = error.reason
+                if error.not_loaded:
+                    now = self._now()
+                    attempt.not_loaded_since = attempt.not_loaded_since or now
+                    waited = (now - attempt.not_loaded_since).total_seconds()
+                    if 0 <= waited < LOAD_GRACE_SECONDS:
+                        # Not a try: the pane is still loading its thread. Looked at again
+                        # after the same gap as a retry.
+                        attempt.failed_at = now
+                        return ApplyStep.WAITING
+                    return await self._fail(record.session_id, state, reason, identity)
+                attempt.not_loaded_since = None
             except Exception:
                 # Not the port's error, so not its vetted reason: the text stays in the log.
                 _LOG.exception("applying permissions to %s failed unexpectedly", key)

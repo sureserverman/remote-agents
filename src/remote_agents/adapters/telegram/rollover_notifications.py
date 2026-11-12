@@ -71,7 +71,9 @@ _WHY = {
     "successor-failed": "the successor failed or went away",
     "not-typed": "the handoff command was not typed into the successor",
     "binding-failed": "the successor's thread could not be bound, so its handoff would refuse",
-    "permissions-failed": "the successor's permissions could not be applied, so it was not started",
+    "permissions-failed": (
+        "the successor's permissions could not be applied, so its work was not started"
+    ),
     "adoption-timeout": f"the successor did not take over within {_MINUTES_ADOPT} minutes",
     "id-mismatch": "the successor was handed the wrong handoff",
     "no-ready": "the successor found no handoff to take over",

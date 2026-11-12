@@ -45,7 +45,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.hook_roster import HookRosterPublisher
 from remote_agents.application.host_remote_control import HostRemoteControlService
-from remote_agents.application.permission_apply import PermissionFailureWatch
+from remote_agents.application.permission_apply import PermissionFailureWatch, preset_owed
 from remote_agents.application.permission_presets import PermissionSettings, SessionPermissions
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
@@ -643,6 +643,8 @@ def compose_backend(
         unbound_watch=UnboundWatch(
             FileThreadBindings(paths.activity_directory),
             lambda: backend_store.list(LIVE_STATES),
+            # As the bot's binder does: one notice for one cause, the permission one.
+            told_elsewhere=partial(preset_owed, SQLitePermissionBindings(connection)),
         ),
         permission_failures=PermissionFailureWatch(
             SQLitePermissionBindings(connection),

@@ -59,6 +59,7 @@ from remote_agents.application.permission_apply import (
     RETRY_SECONDS,
     PermissionApplyPass,
     Readiness,
+    preset_owed,
 )
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.resume_flow import resume_capable
@@ -81,6 +82,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 from remote_agents.ports.folder_bindings import FolderBindings
 from remote_agents.ports.git_checkout import GitCheckout
@@ -315,7 +317,8 @@ class ServiceComposition:
     `rollover_pass` is: one process types into panes unattended, whichever process launched."""
 
     binding_notifier: object | None = None
-    """Where the binding pass's notices go, retried each tick while one is held, or None."""
+    """Where the binding pass's and the permission pass's notices go, retried each tick while
+    one is held, or None."""
 
     permission_apply: PermissionApplyPass | None = None
     """The pass that sets a launched session's permission preset on its provider's shared
@@ -1106,6 +1109,24 @@ class CatalogueGap:
         await self._read()
 
 
+def reported_by_its_rollover(rollovers) -> Callable[[SessionId], Awaitable[bool]]:
+    """Whether a rollover will report this session's trouble itself, so no other notice does.
+
+    Only one that has yet to ask about its successor: it asks once, just before it types the
+    template, and fails by name on the answer. A rollover already adopting never asks again,
+    so trouble that comes later (a daemon that restarted) is told like any other session's.
+    """
+
+    async def will_report(session_id: SessionId) -> bool:
+        return any(
+            rollover.successor_session_id == session_id
+            and rollover.state is RolloverState.SUCCESSOR_STARTING
+            for rollover in await rollovers.open_rollovers()
+        )
+
+    return will_report
+
+
 def build_thread_binder(
     *,
     store: SessionStore,
@@ -1116,16 +1137,16 @@ def build_thread_binder(
     notify: Callable[[SessionRecord], Awaitable[None]] | None = None,
 ) -> ThreadBinder:
     """The binding pass `serve` runs, and only `serve` (DEC-115)."""
-    rollovers = SQLiteRolloverStore(connection)
+    by_rollover = reported_by_its_rollover(SQLiteRolloverStore(connection))
+    permissions = SQLitePermissionBindings(connection)
 
     async def sessions_seen() -> Sequence[SessionRecord]:
         return await store.list(LIVE_STATES)
 
-    async def successor_of_a_rollover(session_id: SessionId) -> bool:
-        return any(
-            rollover.successor_session_id == session_id
-            for rollover in await rollovers.open_rollovers()
-        )
+    async def told_elsewhere(session_id: SessionId) -> bool:
+        # A rollover still to ask about it reports it; and where a preset is owed, the
+        # permission pass records the same cause and its one notice says both.
+        return await by_rollover(session_id) or await preset_owed(permissions, session_id)
 
     return ThreadBinder(
         FileThreadBindings(activity_directory),
@@ -1134,7 +1155,7 @@ def build_thread_binder(
         send_line=terminal.send_binding_line,
         line_for=lambda session, nonce: bind_thread_line(activity_directory, session, nonce),
         notify=notify,
-        told_elsewhere=successor_of_a_rollover,
+        told_elsewhere=told_elsewhere,
     )
 
 
@@ -1149,14 +1170,6 @@ def build_permission_apply_pass(
 ) -> PermissionApplyPass:
     """The permission pass `serve` runs beside the binder, and only `serve` (DEC-115)."""
     bindings = FileThreadBindings(activity_directory)
-    rollovers = SQLiteRolloverStore(connection)
-
-    async def successor_of_a_rollover(session_id: SessionId) -> bool:
-        # Its rollover ends `permissions-failed` and reports that itself.
-        return any(
-            rollover.successor_session_id == session_id
-            for rollover in await rollovers.open_rollovers()
-        )
 
     hooks = profiles_bound_by_thread(descriptors)
 
@@ -1194,7 +1207,8 @@ def build_permission_apply_pass(
         unbound=gave_up,
         bound=None if binder is None else binder.wait_bound,
         notify=notify,
-        told_elsewhere=successor_of_a_rollover,
+        # Its rollover ends `permissions-failed` or `binding-failed` and reports that itself.
+        told_elsewhere=reported_by_its_rollover(SQLiteRolloverStore(connection)),
     )
 
 

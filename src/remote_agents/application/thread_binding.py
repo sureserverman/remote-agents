@@ -61,16 +61,21 @@ class UnboundWatch:
         self,
         bindings: ThreadBindings,
         sessions: Callable[[], Awaitable[Sequence[SessionRecord]]],
+        told_elsewhere: Callable[[SessionId], Awaitable[bool]] | None = None,
     ) -> None:
+        """`told_elsewhere` names a session another notice speaks for, as the binder's does."""
         self._bindings = bindings
         self._sessions = sessions
+        self._told_elsewhere = told_elsewhere
         self._seen: set[str] | None = None
 
     async def newly_given_up(self) -> tuple[SessionRecord, ...]:
         given_up = []
         for record in await self._sessions():
             state = await asyncio.to_thread(self._bindings.state, str(record.session_id))
-            if state is PendingBinding.GAVE_UP:
+            if state is PendingBinding.GAVE_UP and not (
+                self._told_elsewhere is not None and await self._told_elsewhere(record.session_id)
+            ):
                 given_up.append(record)
         keys = {str(record.session_id) for record in given_up}
         fresh = (
