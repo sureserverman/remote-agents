@@ -78,10 +78,22 @@ _MAX_MESSAGE_BYTES = 1 << 20
 #: Pages of `thread/loaded/list` read before giving up; a repeated cursor stops sooner.
 _MAX_PAGES = 100
 _WEBSOCKET_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-#: Where Codex records the running daemon's process, relative to `CODEX_HOME`, and the most
-#: such a record can weigh (measured 2026-11-12 on 0.167.2: 434 bytes).
-_DAEMON_PID_RELATIVE_PATH = ("app-server-daemon", "app-server.pid")
+#: The most a record of the running daemon's process can weigh (measured 2026-11-12 on
+#: 0.167.2: 434 bytes). Which file holds it is `_daemon_pid_file`'s.
 _DAEMON_PID_MAX_BYTES = 64 * 1024
+#: Codex's own artifacts under `<CODEX_HOME>/app-server-daemon`, the daemon-owned names first.
+_DAEMON_OWNED_ARTIFACTS = (
+    "daemon.pid",
+    "daemon.stderr.log",
+    "daemon-updater.pid",
+    "daemon-updater.stderr.log",
+)
+_STANDALONE_ARTIFACTS = (
+    "app-server.pid",
+    "app-server.stderr.log",
+    "app-server-updater.pid",
+    "app-server-updater.stderr.log",
+)
 _CONTINUATION, _TEXT, _CLOSE, _PING, _PONG = 0x0, 0x1, 0x8, 0x9, 0xA
 
 #: The client this adapter says it is, in `initialize`. The daemon logs it; it is not a secret.
@@ -170,7 +182,7 @@ class CodexThreadPermissions:
                 home = Path(configured).expanduser() if configured else Path.home() / ".codex"
             # One descriptor, never following a link: what is checked is what is read.
             descriptor = os.open(
-                home.joinpath(*_DAEMON_PID_RELATIVE_PATH),
+                _daemon_pid_file(home),
                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
             )
         except (OSError, RuntimeError, ValueError):
@@ -329,6 +341,37 @@ class CodexThreadPermissions:
             with contextlib.suppress(Exception):
                 # Bounded on its own: this runs after the deadline has fired, too.
                 await asyncio.wait_for(writer.wait_closed(), 1.0)
+
+
+def _daemon_pid_file(home: Path) -> Path:
+    """The pid file Codex keeps for this home's daemon, chosen by Codex's own rule.
+
+    Only a managed binary under `packages/standalone` keeps the legacy `app-server.pid`; a
+    daemon that owns its package writes `daemon.pid` (codex 0.168-0.169,
+    `app-server-daemon/src/lib.rs` `Daemon::from_environment` and `managed_install.rs`
+    `package_root`). The owner's home is the first and the drill's the second (measured
+    2026-11-13), and reading only the legacy name left every daemon-owned install with no
+    reading, so a restart never re-applied its presets. As in Codex, anything there but a
+    missing file counts as present.
+    """
+    state = home / "app-server-daemon"
+
+    def present(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        return True
+
+    if present(home / "packages" / "app-server-daemon" / "current"):
+        return state / "daemon.pid"
+    if any(present(state / name) for name in _DAEMON_OWNED_ARTIFACTS):
+        return state / "daemon.pid"
+    if any(present(state / name) for name in _STANDALONE_ARTIFACTS):
+        return state / "app-server.pid"
+    return state / "daemon.pid"
 
 
 def _plain(value: object) -> object:

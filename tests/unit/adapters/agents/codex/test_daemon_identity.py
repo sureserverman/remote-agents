@@ -145,3 +145,52 @@ async def test_a_directory_in_place_of_the_file_is_no_reading(tmp_path) -> None:
     (tmp_path / "app-server-daemon" / "app-server.pid").mkdir(parents=True)
 
     assert await _identity(tmp_path) is None
+
+
+def _write(home: Path, name: str, content: object) -> None:
+    directory = home / "app-server-daemon"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(json.dumps(content), encoding="utf-8")
+
+
+def _daemon_owned(home: Path) -> None:
+    """`<home>/packages/app-server-daemon/current`, which a daemon-owned install links in."""
+    package = home / "packages" / "app-server-daemon"
+    (package / "0.169.0").mkdir(parents=True)
+    (package / "current").symlink_to(package / "0.169.0")
+
+
+async def test_a_daemon_owned_install_is_read_from_daemon_pid(tmp_path) -> None:
+    """Measured 2026-11-13 in the drill: Codex 0.169 with its daemon's own package writes
+    `daemon.pid`; only a binary under `packages/standalone` keeps `app-server.pid`
+    (`codex-rs/app-server-daemon/src/lib.rs`, `managed_install.rs`)."""
+    _daemon_owned(tmp_path)
+    _write(tmp_path, "daemon.pid", MEASURED)
+
+    assert await _identity(tmp_path) == await _identity(_home(tmp_path / "legacy", MEASURED))
+
+
+async def test_the_daemon_owned_file_wins_over_a_legacy_one_left_behind(tmp_path) -> None:
+    _daemon_owned(tmp_path)
+    _write(tmp_path, "app-server.pid", {**MEASURED, "pid": 1})
+    _write(tmp_path, "daemon.pid", MEASURED)
+
+    assert await _identity(tmp_path) == await _identity(_home(tmp_path / "legacy", MEASURED))
+
+
+async def test_daemon_artifacts_alone_name_daemon_pid(tmp_path) -> None:
+    """No package link yet: Codex looks for its own artifacts, the daemon's first."""
+    _write(tmp_path, "app-server.pid", {**MEASURED, "pid": 1})
+    (tmp_path / "app-server-daemon" / "daemon.stderr.log").write_text("", encoding="utf-8")
+    _write(tmp_path, "daemon.pid", MEASURED)
+
+    assert await _identity(tmp_path) == await _identity(_home(tmp_path / "legacy", MEASURED))
+
+
+async def test_a_legacy_home_with_a_daemon_pid_beside_it_reads_app_server_pid(tmp_path) -> None:
+    """The owner's home: a standalone binary, legacy artifacts, and nothing the daemon owns."""
+    home = _home(tmp_path, MEASURED)
+    (home / "app-server-daemon" / "app-server.stderr.log").write_text("", encoding="utf-8")
+
+    assert await _identity(home) is not None
+    assert await _identity(home) == await _identity(_home(tmp_path / "again", MEASURED))

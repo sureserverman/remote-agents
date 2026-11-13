@@ -400,7 +400,8 @@ class _Drill:
             lines.append(f"daemon dir: {listed}")
         except Exception as error:
             lines.append(f"daemon dir: {error!r}")
-        lines.append(f"pid file: {_pid_file_shape(daemon_directory / 'app-server.pid')}")
+        for name in ("daemon.pid", "app-server.pid"):
+            lines.append(f"{name}: {_pid_file_shape(daemon_directory / name)}")
         for name in ("app-server.stderr.log", "daemon.stderr.log"):
             with contextlib.suppress(Exception):
                 lines.append(f"{name}: {(daemon_directory / name).read_text()[-1500:]!r}")
