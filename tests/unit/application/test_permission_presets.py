@@ -390,7 +390,9 @@ async def test_a_failed_change_restores_the_earlier_mode_and_returns_the_reason(
     change_rig.pass_step = _fails
     outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
     assert not outcome.changed
-    assert permission_change_sentence(outcome) == "not changed: no Codex daemon"
+    assert permission_change_sentence(outcome) == (
+        "not changed: no Codex daemon; Ask me is being set again"
+    )
     state = await change_rig.bindings.state(change_rig.session)
     assert state.requested is PermissionPreset.ASK
     # What the server holds is unknown after a failed apply, so the pass applies the earlier
@@ -473,12 +475,6 @@ async def test_a_failure_restores_what_was_confirmed_not_an_unconfirmed_request(
     assert (await change_rig.bindings.state(change_rig.session)).requested is PermissionPreset.ASK
 
 
-async def test_a_change_to_the_confirmed_preset_needs_no_wait(change_rig):
-    await change_rig.launch(PermissionPreset.ASK)
-    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
-    assert outcome.changed and change_rig.waits == 0
-
-
 async def test_a_late_confirmation_of_an_abandoned_preset_is_not_recorded(change_rig):
     await change_rig.launch(PermissionPreset.ASK)
     await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
@@ -495,7 +491,93 @@ async def test_change_refuses_a_session_on_the_providers_own_configuration_by_na
     await change_rig.launch(PermissionPreset.PROVIDER_DEFAULT)
     outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
     assert not outcome.changed
-    assert "Use Codex configuration" in outcome.reason and "relaunch" in outcome.reason
+    assert "Codex's own configuration" in outcome.reason and "relaunch" in outcome.reason
     assert change_rig.waits == 0
     state = await change_rig.bindings.state(change_rig.session)
     assert state.requested is PermissionPreset.PROVIDER_DEFAULT
+
+
+# --- Stage 3 gate, remediation round 1 --------------------------------------------------------
+
+
+async def test_the_od12_refusal_says_the_owners_exact_sentence(change_rig):
+    from remote_agents.application.permission_presets import permission_change_sentence
+
+    await change_rig.launch(PermissionPreset.PROVIDER_DEFAULT)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
+    assert permission_change_sentence(outcome) == (
+        "not changed: uses Codex's own configuration; relaunch with a mode to change it live"
+    )
+
+
+async def test_a_successor_inherits_the_confirmed_mode_while_a_change_is_in_flight(change_rig):
+    """Tier-2: a rollover during a change's wait must not hand its successor the unconfirmed
+    pick, which the owner may be told a moment later was not made."""
+    await change_rig.launch(PermissionPreset.ASK)
+    await change_rig.bindings.set_requested(change_rig.session, PermissionPreset.FULL_ACCESS)
+    inherited = await change_rig.permissions.resolve(
+        change_rig.record.profile_id, None, change_rig.session
+    )
+    assert inherited is PermissionPreset.ASK
+
+
+async def test_a_successor_after_a_failed_change_inherits_the_launch_mode(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    await change_rig.bindings.set_requested(change_rig.session, PermissionPreset.FULL_ACCESS)
+    await change_rig.bindings.mark_failed(
+        change_rig.session, "no Codex daemon", requested=PermissionPreset.FULL_ACCESS
+    )
+    inherited = await change_rig.permissions.resolve(
+        change_rig.record.profile_id, None, change_rig.session
+    )
+    assert inherited is PermissionPreset.ASK
+
+
+async def test_a_change_that_did_not_take_says_the_earlier_mode_is_set_again(change_rig):
+    """Second pass: the apply may have landed late, so the sentence must not imply the pane is
+    certainly on the earlier mode; it says the earlier one is being set again."""
+    from remote_agents.application.permission_presets import permission_change_sentence
+
+    await change_rig.launch(PermissionPreset.ASK)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    assert permission_change_sentence(outcome) == (
+        "not changed: it was not applied in time; Ask me is being set again"
+    )
+
+
+async def test_a_cancelled_change_still_restores_the_earlier_mode(change_rig):
+    import asyncio
+
+    await change_rig.launch(PermissionPreset.ASK)
+    started = asyncio.Event()
+
+    async def hang(rig) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    change_rig.pass_step = hang
+    task = asyncio.create_task(
+        change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    state = await change_rig.bindings.state(change_rig.session)
+    assert (state.requested, state.applied) == (PermissionPreset.ASK, None)
+
+
+async def test_picking_the_current_mode_applies_it_afresh_before_saying_now(change_rig):
+    """Second pass: after a server restart the stored confirmation is stale, so "now <mode>"
+    is said only once the pass has applied it again."""
+    await change_rig.launch(PermissionPreset.ASK)
+    seen = []
+
+    async def applies_after_look(rig) -> None:
+        seen.append((await rig.bindings.state(rig.session)).applied)
+        await _applies(rig)
+
+    change_rig.pass_step = applies_after_look
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
+    assert outcome.changed
+    assert seen and seen[0] is None, "the old confirmation was not cleared before waiting"

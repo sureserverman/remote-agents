@@ -134,8 +134,8 @@ class SessionPermissions:
 
         A resume with no pick takes the current default, never the conversation's last
         preset: the owner's Settings choice is what a resume follows. A continuation inherits
-        what its predecessor asks for now, which a live change may have moved since launch --
-        whether or not the server has confirmed it yet: the successor's own apply settles that."""
+        its predecessor's confirmed mode, which a live change may have moved since launch --
+        never a pick still in flight, which the owner may then be told did not take."""
         supported = self.settings.profiles.get(profile_id)
         if supported is None:
             if override is not None:
@@ -148,9 +148,19 @@ class SessionPermissions:
             if source is None or source.profile_id != profile_id:
                 raise ValueError("permission source is missing or belongs to another provider")
             state = await self.bindings.state(inherit)
-            preset = (
-                state.requested if state is not None else await self.bindings.for_session(inherit)
-            )
+            if state is None:
+                preset = await self.bindings.for_session(inherit)
+            elif state.applied is not None:
+                # What the server confirmed: the current mode, or the one a change in flight
+                # would replace.
+                preset = state.applied
+            elif state.failure is None:
+                # Nothing confirmed yet: the launch's own request, or the earlier mode a failed
+                # change restored.
+                preset = state.requested
+            else:
+                # A failure stands, possibly for a pick about to be undone: the launch choice.
+                preset = await self.bindings.for_session(inherit) or state.requested
             if preset is None:
                 preset = await self.settings.read()
         else:
@@ -197,8 +207,7 @@ class SessionPermissions:
             return PermissionChange(
                 False,
                 preset,
-                f"it uses {permission_label(PermissionPreset.PROVIDER_DEFAULT)}; "
-                "relaunch with a mode to change it live",
+                "uses Codex's own configuration; relaunch with a mode to change it live",
             )
         if state.failure is None and state.applied is not state.requested:
             # An apply is under way: the launch's own, or another surface's change. Changing
@@ -208,14 +217,27 @@ class SessionPermissions:
                 False, preset, "its permissions are still being applied; try again shortly"
             )
         earlier = state.requested
-        if earlier is preset and state.failure is None:
-            # Already asked for and confirmed. After a server restart the pass applies it again
-            # by itself, so there is nothing for this change to wait for.
-            return PermissionChange(True, preset)
         try:
-            await self.bindings.set_requested(session_id, preset)
+            if earlier is preset:
+                # The stored confirmation may be stale (a server restart), so "now <mode>" is
+                # earned by a fresh apply: forget it, and the pass applies the mode again.
+                await self.bindings.restore_requested(session_id, preset, replacing=preset)
+            else:
+                await self.bindings.set_requested(session_id, preset)
         except LookupError:
             return PermissionChange(False, preset, "the session has ended")
+        try:
+            return await self._await_outcome(session_id, preset, earlier)
+        except asyncio.CancelledError:
+            # The surface went away mid-wait (a restart, a closed console): undo the pick, so
+            # nothing the owner was not told about is left asked for.
+            if earlier is not preset:
+                await self.bindings.restore_requested(session_id, earlier, replacing=preset)
+            raise
+
+    async def _await_outcome(
+        self, session_id: SessionId, preset: PermissionPreset, earlier: PermissionPreset
+    ) -> PermissionChange:
         deadline = self._clock() + CHANGE_WAIT_SECONDS
         reason = "it was not applied in time"
         while self._clock() < deadline:
@@ -231,5 +253,8 @@ class SessionPermissions:
             if state.applied is preset:
                 return PermissionChange(True, preset)
         if earlier is not preset:
-            await self.bindings.restore_requested(session_id, earlier, replacing=preset)
+            if await self.bindings.restore_requested(session_id, earlier, replacing=preset):
+                # The apply may still land late, so the pane is not promised the earlier mode;
+                # the pass applies it again.
+                reason = f"{reason}; {permission_label(earlier)} is being set again"
         return PermissionChange(False, preset, reason)

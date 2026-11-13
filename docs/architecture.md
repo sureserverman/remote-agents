@@ -372,7 +372,8 @@ outstanding request identity/time and whole-workflow completion; it launches or 
 nothing. See [session continuation contracts](workflows/session-continuation.md).
 
 Folder authority now includes recorded outside-folder conversations in manual and
-restart recovery. The original project association and saved preset survive. A missing,
+restart recovery. The original project association survives; a restart keeps the
+predecessor's confirmed permission mode, and a manual resume takes the current default. A missing,
 moved or noncanonical root, ambiguous ownership, or legacy automatic row without root
 provenance holds instead of falling back to the project's current folder. Reusing an
 existing conversation also requires a matching live/preserved pane; failure produces a

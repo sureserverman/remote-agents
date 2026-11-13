@@ -1109,8 +1109,8 @@ conversation binding remains unsupervised, including its first cross-repo writer
 service never falls back to the shared daemon's starter identity.
 
 Resume includes appropriate persisted outside-folder conversations from ended sessions as
-well as the project and its surviving worktrees. It retains the original project association,
-folder and saved preset. Root changes or an unavailable existing pane produce a refusal or
+well as the project and its surviving worktrees. It retains the original project association
+and folder; with no pick it takes the current permission default. Root changes or an unavailable existing pane produce a refusal or
 visible hold. Source checks and the observed native Codex resume/hold route do not establish
 the full native-provider, restart or Telegram acceptance matrix. See the
 [continuation contracts](docs/workflows/session-continuation.md) and

@@ -167,11 +167,16 @@ async def test_the_keyboards_choices_are_exactly_the_live_choices() -> None:
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary = _boundary(_Sessions(_record()))
     anchor = await _picker(chat, boundary)
-    offered = [label.removesuffix(" ✓") for label in _labels(chat.messages[anchor])]
-    live = [choice.label for choice in LIVE_CHOICES]
-    assert [label for label in offered if label in {c.label for c in LIVE_CHOICES}] == live
-    assert "Use Codex configuration" not in offered
-    assert not any("default" in label.lower() for label in offered)
+    message = chat.messages[anchor]
+    picks = [
+        unpadded(button.text).removesuffix(" ✓")
+        for row in message.reply_markup.inline_keyboard
+        for button in row
+        if not unpadded(button.text).startswith(("‹", "•", "Back"))
+        and unpadded(button.text) != "Launch"
+    ]
+    # Every button that is not navigation is a pick, and the picks are exactly the live set.
+    assert picks == [choice.label for choice in LIVE_CHOICES]
 
 
 async def test_a_pick_changes_once_even_when_the_press_is_redelivered() -> None:
@@ -199,15 +204,37 @@ async def test_a_failed_pick_says_not_changed_with_the_reason_escaped() -> None:
     assert "not changed: daemon said <nope>" in unescape(raw)
 
 
-async def test_a_session_on_the_providers_configuration_is_refused_by_name() -> None:
-    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    outcome = PermissionChange(
-        False,
-        PermissionPreset.APPROVE_FOR_ME,
-        "it uses Use Codex configuration; relaunch with a mode to change it live",
-    )
-    sessions = _Sessions(_record(), outcome)
-    boundary = _boundary(sessions)
-    anchor = await _picker(chat, boundary)
-    await boundary.callback(chat.press(_token(chat.messages[anchor], "Approve for me")), None)
-    assert "relaunch with a mode" in unescape(chat.messages[anchor].text)
+async def test_a_session_on_the_providers_configuration_is_refused_with_the_od12_sentence(
+    tmp_path,
+) -> None:
+    """Through the real use case and store, not a canned outcome."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.application.permission_presets import SessionPermissions
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        record = _record()
+        await store.save(record, permissions=PermissionPreset.PROVIDER_DEFAULT)
+        settings = PermissionSettings(
+            _Setting(), profiles={ProfileId("codex"): tuple(PermissionPreset)}
+        )
+        use_case = SessionPermissions(settings, SQLitePermissionBindings(connection), store)
+
+        class _Real(_Sessions):
+            async def change_session_permissions(self, session_id, preset):
+                self.changes.append((session_id, preset))
+                return await use_case.change(session_id, preset)
+
+        sessions = _Real(record)
+        boundary = _boundary(sessions)
+        chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+        anchor = await _picker(chat, boundary)
+        await boundary.callback(chat.press(_token(chat.messages[anchor], "Full access")), None)
+        assert unescape(chat.messages[anchor].text) == (
+            "not changed: uses Codex's own configuration; relaunch with a mode to change it live"
+        )
+    finally:
+        connection.close()

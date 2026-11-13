@@ -701,7 +701,8 @@ it and ask for it but never act.
   before the predecessor can be stopped gracefully onto an idle, empty composer, checked
   again under its key lock. A turn is never interrupted to do it.
 - **Folder recovery and completion.** Recorded outside-folder conversations now appear
-  under their original project and can be manually/restart resumed with their saved preset.
+  under their original project and can be manually or restart resumed. A restart keeps the
+  predecessor's confirmed permission mode; a manual resume takes the current default.
   Missing, moved, ambiguous or noncanonical roots hold; legacy automatic rows without root
   provenance also hold. Existing conversation reuse needs a verified matching live/preserved
   pane or displays a named hold without replacement. A correlated v2 whole-workflow finished

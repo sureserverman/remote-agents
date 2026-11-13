@@ -76,9 +76,8 @@ For each new process, precedence is:
 | Priority | Source |
 | --- | --- |
 | 1 | Explicit per-launch/resume override |
-| 2 | Inherited source session's immutable preset, for restart/rollover |
-| 3 | Recorded managed conversation preset, for manual resume |
-| 4 | Current persisted default |
+| 2 | Inherited source session's confirmed mode, for restart/rollover (a live change may have moved it since launch; a pick still in flight is never inherited) |
+| 3 | Current persisted default, which a manual resume with no pick takes |
 
 An inherited legacy source without a preset falls back to the current default. An already
 running conversation is reused only when its pane and project/profile ownership are verified;

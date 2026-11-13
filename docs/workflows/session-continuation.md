@@ -48,9 +48,10 @@ qualification remains an independent final gate.
 - **Preconditions:** The source session or provider conversation is attributable to the same
   provider. The normal runtime includes `serve`, which owns reconciliation and restart work.
 - **Steps:**
-  1. For a new process, resolve explicit override → inherited session's current request
-     (`session_permission_state.requested`, which a live change may have moved; its launch
-     snapshot when it has no state row) → current persisted default. A resume with no pick
+  1. For a new process, resolve explicit override → inherited session's confirmed mode
+     (`session_permission_state.applied`, which a live change may have moved; its request when
+     nothing is confirmed yet; its launch snapshot when a failure stands or it has no state
+     row) → current persisted default. A pick still in flight is never inherited. A resume with no pick
      takes the current default; the conversation's earlier preset is no longer consulted. An
      inherited legacy row without metadata uses the current default rather than inventing an
      earlier choice.
@@ -68,7 +69,7 @@ qualification remains an independent final gate.
 - **Postconditions:** The next managed process retains its chosen source preset, unless the
   owner explicitly overrides it. Inspection distinguishes unknown legacy metadata. A failed
   continuation preserves existing session data.
-- **Side effects:** Additive SQLite permission records and content-free conversation bindings;
+- **Side effects:** Additive SQLite permission records (launch snapshot and apply state);
   the existing restart/rollover lifecycle creates or adopts at most one successor.
 - **Invariants:** Native permission edits are not inferred. Provider-default adds no policy
   switches. No model/provider or normal profile is selected by continuation.
@@ -131,7 +132,8 @@ qualification remains an independent final gate.
   2. Resolve the selected conversation to its exact project and folder. Revalidate the
      canonical registered-root snapshot and folder ownership. A removed worktree cannot be
      revived through an outside-folder row; root moves and symlink retargets refuse.
-  3. Resolve the saved preset using WF-CONT-002. Save the new session, immutable registered
+  3. Resolve the preset using WF-CONT-002 (the current default unless the owner picks one).
+     Save the new session, immutable registered
      root, folder and preset atomically before its pane starts.
   4. If the conversation already has a managed session, verify pane liveness/preservation
      and project/profile ownership. Otherwise remain on a named hold, preserve all existing
@@ -194,7 +196,7 @@ qualification remains an independent final gate.
      what the daemon confirmed, so the pass applies the earlier mode afresh.
 - **Postconditions:** The surface says the shared sentence: "now <mode>" or
   "not changed: <reason>". Inspection shows "now <mode>" beside the launch snapshot.
-  A rollover or restart successor inherits the current request.
+  A rollover or restart successor inherits the confirmed mode.
 - **Side effects:** One `session_permission_state` update (and one undo on failure); one
   `thread/settings/update` call from `serve`. The Settings default is unchanged.
 - **Invariants:** Nothing is typed into the pane. A late confirmation or failure of an
