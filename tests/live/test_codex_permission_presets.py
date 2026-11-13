@@ -147,12 +147,23 @@ def _key(prefix: str) -> str:
 
 
 class _ThroughWrapper:
-    """`CommandRunner` that runs `codex …` as the drill's confined wrapper, in its own home."""
+    """`CommandRunner` that runs `codex …` as the drill's confined wrapper, in its own home.
 
-    def __init__(self, wrapper: Path, tries: list[str]) -> None:
+    **The socket path crosses a mount boundary.** `<CODEX_HOME>/app-server-control/
+    app-server-control.sock` is a symlink into Codex's fixed `/tmp/codex-daemon-<uid>/` (0.169,
+    `codex-rs/uds/src/daemon_directory.rs`), which the sandbox shadows with this home's private
+    `.native-daemon-locks` (`daemon_lock_mount`) so a drill never writes into the owner's. The
+    service's pass runs on the host, where that symlink resolves into the owner's directory and
+    finds nothing: every apply read "no Codex daemon" (owner run 2026-11-13T21:17). So the probe's
+    `socketPath` is handed on as the file the sandbox mounted there. Everything after -- the
+    stat, the owner check, the connect, the handshake, the calls -- is the adapter's own.
+    """
+
+    def __init__(self, wrapper: Path, tries: list[str], codex_home: Path) -> None:
         self._wrapper = str(wrapper)
         self._runner = AsyncCommandRunner()
         self._tries = tries
+        self._codex_home = codex_home
 
     async def run(self, argv: tuple[str, ...], *, timeout: float) -> CommandResult:
         assert argv[0] == "codex", argv
@@ -166,7 +177,32 @@ class _ThroughWrapper:
             f"{started:.2f} run {argv[1:]} -> exit {result.returncode} "
             f"out {result.stdout.strip()[:400]!r} err {result.stderr.strip()[-400:]!r}"
         )
-        return result
+        if argv[1:] != ("app-server", "daemon", "version") or result.returncode != 0:
+            return result
+        stdout = _host_socket_path(result.stdout, self._codex_home)
+        if stdout != result.stdout:
+            self._tries.append(
+                f"{started:.2f} socketPath on the host: {json.loads(stdout)['socketPath']}"
+            )
+        return CommandResult(returncode=result.returncode, stdout=stdout, stderr=result.stderr)
+
+
+def _host_socket_path(stdout: str, codex_home: Path) -> str:
+    """`daemon version`'s JSON with a shadowed `socketPath` as the host sees it, else as is."""
+    try:
+        payload = json.loads(stdout)
+    except ValueError:
+        return stdout
+    if not isinstance(payload, dict) or not isinstance(payload.get("socketPath"), str):
+        return stdout
+    try:
+        target = Path(os.readlink(payload["socketPath"]))
+    except OSError:
+        return stdout
+    if target.parent != Path("/tmp") / f"codex-daemon-{os.getuid()}":
+        return stdout
+    payload["socketPath"] = str(codex_home / ".native-daemon-locks" / target.name)
+    return json.dumps(payload)
 
 
 class _Drill:
@@ -243,7 +279,7 @@ class _Drill:
         #: Each permission try's steps, wall-clock stamped, for the diagnosis to print.
         self.tries: list[str] = []
         self.applier = CodexThreadPermissions(
-            _ThroughWrapper(self.wrapper, self.tries), home=codex_home
+            _ThroughWrapper(self.wrapper, self.tries, codex_home), home=codex_home
         )
         descriptors = tuple(
             descriptor
