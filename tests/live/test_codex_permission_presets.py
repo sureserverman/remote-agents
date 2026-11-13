@@ -349,6 +349,10 @@ class _Drill:
     async def diagnosis(self, headline: str) -> str:
         lines = [headline, f"notices: {self.notices}", f"pass errors: {self.errors[-5:]}"]
         lines.append(f"now {time.time():.2f}; tries: {self.tries[-16:]}")
+        try:
+            lines.append(f"server identity: {await self.applier.server_identity()!r}")
+        except Exception as error:
+            lines.append(f"server identity: {error!r}")
         lines += self.daemon_evidence()
         with contextlib.suppress(Exception):
             for record in await self.backend.sessions.list_sessions():
@@ -383,19 +387,23 @@ class _Drill:
         with contextlib.suppress(Exception):
             lines.append(f"home: {sorted(item.name for item in self.codex_home.iterdir())}")
         daemon_directory = self.codex_home / "app-server-daemon"
-        with contextlib.suppress(Exception):
-            lines.append(
-                "daemon dir: "
-                + repr(
-                    [
-                        (item.name, round(item.stat().st_mtime, 2), item.stat().st_size)
-                        for item in sorted(daemon_directory.iterdir())
-                    ]
+        try:
+            # `lstat`: a link into the shadowed /tmp/codex-daemon-<uid> dangles on the host.
+            listed = []
+            for item in sorted(daemon_directory.iterdir()):
+                details = item.lstat()
+                link = f" -> {os.readlink(item)}" if stat.S_ISLNK(details.st_mode) else ""
+                listed.append(
+                    f"{item.name} {stat.filemode(details.st_mode)} uid {details.st_uid} "
+                    f"{details.st_size}B mtime {details.st_mtime:.2f}{link}"
                 )
-            )
-        log = daemon_directory / "daemon.stderr.log"
-        with contextlib.suppress(Exception):
-            lines.append(f"daemon stderr log: {log.read_text()[-1500:]!r}")
+            lines.append(f"daemon dir: {listed}")
+        except Exception as error:
+            lines.append(f"daemon dir: {error!r}")
+        lines.append(f"pid file: {_pid_file_shape(daemon_directory / 'app-server.pid')}")
+        for name in ("app-server.stderr.log", "daemon.stderr.log"):
+            with contextlib.suppress(Exception):
+                lines.append(f"{name}: {(daemon_directory / name).read_text()[-1500:]!r}")
         return lines
 
     async def until_running(self, session_id: SessionId) -> None:
@@ -504,6 +512,37 @@ def _turns(home: Path, workspace: Path) -> dict[str, dict]:
                 if payload.get("role") == "assistant" and payload.get("phase") == "final_answer":
                     turns[current]["complete"] = True
     return turns
+
+
+def _pid_file_shape(path: Path) -> str:
+    """The pid file as `server_identity` meets it: its kind and owner, and its fields' types.
+
+    Types, not values, beyond the pid and start time: the rest names executables by digest.
+    """
+    try:
+        details = path.lstat()
+    except OSError as error:
+        return repr(error)
+    shape = f"{stat.filemode(details.st_mode)} uid {details.st_uid} {details.st_size}B"
+    if stat.S_ISLNK(details.st_mode):
+        return f"{shape} -> {os.readlink(path)}"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return f"{shape}; unreadable as JSON: {error!r}"
+    if not isinstance(record, dict):
+        return f"{shape}; JSON {type(record).__name__}"
+    identity = record.get("processIdentity")
+    nested = (
+        {key: type(value).__name__ for key, value in identity.items()}
+        if isinstance(identity, dict)
+        else type(identity).__name__
+    )
+    fields = {key: type(value).__name__ for key, value in record.items()}
+    return (
+        f"{shape}; fields {fields}; pid {record.get('pid')!r}; "
+        f"processStartTime {record.get('processStartTime')!r}; processIdentity {nested}"
+    )
 
 
 def _record_connects(monkeypatch: pytest.MonkeyPatch, tries: list[str]) -> None:
