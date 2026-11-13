@@ -149,13 +149,24 @@ def _key(prefix: str) -> str:
 class _ThroughWrapper:
     """`CommandRunner` that runs `codex …` as the drill's confined wrapper, in its own home."""
 
-    def __init__(self, wrapper: Path) -> None:
+    def __init__(self, wrapper: Path, tries: list[str]) -> None:
         self._wrapper = str(wrapper)
         self._runner = AsyncCommandRunner()
+        self._tries = tries
 
     async def run(self, argv: tuple[str, ...], *, timeout: float) -> CommandResult:
         assert argv[0] == "codex", argv
-        return await self._runner.run((self._wrapper, *argv[1:]), timeout=timeout)
+        started = time.time()
+        try:
+            result = await self._runner.run((self._wrapper, *argv[1:]), timeout=timeout)
+        except Exception as error:
+            self._tries.append(f"{started:.2f} run {argv[1:]} -> {error!r}")
+            raise
+        self._tries.append(
+            f"{started:.2f} run {argv[1:]} -> exit {result.returncode} "
+            f"out {result.stdout.strip()[:400]!r} err {result.stderr.strip()[-400:]!r}"
+        )
+        return result
 
 
 class _Drill:
@@ -229,7 +240,11 @@ class _Drill:
         self.connection = open_database(paths.database_path, migrations=MIGRATIONS)
         self.projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
         self.projects.refresh()
-        self.applier = CodexThreadPermissions(_ThroughWrapper(self.wrapper), home=codex_home)
+        #: Each permission try's steps, wall-clock stamped, for the diagnosis to print.
+        self.tries: list[str] = []
+        self.applier = CodexThreadPermissions(
+            _ThroughWrapper(self.wrapper, self.tries), home=codex_home
+        )
         descriptors = tuple(
             descriptor
             if descriptor.thread_permissions is None
@@ -297,6 +312,7 @@ class _Drill:
 
     async def diagnosis(self, headline: str) -> str:
         lines = [headline, f"notices: {self.notices}", f"pass errors: {self.errors[-5:]}"]
+        lines.append(f"now {time.time():.2f}; tries: {self.tries[-16:]}")
         lines += self.daemon_evidence()
         with contextlib.suppress(Exception):
             for record in await self.backend.sessions.list_sessions():
@@ -330,7 +346,18 @@ class _Drill:
             lines.append(f"processes from the drill home: {len(managed_daemons(self.codex_home))}")
         with contextlib.suppress(Exception):
             lines.append(f"home: {sorted(item.name for item in self.codex_home.iterdir())}")
-        log = self.codex_home / "app-server-daemon" / "daemon.stderr.log"
+        daemon_directory = self.codex_home / "app-server-daemon"
+        with contextlib.suppress(Exception):
+            lines.append(
+                "daemon dir: "
+                + repr(
+                    [
+                        (item.name, round(item.stat().st_mtime, 2), item.stat().st_size)
+                        for item in sorted(daemon_directory.iterdir())
+                    ]
+                )
+            )
+        log = daemon_directory / "daemon.stderr.log"
         with contextlib.suppress(Exception):
             lines.append(f"daemon stderr log: {log.read_text()[-1500:]!r}")
         return lines
@@ -443,6 +470,28 @@ def _turns(home: Path, workspace: Path) -> dict[str, dict]:
     return turns
 
 
+def _record_connects(monkeypatch: pytest.MonkeyPatch, tries: list[str]) -> None:
+    """Log every Unix socket connect the pass makes: what the path was, and how it ended."""
+    real = asyncio.open_unix_connection
+
+    async def recorded(path=None, *args, **kwargs):
+        started = time.time()
+        try:
+            details = os.stat(path)
+            seen = f"{stat.filemode(details.st_mode)} uid {details.st_uid}"
+        except OSError as error:
+            seen = repr(error)
+        try:
+            opened = await real(path, *args, **kwargs)
+        except OSError as error:
+            tries.append(f"{started:.2f} connect {path} ({seen}) -> {error!r}")
+            raise
+        tries.append(f"{started:.2f} connect {path} ({seen}) -> ok")
+        return opened
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", recorded)
+
+
 async def _prompt_when_idle(terminal, session, text, *, timeout=30):
     """Retry only a definitely untouched busy refusal, never an uncertain delivery."""
     deadline = time.monotonic() + timeout
@@ -483,6 +532,7 @@ async def _drill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, codex: Path):
     passes = None
     try:
         drill = _Drill(tmp_path.resolve(), codex, codex_home)
+        _record_connects(monkeypatch, drill.tries)
         passes = asyncio.create_task(drill.serve(stop))
         yield drill
     finally:
