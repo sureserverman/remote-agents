@@ -10,6 +10,7 @@ each dialog as DIALOG -- is what makes the relay useful rather than merely safe.
 from __future__ import annotations
 
 import re
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from remote_agents.adapters.tmux.composer import (
     classify,
     composer_draft,
     in_shell_mode,
+    shell_line_refusal,
     turn_ended,
 )
 
@@ -39,6 +41,7 @@ _SHELL_MODE = {
     "claude/composed_shell_mode",
     "codex/composed_shell_mode",
     "codex/composed_shell_mode_0158",
+    "codex/composed_shell_mode_0169_wrapped",
 }
 
 
@@ -165,6 +168,39 @@ def test_the_draft_is_read_back_line_for_line(agent: str, draft: str) -> None:
     screen = (_PANES / agent / "composed.txt").read_text(encoding="utf-8")
 
     assert composer_draft(screen, _descriptor(agent)) == draft
+
+
+def test_codex_reads_a_draft_back_over_a_wrapped_footer() -> None:
+    """0.169 wraps a long model line where 0.168 cut it short (`idle_0169_wrapped.md`)."""
+    screen = (_PANES / "codex" / "composed_0169_wrapped.txt").read_text(encoding="utf-8")
+
+    assert composer_draft(screen, _descriptor("codex")) == "first line of a draft\nsecond line"
+
+
+@pytest.mark.parametrize("head", ["›", "!"], ids=["composer", "shell"])
+def test_codex_reading_a_wrapped_footer_stays_linear_in_the_screen(head: str) -> None:
+    """Letting the footer wrap must not make the pattern backtrack over every split of the
+    screen: a first draft took 2.5 s on 200 such rows, and the binder reads every few seconds."""
+    row = "  " + " · ".join(["word"] * 20)
+    screen = f"{head} hi\n" + "\n".join([row] * 400) + "\nan unindented last line"
+    started = time.monotonic()
+
+    classify(screen, _descriptor("codex"))
+    in_shell_mode(screen, _descriptor("codex"))
+
+    assert time.monotonic() - started < 0.5
+
+
+def test_codex_may_submit_a_whole_shell_line_over_a_wrapped_footer() -> None:
+    """The binder presses Enter only when this says the pasted line is all there, in shell mode."""
+    screen = (_PANES / "codex" / "composed_shell_mode_0169_wrapped.txt").read_text(encoding="utf-8")
+    line = (
+        "!/usr/bin/true bind-thread --activity-dir /tmp/pytest-of-user/pytest-139/"
+        "test_codex_permission_presets_0/home/.local/state/remote-agents --session 95f007f9"
+        " --nonce abc"
+    )
+
+    assert shell_line_refusal(screen, _descriptor("codex"), line) is None
 
 
 @pytest.mark.parametrize("agent", sorted(_PROFILE))

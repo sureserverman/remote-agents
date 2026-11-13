@@ -85,13 +85,24 @@ def descriptor() -> ProviderDescriptor:
             # 0.159.0 keeps a right-aligned `⚠ 1 warning · f2 to view` there when the hint
             # line goes -- while a draft is in the composer (`composed_0159_warning.txt`) --
             # and every Codex draft read as not seen until it was allowed.
+            # 0.169.0 wraps a model line too long for the pane onto indented lines below it,
+            # where 0.168 cut it short with `…` (`idle_0169_wrapped.txt`, 80x24 before a client
+            # attaches). The draft is the shortest that leaves a footer, so an empty composer
+            # still reads its placeholder alone. A later draft line holding ` · ` is then read
+            # short, and the read-back refuses the send rather than submitting it. The footer's
+            # lines, its hint line among them, are every indented line to the end; the lookahead
+            # checks that once, so the pattern stays linear in the screen.
             composer=(
-                r"^› (?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*"
-                r"(?:\n  [^\n]*\? for shortcuts[^\n]*|\n {2,}⚠[^\n]*)?\Z"
+                r"^› (?=[^\n]*(?:\n  [^\n]*)*\Z)"
+                r"(?P<draft>[^\n]*(?:\n  [^\n]*)*?)\n  [^\n]* · [^\n]*(?:\n  [^\n]*)*\Z"
             ),
             # Shell mode puts `!` where `›` was (`composed_shell_mode.txt`); 0.158.0 moved its
-            # `Shell mode` label to a line of its own (`composed_shell_mode_0158.txt`).
-            shell=r"^![^\n]*(?:\n  [^\n]*)*?\n  [^\n]* · [^\n]*(?:\n +Shell mode)?\Z",
+            # `Shell mode` label to a line of its own (`composed_shell_mode_0158.txt`); 0.169.0
+            # wraps the model line as above (`composed_shell_mode_0169_wrapped.txt`).
+            shell=(
+                r"^!(?=[^\n]*(?:\n  [^\n]*)*(?:\n +Shell mode)?\Z)"
+                r"[^\n]*(?:\n  [^\n]*)*?\n  [^\n]* · [^\n]*(?:\n  [^\n]*)*(?:\n +Shell mode)?\Z"
+            ),
             placeholders=(r"Ask Codex to do anything", r"Ask a follow-up question"),
             # Any column-0 bullet carrying `esc to interrupt`: Codex heads the line with its
             # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.
