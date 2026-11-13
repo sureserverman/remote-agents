@@ -57,7 +57,7 @@ import pytest
 import yaml
 from _pytest.mark.expression import Expression
 from agent_panes import answer_hook_review
-from codex_home import retire_codex_home, short_codex_home
+from codex_home import managed_daemons, retire_codex_home, short_codex_home
 from native_isolation import codex_command, sharing_daemon
 
 from remote_agents.adapters.agents.codex.remote_control import AsyncCommandRunner, CommandResult
@@ -74,7 +74,6 @@ from remote_agents.application.commands import (
     LaunchCommand,
     ResumeCommand,
 )
-from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.session_folders import SessionFolders
 from remote_agents.composition.backend import ProjectCatalogueProvider, compose_backend
@@ -91,6 +90,7 @@ from remote_agents.domain.conversations import (
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.trust import TrustState
+from remote_agents.ports.terminal import PromptOutcome, PromptReason
 from remote_agents.production import ProductionPaths
 
 CODEX = ProfileId("codex")
@@ -297,14 +297,43 @@ class _Drill:
 
     async def diagnosis(self, headline: str) -> str:
         lines = [headline, f"notices: {self.notices}", f"pass errors: {self.errors[-5:]}"]
+        lines += self.daemon_evidence()
         with contextlib.suppress(Exception):
             for record in await self.backend.sessions.list_sessions():
                 state = await self.bindings.state(record.session_id)
                 lines.append(f"session {record.session_id}: {record.state} permissions {state}")
                 with contextlib.suppress(Exception):
-                    tail = (await self.terminal.capture(record.session_id)).splitlines()[-20:]
-                    lines.extend(f"  | {line}" for line in tail)
+                    # The whole screen: a "without the shared background server" line sits on top.
+                    screen = (await self.terminal.capture(record.session_id)).splitlines()
+                    lines.extend(f"  | {line}" for line in screen if line.strip())
         return "\n".join(lines)
+
+    def daemon_evidence(self) -> list[str]:
+        """What the drill's own daemon looks like: only this disposable home, never the owner's."""
+        lines = []
+        try:
+            probe = subprocess.run(
+                [str(self.wrapper), "app-server", "daemon", "version"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            lines.append(f"daemon version: exit {probe.returncode} stdout {probe.stdout.strip()!r}")
+            lines.append(f"daemon version stderr: {probe.stderr.strip()[-600:]!r}")
+        except Exception as error:
+            lines.append(f"daemon version: {error!r}")
+        control = self.codex_home / "app-server-control"
+        with contextlib.suppress(Exception):
+            lines.append(f"control dir: {sorted(item.name for item in control.iterdir())}")
+        with contextlib.suppress(Exception):
+            lines.append(f"processes from the drill home: {len(managed_daemons(self.codex_home))}")
+        with contextlib.suppress(Exception):
+            lines.append(f"home: {sorted(item.name for item in self.codex_home.iterdir())}")
+        log = self.codex_home / "app-server-daemon" / "daemon.stderr.log"
+        with contextlib.suppress(Exception):
+            lines.append(f"daemon stderr log: {log.read_text()[-1500:]!r}")
+        return lines
 
     async def until_running(self, session_id: SessionId) -> None:
         started = time.monotonic()
@@ -352,16 +381,10 @@ class _Drill:
     async def turn(self, session_id: SessionId, *, other_than: str | None = None) -> dict:
         """One short text turn, and the policy its `turn_context` recorded."""
         before = set(_turns(self.codex_home, self.repo))
-        booting = {DeliveryVerdict.WAIT, DeliveryVerdict.NOT_RUNNING, DeliveryVerdict.UNRECOGNISED}
-        started = time.monotonic()
-        while True:
-            verdict = delivery_verdict(await self.terminal.send_prompt(session_id, PROMPT))
-            if verdict is DeliveryVerdict.SENT:
-                break
-            assert verdict in booting and time.monotonic() - started < _STARTUP_SECONDS, (
-                await self.diagnosis(f"the prompt into {session_id} was {verdict}")
-            )
-            await asyncio.sleep(_POLL_SECONDS * 2)
+        delivered = await _prompt_when_idle(self.terminal, session_id, PROMPT)
+        assert delivered.outcome is PromptOutcome.SENT, await self.diagnosis(
+            f"the prompt into {session_id} was {delivered.outcome}: {delivered.reason}"
+        )
         deadline = time.monotonic() + _TURN_SECONDS
         while time.monotonic() < deadline:
             turns = _turns(self.codex_home, self.repo)
@@ -418,6 +441,20 @@ def _turns(home: Path, workspace: Path) -> dict[str, dict]:
                 if payload.get("role") == "assistant" and payload.get("phase") == "final_answer":
                     turns[current]["complete"] = True
     return turns
+
+
+async def _prompt_when_idle(terminal, session, text, *, timeout=30):
+    """Retry only a definitely untouched busy refusal, never an uncertain delivery."""
+    deadline = time.monotonic() + timeout
+    while True:
+        delivered = await terminal.send_prompt(session, text)
+        if (
+            delivered.outcome is not PromptOutcome.REFUSED
+            or delivered.reason is not PromptReason.BUSY
+            or time.monotonic() >= deadline
+        ):
+            return delivered
+        await asyncio.sleep(0.5)
 
 
 def _policy(observed: dict, preset: PermissionPreset, case: str) -> None:

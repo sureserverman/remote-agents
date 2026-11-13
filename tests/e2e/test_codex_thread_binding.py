@@ -21,6 +21,7 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
+from remote_agents.application.permission_apply import Readiness
 from remote_agents.application.rollover import BINDING_FAILED, RolloverPass
 from remote_agents.application.thread_binding import ThreadBinder
 from remote_agents.domain.models import (
@@ -176,6 +177,10 @@ def _rig(tmp_path: Path, **fields) -> tuple[RolloverPass, SQLiteRolloverStore, H
         now=lambda: host.clock[0],
         sleep=sleep,
     )
+
+    async def _ready(session_id, profile_id):
+        return Readiness(bound=await binder.wait_bound(session_id, profile_id))
+
     rollover_pass = RolloverPass(
         store,
         _Envelopes(host),
@@ -186,7 +191,7 @@ def _rig(tmp_path: Path, **fields) -> tuple[RolloverPass, SQLiteRolloverStore, H
         idle=idle,
         launch=host.launch,
         send=host.send,
-        bound=binder.wait_bound,
+        ready=_ready,
         graceful_stop=host.graceful_stop,
         now=lambda: _NOW,
     )

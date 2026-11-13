@@ -7,6 +7,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -236,18 +237,18 @@ def test_replaced_home_is_not_authorized_for_cleanup():
 
 
 def test_native_pid_namespace_ends_a_detached_child_even_if_it_clears_home(tmp_path):
-    import runpy
+    # The confinement every per-case native drill uses; the shared-daemon drills drop
+    # `--unshare-pid` on purpose (`sharing_daemon`) and rely on `retire_codex_home` instead.
+    from native_isolation import confined_command
 
-    bwrap = shutil.which("bwrap")
-    if bwrap is None:
+    if shutil.which("bwrap") is None:
         pytest.skip("Linux bwrap is unavailable")
-    namespace = runpy.run_path(
-        str(Path(__file__).parents[1] / "live/test_codex_permission_presets.py")
-    )
     home = short_codex_home()
-    auth = tmp_path / "dummy-auth"
+    operator = tmp_path / "operator"
+    operator.mkdir(mode=0o700)
+    credentials = Path(tempfile.mkdtemp(prefix="ra-auth-"))
+    auth = credentials / "dummy-auth"
     auth.write_text("{}")
-    (home / "auth.json").touch(mode=0o600)
     identity, stop = tmp_path / "namespace", tmp_path / "stop"
     daemon = (
         "import os,time; from pathlib import Path; "
@@ -263,7 +264,17 @@ def test_native_pid_namespace_ends_a_detached_child_even_if_it_clears_home(tmp_p
         f" while not Path({str(stop)!r}).exists(): time.sleep(0.01)\n"
     )
     process = subprocess.Popen(
-        [*namespace["_prefix"](Path(bwrap), tmp_path, home, auth), sys.executable, "-c", code],
+        [
+            *confined_command(
+                Path(sys.executable),
+                home=operator,
+                writable=(tmp_path,),
+                credentials=((auth, home / "auth.json"),),
+                codex_home=home,
+            ),
+            "-c",
+            code,
+        ],
         env={**os.environ, "CODEX_HOME": str(home)},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -305,6 +316,7 @@ def test_native_pid_namespace_ends_a_detached_child_even_if_it_clears_home(tmp_p
         if held is not None:
             os.close(held)
         retire_codex_home(home, stop=lambda: None)
+        shutil.rmtree(credentials, ignore_errors=True)
 
 
 def test_process_scan_retries_transient_unreadability_without_skipping(monkeypatch):

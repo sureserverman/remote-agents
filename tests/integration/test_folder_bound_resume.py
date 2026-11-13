@@ -87,7 +87,7 @@ async def catalogue(rig, client=None):
     )
 
 
-async def test_ended_outside_binding_is_discovered_and_resumed_with_its_saved_preset(rig):
+async def test_ended_outside_binding_is_discovered_and_resumed_with_the_current_default(rig):
     await ended_binding(rig)
     await rig.settings.set(PermissionPreset.FULL_ACCESS)
     catalog = await catalogue(rig)
@@ -101,7 +101,8 @@ async def test_ended_outside_binding_is_discovered_and_resumed_with_its_saved_pr
     assert resumed.record.project_id == PROJECT
     assert rig.launched_folders == [rig.outside]
 
-    assert await rig.bindings.for_session(resumed.record.session_id) == PermissionPreset.ASK
+    # A resume with no pick takes the current default, not the ended session's ASK (DEC-139).
+    assert await rig.bindings.for_session(resumed.record.session_id) == PermissionPreset.FULL_ACCESS
     replay = await rig.service.resume(ResumeCommand(PROJECT, CODEX, resolved, "replay"))
     assert replay.record.session_id == resumed.record.session_id
     assert rig.launched_folders == [rig.outside]
