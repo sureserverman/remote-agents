@@ -567,17 +567,50 @@ async def test_a_cancelled_change_still_restores_the_earlier_mode(change_rig):
     assert (state.requested, state.applied) == (PermissionPreset.ASK, None)
 
 
-async def test_picking_the_current_mode_applies_it_afresh_before_saying_now(change_rig):
-    """Second pass: after a server restart the stored confirmation is stale, so "now <mode>"
-    is said only once the pass has applied it again."""
+async def test_picking_the_confirmed_mode_changes_nothing_and_says_so(change_rig):
+    """Fix re-review: forcing a fresh apply could turn a working pane into a standing failure
+    with nothing to restore. A re-pick of the confirmed mode touches nothing."""
+    from remote_agents.application.permission_presets import permission_change_sentence
+
     await change_rig.launch(PermissionPreset.ASK)
-    seen = []
+    before = await change_rig.bindings.state(change_rig.session)
+    outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
+    assert permission_change_sentence(outcome) == "not changed: it is already Ask me"
+    assert await change_rig.bindings.state(change_rig.session) == before
+    assert change_rig.waits == 0
 
-    async def applies_after_look(rig) -> None:
-        seen.append((await rig.bindings.state(rig.session)).applied)
-        await _applies(rig)
 
-    change_rig.pass_step = applies_after_look
+async def test_picking_a_mode_whose_apply_failed_retries_it(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    await change_rig.bindings.mark_failed(
+        change_rig.session, "no Codex daemon", requested=PermissionPreset.ASK
+    )
+    change_rig.pass_step = _applies
     outcome = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
     assert outcome.changed
-    assert seen and seen[0] is None, "the old confirmation was not cleared before waiting"
+    state = await change_rig.bindings.state(change_rig.session)
+    assert (state.applied, state.failure) == (PermissionPreset.ASK, None)
+
+
+async def test_a_cancel_whose_restore_fails_still_reports_the_cancellation(change_rig):
+    import asyncio
+
+    await change_rig.launch(PermissionPreset.ASK)
+    started = asyncio.Event()
+
+    async def hang(rig) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("database is locked")
+
+    change_rig.pass_step = hang
+    task = asyncio.create_task(
+        change_rig.permissions.change(change_rig.session, PermissionPreset.FULL_ACCESS)
+    )
+    await started.wait()
+    change_rig.bindings.restore_requested = broken
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

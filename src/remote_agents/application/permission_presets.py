@@ -1,6 +1,7 @@
 """Shared choices and use case for managed launch permissions."""
 
 import asyncio
+import contextlib
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -135,7 +136,10 @@ class SessionPermissions:
         A resume with no pick takes the current default, never the conversation's last
         preset: the owner's Settings choice is what a resume follows. A continuation inherits
         its predecessor's confirmed mode, which a live change may have moved since launch --
-        never a pick still in flight, which the owner may then be told did not take."""
+        never a pick still in flight, which the owner may then be told did not take. So a
+        successor started during a change that then succeeds is one mode behind it, and one
+        started while a failure stands on its predecessor takes the launch choice; the
+        owner is told of that failure on the predecessor."""
         supported = self.settings.profiles.get(profile_id)
         if supported is None:
             if override is not None:
@@ -217,13 +221,14 @@ class SessionPermissions:
                 False, preset, "its permissions are still being applied; try again shortly"
             )
         earlier = state.requested
+        if earlier is preset and state.failure is None:
+            # Already asked for and confirmed. Nothing is touched: forcing a fresh apply could
+            # turn a working pane into a standing failure with nothing to restore. After a
+            # server restart the pass applies it again by itself.
+            return PermissionChange(False, preset, f"it is already {permission_label(preset)}")
         try:
-            if earlier is preset:
-                # The stored confirmation may be stale (a server restart), so "now <mode>" is
-                # earned by a fresh apply: forget it, and the pass applies the mode again.
-                await self.bindings.restore_requested(session_id, preset, replacing=preset)
-            else:
-                await self.bindings.set_requested(session_id, preset)
+            # A re-pick of a mode whose apply failed clears the failure: the pass retries it.
+            await self.bindings.set_requested(session_id, preset)
         except LookupError:
             return PermissionChange(False, preset, "the session has ended")
         try:
@@ -232,7 +237,9 @@ class SessionPermissions:
             # The surface went away mid-wait (a restart, a closed console): undo the pick, so
             # nothing the owner was not told about is left asked for.
             if earlier is not preset:
-                await self.bindings.restore_requested(session_id, earlier, replacing=preset)
+                # Best effort: a store error here must not replace the cancellation.
+                with contextlib.suppress(Exception):
+                    await self.bindings.restore_requested(session_id, earlier, replacing=preset)
             raise
 
     async def _await_outcome(

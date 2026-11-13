@@ -189,7 +189,9 @@ qualification remains an independent final gate.
   2. On a pick, refuse by name: a target outside `LIVE_CHOICES`; a provider without presets; a
      session ended or not running; a v0.69.0 session ("launched with flags; relaunch to change
      permissions"); a session on "Use Codex configuration" (OD-12); a session whose earlier
-     apply is still pending. A Telegram pick is a claimed mutation and runs once.
+     apply is still pending; the mode it already has, confirmed ("it is already <mode>"). A
+     re-pick of a mode whose apply failed retries it. A Telegram pick is a claimed mutation
+     and runs once.
   3. Set `requested`; the `serve` pass applies it with `thread/settings/update`. Wait up to
      10 s for `applied == requested` or a recorded failure.
   4. On a failure or no outcome, restore the earlier request with a compare-and-set and clear
