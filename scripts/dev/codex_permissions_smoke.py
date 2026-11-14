@@ -8,6 +8,14 @@ which a plain `codex` starts if none is running (the state Remote Control wants 
 
     uv run --locked python -I scripts/dev/codex_permissions_smoke.py
 
+`--service-sessions` opens no pane. It reads the live service's database read-only and checks
+every live Codex session that has a permission state row: its thread (the one it resumed, or
+its binding's) must be loaded on the owner's daemon, its `applied` must equal its `requested`,
+and no failure may stand. It exits 1 on any mismatch, and 2 when there is no such session at
+all, so a check run with nothing to check cannot pass.
+
+    uv run --locked python -I scripts/dev/codex_permissions_smoke.py --service-sessions
+
 A folder-trust question stops the smoke instead of being answered: answering writes the owner's
 Codex config. The update offer is skipped and new hooks are left untrusted, for the same reason.
 """
@@ -17,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -24,8 +33,11 @@ import time
 from pathlib import Path
 
 from remote_agents.adapters.agents.codex.thread_settings import CodexThreadPermissions
+from remote_agents.adapters.agents.thread_binding import thread_of
+from remote_agents.application.thread_binding import LIVE_STATES
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.thread_permissions import ThreadPermissionsError
+from remote_agents.production import ProductionPaths
 
 SOCKET = "ra-perm-smoke"
 SESSION = "smoke"
@@ -130,11 +142,70 @@ async def _own_thread(client: CodexThreadPermissions, before: frozenset[str], fo
     return own[0]
 
 
-def main() -> int:
-    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
+class NothingToCheck(Exception):
+    pass
+
+
+def _service_rows(
+    paths: ProductionPaths,
+) -> list[tuple[str, str | None, str, str | None, str | None]]:
+    """Every live Codex session with a state row: id, resumed-from thread, requested, applied,
+    failure. Read-only: the URI refuses any write, and nothing is created if the store is absent."""
+    connection = sqlite3.connect(f"{paths.database_path.resolve().as_uri()}?mode=ro", uri=True)
     try:
+        states = tuple(state.value for state in LIVE_STATES)
+        return connection.execute(
+            f"""SELECT s.session_id, s.resume_source_id, p.requested, p.applied, p.failure
+                FROM session_permission_state p JOIN sessions s ON s.session_id = p.session_id
+                WHERE s.profile_id = 'codex' AND s.state IN ({", ".join("?" for _ in states)})
+                ORDER BY s.session_id""",
+            states,
+        ).fetchall()
+    finally:
+        connection.close()
+
+
+async def service_sessions() -> int:
+    """Check each live Codex session the service applies a preset to; print one line each."""
+    paths = ProductionPaths.for_home(Path.home())
+    rows = _service_rows(paths)
+    if not rows:
+        raise NothingToCheck("no live Codex session has a permission state row")
+    loaded = await CodexThreadPermissions().loaded_threads()
+    mismatches = 0
+    for session_id, resumed_from, requested, applied, failure in rows:
+        thread = resumed_from or thread_of(paths.activity_directory, session_id)
+        problems = []
+        if thread is None:
+            problems.append("no thread bound")
+        elif thread not in loaded:
+            problems.append(f"thread {thread} not loaded on the daemon")
+        if applied != requested:
+            problems.append(f"applied {applied} != requested {requested}")
+        if failure is not None:
+            problems.append(f"failure stands: {failure}")
+        mismatches += bool(problems)
+        verdict = "; ".join(problems) if problems else f"loaded, applied {applied}"
+        print(f"{'MISMATCH' if problems else 'ok'} {session_id} thread={thread} {verdict}")
+    return 1 if mismatches else 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--service-sessions",
+        action="store_true",
+        help="check the live service's Codex sessions read-only; open no pane",
+    )
+    arguments = parser.parse_args()
+    try:
+        if arguments.service_sessions:
+            return asyncio.run(service_sessions())
         asyncio.run(smoke())
-    except (SmokeFailed, ThreadPermissionsError) as error:
+    except NothingToCheck as error:
+        print(f"NOTHING TO CHECK: {error}", file=sys.stderr)
+        return 2
+    except (SmokeFailed, ThreadPermissionsError, sqlite3.Error) as error:
         print(f"FAILED: {error}", file=sys.stderr)
         return 1
     return 0
