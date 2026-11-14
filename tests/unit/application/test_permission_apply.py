@@ -495,6 +495,22 @@ async def test_a_failure_from_before_a_joint_restart_is_tried_again_on_the_new_d
     )
 
 
+async def test_an_unreadable_identity_on_the_first_look_does_not_retry_a_standing_failure() -> None:
+    """The daemon still starting answers no identity once; the failure names daemon-A, and the
+    next look's daemon-A is the same one, so nothing is tried again (v0.70.1 release review)."""
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.states[SESSION] = PermissionState(
+        PermissionPreset.ASK, None, "daemon-A", "timed out"
+    )
+    rig.server.identity = None
+    await rig.tick()
+    rig.server.identity = "daemon-A"
+    for _ in range(3):
+        await rig.tick()
+
+    assert rig.server.calls == []
+
+
 async def test_a_failure_from_before_a_restart_stands_on_the_same_daemon() -> None:
     rig = Rig(_record(resumed_from=THREAD))
     rig.bindings.states[SESSION] = PermissionState(

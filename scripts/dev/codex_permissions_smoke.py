@@ -9,10 +9,10 @@ which a plain `codex` starts if none is running (the state Remote Control wants 
     uv run --locked python -I scripts/dev/codex_permissions_smoke.py
 
 `--service-sessions` opens no pane. It reads the live service's database read-only and checks
-every live Codex session that has a permission state row: its thread (the one it resumed, or
-its binding's) must be loaded on the owner's daemon, its `applied` must equal its `requested`,
-and no failure may stand. It exits 1 on any mismatch, and 2 when there is no such session at
-all, so a check run with nothing to check cannot pass.
+every running Codex session with a preset to apply ("Use Codex configuration" has none): its
+thread (the one it resumed, or its binding's) must be loaded on the owner's daemon, its
+`applied` must equal its `requested`, and no failure may stand. It exits 1 on any mismatch,
+and 2 when there is no such session at all, so a check run with nothing to check cannot pass.
 
     uv run --locked python -I scripts/dev/codex_permissions_smoke.py --service-sessions
 
@@ -34,7 +34,7 @@ from pathlib import Path
 
 from remote_agents.adapters.agents.codex.thread_settings import CodexThreadPermissions
 from remote_agents.adapters.agents.thread_binding import thread_of
-from remote_agents.application.thread_binding import LIVE_STATES
+from remote_agents.domain.models import SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.thread_permissions import ThreadPermissionsError
 from remote_agents.production import ProductionPaths
@@ -149,17 +149,18 @@ class NothingToCheck(Exception):
 def _service_rows(
     paths: ProductionPaths,
 ) -> list[tuple[str, str | None, str, str | None, str | None]]:
-    """Every live Codex session with a state row: id, resumed-from thread, requested, applied,
-    failure. Read-only: the URI refuses any write, and nothing is created if the store is absent."""
+    """Every running Codex session the service applies a preset to: id, resumed-from thread,
+    requested, applied, failure. "Use Codex configuration" is left out (nothing is ever applied
+    to it, so `applied` stays empty by design), and so is a session not running yet, which the
+    apply pass does not look at. Read-only: the URI refuses any write."""
     connection = sqlite3.connect(f"{paths.database_path.resolve().as_uri()}?mode=ro", uri=True)
     try:
-        states = tuple(state.value for state in LIVE_STATES)
         return connection.execute(
-            f"""SELECT s.session_id, s.resume_source_id, p.requested, p.applied, p.failure
-                FROM session_permission_state p JOIN sessions s ON s.session_id = p.session_id
-                WHERE s.profile_id = 'codex' AND s.state IN ({", ".join("?" for _ in states)})
-                ORDER BY s.session_id""",
-            states,
+            """SELECT s.session_id, s.resume_source_id, p.requested, p.applied, p.failure
+               FROM session_permission_state p JOIN sessions s ON s.session_id = p.session_id
+               WHERE s.profile_id = 'codex' AND s.state = ? AND p.requested != ?
+               ORDER BY s.session_id""",
+            (SessionState.RUNNING.value, PermissionPreset.PROVIDER_DEFAULT.value),
         ).fetchall()
     finally:
         connection.close()
@@ -170,7 +171,7 @@ async def service_sessions() -> int:
     paths = ProductionPaths.for_home(Path.home())
     rows = _service_rows(paths)
     if not rows:
-        raise NothingToCheck("no live Codex session has a permission state row")
+        raise NothingToCheck("no running Codex session has a preset to apply")
     loaded = await CodexThreadPermissions().loaded_threads()
     mismatches = 0
     for session_id, resumed_from, requested, applied, failure in rows:

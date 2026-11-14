@@ -11,6 +11,7 @@ import pytest
 
 from remote_agents.adapters.agents.thread_binding import bound_session
 from remote_agents.adapters.telegram.binding_notifications import BindingNotifier
+from remote_agents.application import thread_binding
 from remote_agents.application.doctor import production_doctor
 from remote_agents.application.thread_binding import (
     COMPOSER_PATIENCE_SECONDS,
@@ -191,6 +192,20 @@ def test_a_dialog_the_owner_must_answer_does_not_use_up_the_patience(world: Worl
     world.run()
     assert world.told == []
     assert bound_session(world.spool, _THREAD) == str(session)
+
+
+def test_a_dialog_that_never_goes_away_is_given_up_in_the_end(world: World, monkeypatch) -> None:
+    """A screen misread as a dialog (dialog matching is loose on purpose) must not hold the
+    binding for ever, silently: past `DIALOG_PATIENCE_SECONDS` the patience runs out as usual
+    and the owner is told (v0.70.1 release review)."""
+    monkeypatch.setattr(thread_binding, "DIALOG_PATIENCE_SECONDS", COMPOSER_PATIENCE_SECONDS * 3)
+    session = world.session()
+    world.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)] * 40
+    for _ in range(14):
+        world.run()
+        world.elapse(COMPOSER_PATIENCE_SECONDS / 2)
+    world.run()
+    assert world.told == [session]
 
 
 def test_wait_bound_is_bounded_even_while_a_dialog_stays_up(world: World) -> None:

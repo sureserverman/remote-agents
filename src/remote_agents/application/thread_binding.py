@@ -35,6 +35,10 @@ _LOG = logging.getLogger(__name__)
 COMPOSER_PATIENCE_SECONDS = 60.0
 #: How long the binding may take to appear once the line was sent.
 SEEN_PATIENCE_SECONDS = 20.0
+DIALOG_PATIENCE_SECONDS = 24 * 3600.0
+"""How long a dialog may keep restarting the patience (OD-20). Far beyond an owner taking their
+time over Codex's hook review; it exists for a screen misread as a dialog, which would otherwise
+hold the binding for ever and never tell the owner (v0.70.1 release review)."""
 #: The states a session can still be bound in, which are the states the hook roster lists.
 LIVE_STATES = tuple(state for state in SessionState if notifiable(state))
 #: How often a caller waiting on one binding looks again.
@@ -105,6 +109,7 @@ class _Attempt:
     nonce: str | None = None
     sent_at: datetime | None = None
     over: bool = False
+    dialog_since: datetime | None = None
 
 
 class ThreadBinder:
@@ -246,13 +251,20 @@ class ThreadBinder:
             return
         if delivery.outcome is not PromptOutcome.REFUSED:
             attempt.sent_at = self._now()
-        elif delivery.reason in (PromptReason.BUSY, PromptReason.DIALOG):
-            # A turn the owner started can run for an hour and says nothing against the pane,
-            # and a dialog the owner must answer (Codex's hook review, folder trust) stands for
-            # as long as they take. The thread is the same afterwards, so the patience starts
-            # again then. Given up behind "Hooks need review", a session kept running without
-            # its preset after the owner answered (live check, 2026-11-14; OD-20).
+        elif delivery.reason is PromptReason.BUSY:
+            # A turn the owner started can run for an hour and says nothing against the pane.
+            # The thread is the same when it ends, so the patience starts again then.
             attempt.started_at = self._now()
+        elif delivery.reason is PromptReason.DIALOG:
+            # A dialog the owner must answer (Codex's hook review, folder trust) stands for as
+            # long as they take, and the thread is the same afterwards. Given up behind "Hooks
+            # need review", a session kept running without its preset after the owner answered
+            # (live check, 2026-11-14; OD-20). Bounded, for a screen misread as a dialog.
+            now = self._now()
+            if attempt.dialog_since is None:
+                attempt.dialog_since = now
+            if (now - attempt.dialog_since).total_seconds() < DIALOG_PATIENCE_SECONDS:
+                attempt.started_at = now
 
     async def _give_up(self, key: str, attempt: _Attempt) -> BindStep:
         attempt.over = True

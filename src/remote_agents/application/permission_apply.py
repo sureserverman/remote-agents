@@ -328,7 +328,9 @@ class PermissionApplyPass:
                 # a service and daemon restarted together (a reboot) see only the new one, so
                 # remembering the current identity here would never try again (release review).
                 if state.daemon is None or identity is None or identity == state.daemon:
-                    self._failed_under[key] = identity
+                    # The failure's own daemon when this look could not read one, so a daemon
+                    # that was only starting is not taken for a new one next time.
+                    self._failed_under[key] = identity if identity is not None else state.daemon
                     return ApplyStep.OVER
             elif identity is None or identity == self._failed_under[key]:
                 return ApplyStep.OVER

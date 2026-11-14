@@ -698,7 +698,13 @@ def _run_surface(
         return 1
     wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
     paths.ensure_directories(include_unit_directory=wants_unit_directory)
-    _open_domain_store(paths, include_unit_directory=wants_unit_directory).close()
+    try:
+        _open_domain_store(paths, include_unit_directory=wants_unit_directory).close()
+    except TimeoutError as error:
+        # The panes start together, so a stuck set-up holder stops each one: one sentence
+        # naming the cause, not a traceback per pane (v0.70.1 release review).
+        print(f"{label.capitalize()} could not start: {error}", file=sys.stderr)
+        return 1
     connection = leased_connection(config.database_path)
     request = None
     try:
