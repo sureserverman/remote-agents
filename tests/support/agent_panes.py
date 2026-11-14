@@ -72,16 +72,20 @@ def _codex():
     return descriptor()
 
 
-def CODEX_READY(text: str) -> bool:  # noqa: N802 -- read beside CLAUDE_READY, as it replaced one
-    """Codex's composer, read as the relay reads it: IDLE.
+def CODEX_READY(text: str, title: str = "") -> bool:  # noqa: N802 -- read beside CLAUDE_READY
+    """Codex's composer, read as the relay reads it: IDLE, with the pane's title when given.
 
     Its placeholder is not enough since 0.158.0, which draws `› Ask Codex to do anything` on a
     splash with no model line ~0.25 s before the folder-trust dialog. The drill took the splash
     for the composer and sent its first message into a pane that was not one.
+
+    Nor is the screen alone: 0.169 spins its title while MCP servers start, over a composer
+    already drawn, and the relay refuses that pane as busy (plan-scope 2026-11-14). Pass
+    `open_to_composer` the title so ready means what the relay will read.
     """
     from remote_agents.adapters.tmux.composer import PaneState, classify
 
-    return classify(text, _codex()) is PaneState.IDLE
+    return classify(text, _codex(), title) is PaneState.IDLE
 
 
 @cache
@@ -91,14 +95,14 @@ def _cursor():
     return descriptor()
 
 
-def CURSOR_READY(text: str) -> bool:  # noqa: N802 -- read beside CODEX_READY
+def CURSOR_READY(text: str, title: str = "") -> bool:  # noqa: N802 -- read beside CODEX_READY
     """Cursor's composer, read as the relay reads it: IDLE.
 
     The drill launches with `--trust`, so no trust box is raised and there is nothing to answer.
     """
     from remote_agents.adapters.tmux.composer import PaneState, classify
 
-    return classify(text, _cursor()) is PaneState.IDLE
+    return classify(text, _cursor(), title) is PaneState.IDLE
 
 
 CLAUDE_OPENING = (
@@ -179,7 +183,7 @@ def open_to_composer(
     capture: Callable[[], str],
     press: Callable[[str], None],
     *,
-    ready: str | tuple[str, ...] | Callable[[str], bool],
+    ready: str | tuple[str, ...] | Callable[..., bool],
     interstitials: tuple[Interstitial, ...],
     agent: str,
     timeout: float = 120.0,
@@ -187,8 +191,11 @@ def open_to_composer(
     settle: float = 1.5,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    title: Callable[[], str] | None = None,
 ) -> None:
     """Answer interstitials until `ready` shows; fail with the screen if it never does.
+
+    With `title`, a callable `ready` is asked with the pane's title too, as the relay asks.
 
     An interstitial is checked before `ready`, because a dialog can be drawn over a composer
     whose placeholder is still on screen. Each answered prompt restarts nothing: the deadline
@@ -220,7 +227,7 @@ def open_to_composer(
                 sleep(poll)
             continue
         if callable(ready):
-            if ready(text):
+            if ready(text) if title is None else ready(text, title()):
                 return
         elif any(marker in text for marker in ((ready,) if isinstance(ready, str) else ready)):
             return

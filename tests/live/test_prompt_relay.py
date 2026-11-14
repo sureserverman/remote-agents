@@ -234,6 +234,9 @@ def _answer(
         ready=ready,
         interstitials=opening,
         agent=agent,
+        title=lambda: _tmux(
+            socket, "display-message", "-p", "-t", pane, "#{pane_title}"
+        ).stdout.rstrip("\n"),
     )
 
 
@@ -293,6 +296,7 @@ def test_runtime_types_into_an_idle_pane_and_is_refused_by_a_busy_one(
         delivery = asyncio.run(terminal.send_prompt(session_id, f"{_LINE_ONE}\n{_LINE_TWO}"))
         assert delivery.outcome is PromptOutcome.SENT, (
             delivery,
+            _tmux(socket, "display-message", "-p", "-t", pane, "#{pane_title}").stdout,
             _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
         )
         screen = _wait_for(socket, pane, _LINE_TWO)

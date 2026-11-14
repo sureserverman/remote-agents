@@ -223,3 +223,21 @@ def test_claude_is_not_ready_while_its_approval_dialog_mentions_auto_mode() -> N
 
     assert "auto mode" in approval, "the premise: the dialog carries the words"
     assert not any(marker in approval for marker in CLAUDE_READY)
+
+
+def test_codex_is_not_ready_while_its_title_spins_over_an_idle_composer() -> None:
+    """Codex 0.169 spins its title while MCP servers start, over a composer already drawn
+    (`tui/src/chatwidget/status_surfaces.rs`, `terminal_title_has_active_progress`). The relay
+    reads that title and refuses the pane as busy, so a drill that called the screen alone ready
+    sent its first message into that refusal (plan-scope 2026-11-14, prompt_relay[codex])."""
+    clock, sleep = _fake_clock()
+    screens = _Screens(_CODEX_IDLE)
+    assert CODEX_READY(_CODEX_IDLE), "the premise: the screen alone reads idle"
+
+    open_to_composer(
+        screens.capture, screens.press, ready=CODEX_READY, interstitials=CODEX_OPENING,
+        agent="codex", timeout=30, clock=clock, sleep=sleep,
+        title=lambda: "⠋ workspace" if clock() < 5 else "workspace",
+    )  # fmt: skip
+
+    assert clock() >= 5, "ready was declared while the title still spun"

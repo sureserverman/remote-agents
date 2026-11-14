@@ -63,6 +63,9 @@ def _open(socket: str, session_id: SessionId, workspace: Path, codex_home: Path)
         ready=CODEX_READY,
         interstitials=CODEX_OPENING,
         agent="codex",
+        title=lambda: _tmux(
+            socket, "display-message", "-p", "-t", pane, "#{pane_title}"
+        ).stdout.rstrip("\n"),
     )
     return pane
 

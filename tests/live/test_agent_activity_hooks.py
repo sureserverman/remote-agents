@@ -227,6 +227,9 @@ def _open(
         interstitials=interstitials,
         agent=agent,
         timeout=_PANE_TIMEOUT_SECONDS,
+        title=lambda: _tmux("display-message", "-p", "-t", "0", "#{pane_title}").stdout.rstrip(
+            "\n"
+        ),
     )
 
 
