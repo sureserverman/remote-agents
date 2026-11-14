@@ -2412,6 +2412,7 @@ class SessionDetailScreen(ChoiceScreen):
         from remote_agents.application.permission_presets import (
             LIVE_CHOICES,
             permission_change_sentence,
+            permission_refusal_sentence,
         )
 
         backend = self.services.backend
@@ -2423,6 +2424,16 @@ class SessionDetailScreen(ChoiceScreen):
                 return
             if record is None or not self._live_permissions_offered(record):
                 await self.refuse()
+                return
+            try:
+                refusal = await backend.sessions.permission_change_refusal(record.session_id)
+            except Exception:
+                # Offered as before: a pick is still refused by `change` if it must be.
+                _LOG.exception("whether the permissions can change could not be read")
+                refusal = None
+            if refusal is not None:
+                # Said before any mode is offered, not after a pick (close-out demo).
+                self.announce(permission_refusal_sentence(refusal), severity="warning")
                 return
             try:
                 state = await backend.sessions.permission_state(record.session_id)

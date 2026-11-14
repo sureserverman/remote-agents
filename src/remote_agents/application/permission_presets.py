@@ -40,7 +40,7 @@ PERMISSION_CHOICES = (
     PermissionChoice(
         PermissionPreset.PROVIDER_DEFAULT,
         "Use Codex configuration",
-        "Add no permission flags; use the provider's configuration.",
+        "Send no mode; Codex uses its own configuration.",
     ),
 )
 #: What a running session can be changed to (OD-3). The provider's own configuration is a launch
@@ -80,6 +80,12 @@ def permission_change_sentence(change: PermissionChange) -> str:
     if change.changed:
         return f"now {permission_label(change.preset)}"
     return f"not changed: {change.reason}"
+
+
+def permission_refusal_sentence(reason: str) -> str:
+    """The one line both surfaces say when Permissions is opened on a session no pick can
+    change (`SessionPermissions.refusal`), instead of offering modes it would refuse."""
+    return f"cannot change permissions: {reason}"
 
 
 class PermissionSettings:
@@ -173,6 +179,35 @@ class SessionPermissions:
             raise ValueError("permission preset is unavailable for this provider")
         return preset
 
+    async def refusal(self, session_id: SessionId) -> str | None:
+        """Why no mode can be picked for this session at all, or None when a pick may change it.
+
+        Asked by both surfaces before they offer the three modes, so a session that refuses
+        every pick says so at once (close-out demo, 2026-11-14), and by `change` first, so a
+        pick gets the same words (DEC-091). A refusal that depends on the pick itself (a mode
+        still being applied, the mode it already has) is `change`'s alone.
+        """
+        record = await self._sessions.get(session_id)
+        if record is None or record.state is SessionState.ENDED:
+            return "the session has ended"
+        if record.profile_id not in self.settings.profiles:
+            return f"{record.profile_id} sessions have no permission presets"
+        if record.state is not SessionState.RUNNING:
+            return "the session is not running"
+        state = await self.bindings.state(session_id)
+        if state is None:
+            launched = await self.bindings.for_session(session_id)
+            flags = launched is not None and launched is not PermissionPreset.PROVIDER_DEFAULT
+            return (
+                "launched with flags" if flags else "launched before permissions could change"
+            ) + "; relaunch to change permissions"
+        if state.requested is PermissionPreset.PROVIDER_DEFAULT:
+            # OD-12: the server was never sent anything for it, and nothing can be sent that
+            # means "the provider's own configuration" again. A failed change could then not
+            # be undone while the surface said "not changed".
+            return "uses Codex's own configuration; relaunch with a mode to change it live"
+        return None
+
     async def change(self, session_id: SessionId, preset: PermissionPreset) -> PermissionChange:
         """Change a running session's preset: ask for it, and wait for the service's pass.
 
@@ -185,34 +220,12 @@ class SessionPermissions:
             return PermissionChange(
                 False, preset, f"{permission_label(preset)} is chosen at launch only"
             )
-        record = await self._sessions.get(session_id)
-        if record is None or record.state is SessionState.ENDED:
-            return PermissionChange(False, preset, "the session has ended")
-        if record.profile_id not in self.settings.profiles:
-            return PermissionChange(
-                False, preset, f"{record.profile_id} sessions have no permission presets"
-            )
-        if record.state is not SessionState.RUNNING:
-            return PermissionChange(False, preset, "the session is not running")
+        reason = await self.refusal(session_id)
+        if reason is not None:
+            return PermissionChange(False, preset, reason)
         state = await self.bindings.state(session_id)
         if state is None:
-            launched = await self.bindings.for_session(session_id)
-            flags = launched is not None and launched is not PermissionPreset.PROVIDER_DEFAULT
-            return PermissionChange(
-                False,
-                preset,
-                ("launched with flags" if flags else "launched before permissions could change")
-                + "; relaunch to change permissions",
-            )
-        if state.requested is PermissionPreset.PROVIDER_DEFAULT:
-            # OD-12: the server was never sent anything for it, and nothing can be sent that
-            # means "the provider's own configuration" again. A failed change could then not
-            # be undone while the surface said "not changed".
-            return PermissionChange(
-                False,
-                preset,
-                "uses Codex's own configuration; relaunch with a mode to change it live",
-            )
+            return PermissionChange(False, preset, "the session has ended")
         if state.failure is None and state.applied is not state.requested:
             # An apply is under way: the launch's own, or another surface's change. Changing
             # over it would make that request the one a failure restores, a preset nobody

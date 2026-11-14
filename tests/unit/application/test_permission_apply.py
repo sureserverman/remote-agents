@@ -1036,7 +1036,10 @@ def test_permission_failure_or_success_reads_as_one_inspection_line() -> None:
         == "not applied: timed out"
     )
     assert permission_state_line(ask, PermissionState(ask, None, None, None)) == "not applied yet"
-    assert permission_state_line(default, PermissionState(default, None, None, None)) == "applied"
+    assert (
+        permission_state_line(default, PermissionState(default, None, None, None))
+        == "nothing to apply"
+    )
     assert (
         permission_state_line(ask, None)
         == "launched with flags (v0.69.0); relaunch for Remote Control"

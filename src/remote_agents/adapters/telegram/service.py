@@ -121,6 +121,7 @@ from remote_agents.application.permission_presets import (
     PERMISSION_TITLE,
     permission_change_sentence,
     permission_label,
+    permission_refusal_sentence,
 )
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
@@ -3326,6 +3327,19 @@ class PrivateBotBoundary:
         if record is None or not self._live_permissions_offered(record):
             return self._message(
                 "That session's permissions cannot be changed now.",
+                back=back,
+                back_label="Back to session",
+            )
+        try:
+            refusal = await self.backend.sessions.permission_change_refusal(record.session_id)
+        except Exception:
+            # Offered as before: a pick is still refused by the use case if it must be.
+            _LOG.exception("whether %s's permissions can change could not be read", session_value)
+            refusal = None
+        if refusal is not None:
+            # Said before any mode is offered, not after a pick (close-out demo, DEC-091).
+            return self._message(
+                escape(permission_refusal_sentence(refusal)),
                 back=back,
                 back_label="Back to session",
             )

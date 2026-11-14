@@ -65,6 +65,7 @@ class _Sessions(SessionUseCaseDouble):
     requested: PermissionPreset = PermissionPreset.ASK
     outcome: PermissionChange | None = None
     changes: list[tuple[SessionId, PermissionPreset]] = field(default_factory=list)
+    refusal: str | None = None
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
@@ -80,6 +81,9 @@ class _Sessions(SessionUseCaseDouble):
 
     async def permission_state(self, _session_id) -> PermissionState:
         return PermissionState(self.requested, self.requested, "d", None)
+
+    async def permission_change_refusal(self, _session_id) -> str | None:
+        return self.refusal
 
     async def change_session_permissions(self, session_id, preset) -> PermissionChange:
         self.changes.append((session_id, preset))
@@ -200,3 +204,22 @@ async def test_no_global_key_is_added_for_it() -> None:
         for binding in RemoteAgentsTui.BINDINGS
     ]
     assert not any("permission" in str(action).casefold() for _key, action, *_ in bindings)
+
+
+async def test_a_session_that_can_never_change_is_refused_without_a_picker() -> None:
+    """The close-out demo: a "Use Codex configuration" session opened three modes and refused
+    only after a pick. Now the row says why at once, and no picker opens."""
+    record = _record()
+    reason = "uses Codex's own configuration; relaunch with a mode to change it live"
+    sessions = _Sessions((record,), refusal=reason)
+    app = _app(sessions)
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("permissions")
+        await pilot.pause()
+        warned = announcements(app, severity="warning")
+        still_detail = "Permissions" in _rows(app)
+    assert f"cannot change permissions: {reason}" in warned
+    assert still_detail, "no picker opened over the detail"
+    assert sessions.changes == []

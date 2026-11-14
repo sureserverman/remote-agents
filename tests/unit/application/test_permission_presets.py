@@ -614,3 +614,35 @@ async def test_a_cancel_whose_restore_fails_still_reports_the_cancellation(chang
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# --- Close-out evaluator: refuse before the picker ---------------------------------------------
+
+
+async def test_a_session_that_can_never_change_is_refused_before_any_pick(change_rig):
+    """The close-out demo: Permissions opened three modes on a session that refuses every pick,
+    and the owner learnt only after picking. The refusal is asked for first, in the same words a
+    pick would get (DEC-091)."""
+    from remote_agents.application.permission_presets import permission_refusal_sentence
+
+    await change_rig.launch(PermissionPreset.PROVIDER_DEFAULT)
+    reason = await change_rig.permissions.refusal(change_rig.session)
+    assert reason == "uses Codex's own configuration; relaunch with a mode to change it live"
+    assert permission_refusal_sentence(reason) == (
+        "cannot change permissions: uses Codex's own configuration; relaunch with a mode to "
+        "change it live"
+    )
+    picked = await change_rig.permissions.change(change_rig.session, PermissionPreset.ASK)
+    assert picked.reason == reason
+
+
+async def test_a_session_launched_with_flags_is_refused_before_any_pick(change_rig):
+    await change_rig.launch(PermissionPreset.FULL_ACCESS, legacy=True)
+    assert await change_rig.permissions.refusal(change_rig.session) == (
+        "launched with flags; relaunch to change permissions"
+    )
+
+
+async def test_a_session_with_a_mode_is_not_refused_before_a_pick(change_rig):
+    await change_rig.launch(PermissionPreset.ASK)
+    assert await change_rig.permissions.refusal(change_rig.session) is None

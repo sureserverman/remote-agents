@@ -768,6 +768,13 @@ class SessionService:
             )
         return await self._permissions.change(session_id, preset)
 
+    async def permission_change_refusal(self, session_id: SessionId) -> str | None:
+        """Why no pick can change this session's permissions, or None (asked before the
+        surfaces offer the modes)."""
+        if self._permissions is None:
+            return "permission presets are unavailable"
+        return await self._permissions.refusal(session_id)
+
     async def permission_state(self, session_id: SessionId) -> PermissionState | None:
         """What the session asked for and what its daemon confirmed; None for a session
         launched before presets were applied on the daemon."""

@@ -238,3 +238,42 @@ async def test_a_session_on_the_providers_configuration_is_refused_with_the_od12
         )
     finally:
         connection.close()
+
+
+async def test_a_session_that_can_never_change_is_refused_before_any_mode_is_offered(
+    tmp_path,
+) -> None:
+    """The close-out demo: three modes were offered to a session that refuses every pick. Now
+    the press says why at once, through the real use case and store, and offers no mode."""
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.application.permission_presets import SessionPermissions
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        record = _record()
+        await store.save(record, permissions=PermissionPreset.PROVIDER_DEFAULT)
+        settings = PermissionSettings(
+            _Setting(), profiles={ProfileId("codex"): tuple(PermissionPreset)}
+        )
+        use_case = SessionPermissions(settings, SQLitePermissionBindings(connection), store)
+
+        class _Real(_Sessions):
+            async def permission_change_refusal(self, session_id):
+                return await use_case.refusal(session_id)
+
+        sessions = _Real(record)
+        boundary = _boundary(sessions)
+        chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+        anchor = await _picker(chat, boundary)
+        message = chat.messages[anchor]
+        assert unescape(message.text) == (
+            "cannot change permissions: uses Codex's own configuration; relaunch with a mode "
+            "to change it live"
+        )
+        assert not {"Approve for me", "Ask me", "Full access"} & set(_labels(message))
+        assert sessions.changes == []
+    finally:
+        connection.close()

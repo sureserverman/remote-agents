@@ -162,6 +162,11 @@ class SessionUseCaseDouble:
         del session_id
         return None
 
+    async def permission_change_refusal(self, session_id: object) -> None:
+        """Nothing refuses a pick up front; a test about the refusal models it."""
+        del session_id
+        return None
+
     async def project_usage(self) -> tuple[()]:
         """No launch history, so the catalogue keeps the order it was built in."""
         return ()

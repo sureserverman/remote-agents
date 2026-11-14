@@ -105,7 +105,11 @@ def permission_state_line(
         return "launched with flags (v0.69.0); relaunch for Remote Control"
     if state.failure is not None:
         outcome = f"not applied: {state.failure}"
-    elif state.requested is PermissionPreset.PROVIDER_DEFAULT or state.applied is state.requested:
+    elif state.requested is PermissionPreset.PROVIDER_DEFAULT:
+        # Nothing is sent for it, so nothing was confirmed: "applied" read as a check that
+        # never ran (close-out demo, 2026-11-14).
+        outcome = "nothing to apply"
+    elif state.applied is state.requested:
         outcome = "applied"
     else:
         outcome = "not applied yet"
