@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.migrations import (
@@ -202,20 +204,48 @@ def open_database(
     # The database is owner-only state; the directory holding it is owner-only too.
     if open_private_directory(path.parent) is None:
         raise ValueError("database directory cannot traverse a symlink")
-    needs_backup = path.exists()
-    connection = sqlite3.connect(path, timeout=busy_timeout_ms / 1_000)
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+    with store_setup_lock(path):
+        needs_backup = path.exists()
+        connection = sqlite3.connect(path, timeout=busy_timeout_ms / 1_000)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        try:
+            before = current_version(connection)
+            migrations = tuple(migrations)
+            if any(version > before for version, _ in migrations) and needs_backup:
+                _backup_connection(connection, backup_path(path))
+            apply_migrations(connection, migrations)
+            return connection
+        except Exception:
+            connection.close()
+            raise
+
+
+@contextmanager
+def store_setup_lock(path: Path) -> Iterator[None]:
+    """Hold the one lock under which a store is created, backed up, split or migrated.
+
+    Processes that start together each set the store up, and SQLite's write lock does not
+    serialize that: the version is read before a migration's transaction begins, so a second
+    starter re-applies what the first just applied ("table ... already exists"), and two
+    backups race on one temporary file. The console starts four panes at once, and a fresh
+    console lost one about one time in nine (measured 2026-11-14). Under this lock the second
+    starter finds the store already at the head and only reads its version.
+
+    The lock file sits beside the store, in the directory the caller has already vetted, and
+    is never removed: removing it would let a third starter lock a new file while a second
+    still holds the old one. Not reentrant: hold it around one setup step at a time.
+    """
+    descriptor = os.open(
+        path.with_name(path.name + ".lock"),
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
     try:
-        before = current_version(connection)
-        migrations = tuple(migrations)
-        if any(version > before for version, _ in migrations) and needs_backup:
-            _backup_connection(connection, backup_path(path))
-        apply_migrations(connection, migrations)
-        return connection
-    except Exception:
-        connection.close()
-        raise
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def backup_path(path: Path) -> Path:

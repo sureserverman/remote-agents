@@ -66,7 +66,12 @@ def _created_without_following_links(path: Path) -> Path | None:
         if walked.is_symlink():
             return None
         if not walked.exists():
-            walked.mkdir(mode=0o700)
+            try:
+                walked.mkdir(mode=0o700)
+            except FileExistsError:
+                # Made by another process starting at the same moment: judged as found.
+                if not _is_real_directory(walked):
+                    return None
         elif not _is_real_directory(walked):
             return None
     os.chmod(path, 0o700)

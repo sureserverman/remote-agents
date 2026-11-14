@@ -192,7 +192,17 @@ class ProductionPaths:
             if parent.is_symlink():
                 raise ConfigError(f"production paths cannot traverse symlinks: {parent}")
             if parent.is_relative_to(self.home) and not parent.exists():
-                parent.mkdir(mode=0o700)
+                try:
+                    parent.mkdir(mode=0o700)
+                except FileExistsError:
+                    # Another process starting at the same moment made it first (four console
+                    # panes do). Whatever is there now is judged like anything found there.
+                    if parent.is_symlink():
+                        raise ConfigError(
+                            f"production paths cannot traverse symlinks: {parent}"
+                        ) from None
+                    if not parent.is_dir():
+                        raise ConfigError(f"production path is not a directory: {parent}") from None
         os.chmod(path, 0o700)
 
     def _reject_symlink_ancestors(self, path: Path) -> None:

@@ -33,6 +33,8 @@ def test_production_paths_create_only_private_declared_directories_and_database(
         Path(".local/state/remote-agents/activity"),
         Path(".local/state/remote-agents/intents"),
         Path(".local/state/remote-agents/sessions.sqlite3"),
+        # Held while the store is set up, so panes starting together migrate it once.
+        Path(".local/state/remote-agents/sessions.sqlite3.lock"),
         Path(".local/state/remote-agents/worktrees"),
     }
     for directory in (
@@ -43,6 +45,8 @@ def test_production_paths_create_only_private_declared_directories_and_database(
     ):
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert stat.S_IMODE(paths.database_path.stat().st_mode) == 0o600
+    lock = paths.database_path.with_name(paths.database_path.name + ".lock")
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o600
 
 
 def test_production_database_backup_precedes_an_upgrade(tmp_path: Path) -> None:
