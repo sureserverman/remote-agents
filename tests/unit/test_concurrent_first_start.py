@@ -15,11 +15,16 @@ do.
 
 from __future__ import annotations
 
+import fcntl
+import os
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
-from remote_agents.adapters.sqlite.database import open_database
+import pytest
+
+from remote_agents.adapters.sqlite.database import open_database, store_setup_lock
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, current_version
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.production import ProductionPaths
@@ -89,3 +94,29 @@ def test_starters_making_one_private_directory_together_all_get_it(tmp_path: Pat
 
         failures += _together(start)
     assert failures == []
+
+
+def test_a_set_up_lock_held_too_long_is_refused_with_a_reason(tmp_path: Path) -> None:
+    """A starter stuck in a migration (a hung home, say) must not block every later one for
+    ever; SQLite's busy timeout bounded that wait before the lock (release review)."""
+    store = tmp_path / "sessions.sqlite3"
+    holder = os.open(tmp_path / "sessions.sqlite3.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="being set up by another process"):
+            with store_setup_lock(store, timeout_seconds=0.3):
+                pass
+        assert time.monotonic() - started < 5
+    finally:
+        os.close(holder)
+
+
+def test_a_set_up_lock_that_is_a_link_is_refused_like_a_linked_directory(tmp_path: Path) -> None:
+    store = tmp_path / "sessions.sqlite3"
+    (tmp_path / "elsewhere").write_text("", encoding="utf-8")
+    (tmp_path / "sessions.sqlite3.lock").symlink_to(tmp_path / "elsewhere")
+
+    with pytest.raises(ValueError, match="cannot traverse a symlink"):
+        with store_setup_lock(store):
+            pass

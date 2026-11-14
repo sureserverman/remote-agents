@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import fcntl
 import os
 import sqlite3
+import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -221,8 +223,18 @@ def open_database(
             raise
 
 
+SETUP_LOCK_TIMEOUT_SECONDS = 120.0
+"""How long a starter waits for another to finish setting the store up. Far beyond a migration
+and backup of the owner's store (well under a second), so only a starter that is stuck -- a hung
+home, a debugger -- makes the next one give up, with a reason rather than a silent hang."""
+
+_SETUP_LOCK_POLL_SECONDS = 0.01
+
+
 @contextmanager
-def store_setup_lock(path: Path) -> Iterator[None]:
+def store_setup_lock(
+    path: Path, *, timeout_seconds: float = SETUP_LOCK_TIMEOUT_SECONDS
+) -> Iterator[None]:
     """Hold the one lock under which a store is created, backed up, split or migrated.
 
     Processes that start together each set the store up, and SQLite's write lock does not
@@ -235,14 +247,31 @@ def store_setup_lock(path: Path) -> Iterator[None]:
     The lock file sits beside the store, in the directory the caller has already vetted, and
     is never removed: removing it would let a third starter lock a new file while a second
     still holds the old one. Not reentrant: hold it around one setup step at a time.
+
+    Bounded: a holder stuck for `timeout_seconds` makes this raise `TimeoutError` instead of
+    blocking every later starter for ever, as SQLite's busy timeout bounded the wait before
+    (v0.70.0 release review). A lock file that is a link is refused like a linked directory.
     """
-    descriptor = os.open(
-        path.with_name(path.name + ".lock"),
-        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-        0o600,
-    )
+    lock = path.with_name(path.name + ".lock")
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        descriptor = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ValueError("database lock cannot traverse a symlink") from None
+        raise
+    try:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"the store is being set up by another process and has been for "
+                        f"{timeout_seconds:.0f} s; look for a stuck remote-agents process"
+                    ) from None
+                time.sleep(_SETUP_LOCK_POLL_SECONDS)
         yield
     finally:
         os.close(descriptor)
