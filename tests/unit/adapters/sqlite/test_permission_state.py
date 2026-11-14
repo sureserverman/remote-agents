@@ -173,6 +173,19 @@ async def test_a_failure_forgets_what_was_applied_before_it(connection) -> None:
     )
 
 
+async def test_a_failure_records_the_daemon_it_happened_under(connection) -> None:
+    await SQLiteSessionStore(connection).save(_record(), permissions=PermissionPreset.ASK)
+    bindings = SQLitePermissionBindings(connection)
+
+    await bindings.mark_failed(
+        SESSION, "timed out", requested=PermissionPreset.ASK, daemon="boot-2:7"
+    )
+
+    assert await bindings.state(SESSION) == PermissionState(
+        requested=PermissionPreset.ASK, applied=None, daemon="boot-2:7", failure="timed out"
+    )
+
+
 async def test_a_new_request_replaces_the_requested_preset_and_clears_the_failure(
     connection,
 ) -> None:

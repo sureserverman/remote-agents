@@ -121,13 +121,18 @@ class FakeBindings:
         return True
 
     async def mark_failed(
-        self, session_id: SessionId, reason: str, *, requested: PermissionPreset
+        self,
+        session_id: SessionId,
+        reason: str,
+        *,
+        requested: PermissionPreset,
+        daemon: str | None = None,
     ) -> bool:
         if self.states[session_id].requested is not requested:
             return False
         self.writes.append(("failed", session_id))
         self.states[session_id] = replace(
-            self.states[session_id], failure=reason, applied=None, daemon=None
+            self.states[session_id], failure=reason, applied=None, daemon=daemon
         )
         return True
 
@@ -324,7 +329,7 @@ async def test_a_failure_retries_once_on_the_next_pass_then_stands_with_its_reas
     assert rig.bindings.states[SESSION].failure is None, "one failure is not yet a verdict"
     await rig.tick()
     assert rig.bindings.states[SESSION] == PermissionState(
-        PermissionPreset.ASK, None, None, "no Codex daemon"
+        PermissionPreset.ASK, None, "daemon-A", "no Codex daemon"
     )
 
     for _ in range(4):
@@ -460,6 +465,46 @@ async def test_a_failure_from_before_a_service_restart_is_tried_again_on_a_new_d
     assert rig.bindings.states[SESSION] == PermissionState(
         PermissionPreset.ASK, PermissionPreset.ASK, "daemon-B", None
     )
+
+
+async def test_a_failure_keeps_the_daemon_it_happened_under() -> None:
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    rig.server.failures = ["timed out", "timed out"]
+    await rig.tick()
+    await rig.tick()
+
+    assert rig.bindings.states[SESSION] == PermissionState(
+        PermissionPreset.ASK, None, "daemon-A", "timed out"
+    )
+
+
+async def test_a_failure_from_before_a_joint_restart_is_tried_again_on_the_new_daemon() -> None:
+    """Service and daemon restarted together (a reboot): the new run's first look already sees
+    the new daemon. The failure names the old one, so it is tried again (release review)."""
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.states[SESSION] = PermissionState(
+        PermissionPreset.ASK, None, "daemon-old", "timed out"
+    )
+
+    await rig.tick()
+
+    assert rig.server.calls == [(THREAD, PermissionPreset.ASK)]
+    assert rig.bindings.states[SESSION] == PermissionState(
+        PermissionPreset.ASK, PermissionPreset.ASK, "daemon-A", None
+    )
+
+
+async def test_a_failure_from_before_a_restart_stands_on_the_same_daemon() -> None:
+    rig = Rig(_record(resumed_from=THREAD))
+    rig.bindings.states[SESSION] = PermissionState(
+        PermissionPreset.ASK, None, "daemon-A", "timed out"
+    )
+
+    for _ in range(3):
+        await rig.tick()
+
+    assert rig.server.calls == []
 
 
 async def test_a_changed_request_is_applied_over_an_applied_one() -> None:

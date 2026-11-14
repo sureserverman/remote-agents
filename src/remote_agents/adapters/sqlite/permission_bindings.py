@@ -61,16 +61,29 @@ class SQLitePermissionBindings:
         return bool(changed)
 
     async def mark_failed(
-        self, session_id: SessionId, reason: str, *, requested: PermissionPreset
+        self,
+        session_id: SessionId,
+        reason: str,
+        *,
+        requested: PermissionPreset,
+        daemon: str | None = None,
     ) -> bool:
         # One statement checks the request and writes the failure: an apply runs for seconds,
-        # and a preset asked for meanwhile must not inherit the old one's failure.
+        # and a preset asked for meanwhile must not inherit the old one's failure. `daemon` is
+        # the server the failure happened under, so a later run of the service can tell a new
+        # one from it even when both restarted together.
         with self._connection:
             changed = self._connection.execute(
                 """UPDATE session_permission_state
-                   SET failure = ?, applied = NULL, daemon = NULL, updated_at = ?
+                   SET failure = ?, applied = NULL, daemon = ?, updated_at = ?
                    WHERE session_id = ? AND requested = ?""",
-                (reason, self._stamp(), str(session_id), PermissionPreset(requested).value),
+                (
+                    reason,
+                    daemon,
+                    self._stamp(),
+                    str(session_id),
+                    PermissionPreset(requested).value,
+                ),
             ).rowcount
         return bool(changed)
 

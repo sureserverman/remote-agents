@@ -39,10 +39,16 @@ class PermissionBindings(Protocol):
         ...
 
     async def mark_failed(
-        self, session_id: SessionId, reason: str, *, requested: PermissionPreset
+        self,
+        session_id: SessionId,
+        reason: str,
+        *,
+        requested: PermissionPreset,
+        daemon: str | None = None,
     ) -> bool:
-        """Record why applying `requested` failed. False, and nothing written, when the session
-        asks for another preset by now: that failure is not about what it asks for."""
+        """Record why applying `requested` failed, and under which server (`daemon`, None when
+        unknown). False, and nothing written, when the session asks for another preset by now:
+        that failure is not about what it asks for."""
         ...
 
     async def set_requested(self, session_id: SessionId, preset: PermissionPreset) -> None:

@@ -323,9 +323,13 @@ class PermissionApplyPass:
                     self._attempts.pop(key, None)
                     return ApplyStep.APPLIED
             elif key not in self._failed_under:
-                # Recorded by an earlier run of the service, which told the owner then.
-                self._failed_under[key] = identity
-                return ApplyStep.OVER
+                # Recorded by an earlier run of the service, which told the owner then. It
+                # stands, unless it names the server it happened under and that server is gone:
+                # a service and daemon restarted together (a reboot) see only the new one, so
+                # remembering the current identity here would never try again (release review).
+                if state.daemon is None or identity is None or identity == state.daemon:
+                    self._failed_under[key] = identity
+                    return ApplyStep.OVER
             elif identity is None or identity == self._failed_under[key]:
                 return ApplyStep.OVER
             thread = record.resume_source_id or await asyncio.to_thread(
@@ -393,8 +397,10 @@ class PermissionApplyPass:
         """
         key = str(session_id)
         self._attempts.pop(key, None)
-        if state.failure != reason and not await self._bindings.mark_failed(
-            session_id, reason, requested=state.requested
+        if (state.failure, state.daemon) != (reason, identity) and not (
+            await self._bindings.mark_failed(
+                session_id, reason, requested=state.requested, daemon=identity
+            )
         ):
             self._failed_under.pop(key, None)
             return ApplyStep.WAITING
