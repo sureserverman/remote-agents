@@ -246,9 +246,12 @@ class ThreadBinder:
             return
         if delivery.outcome is not PromptOutcome.REFUSED:
             attempt.sent_at = self._now()
-        elif delivery.reason is PromptReason.BUSY:
-            # A turn the owner started can run for an hour and says nothing against the pane.
-            # The thread is the same when it ends, so the patience starts again then.
+        elif delivery.reason in (PromptReason.BUSY, PromptReason.DIALOG):
+            # A turn the owner started can run for an hour and says nothing against the pane,
+            # and a dialog the owner must answer (Codex's hook review, folder trust) stands for
+            # as long as they take. The thread is the same afterwards, so the patience starts
+            # again then. Given up behind "Hooks need review", a session kept running without
+            # its preset after the owner answered (live check, 2026-11-14; OD-20).
             attempt.started_at = self._now()
 
     async def _give_up(self, key: str, attempt: _Attempt) -> BindStep:

@@ -178,6 +178,27 @@ def test_a_busy_first_turn_does_not_use_up_the_patience(world: World) -> None:
     assert bound_session(world.spool, _THREAD) == str(session)
 
 
+def test_a_dialog_the_owner_must_answer_does_not_use_up_the_patience(world: World) -> None:
+    """Codex's hook review or folder trust can stand for as long as the owner takes. Once it is
+    answered the thread is the same, so the binding still lands (live check, 2026-11-14: a
+    session given up behind "Hooks need review" never got its preset)."""
+    session = world.session()
+    dialog = PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)
+    world.deliveries = [dialog] * 6
+    for _ in range(6):
+        world.run()
+        world.elapse(COMPOSER_PATIENCE_SECONDS / 2)
+    world.run()
+    assert world.told == []
+    assert bound_session(world.spool, _THREAD) == str(session)
+
+
+def test_wait_bound_is_bounded_even_while_a_dialog_stays_up(world: World) -> None:
+    session = world.session()
+    world.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)] * 500
+    assert asyncio.run(world.binder.wait_bound(session, ProfileId("codex"))) is False
+
+
 def test_a_composer_holding_text_still_uses_up_the_patience(world: World) -> None:
     session = world.session()
     world.deliveries = [PromptDelivery(PromptOutcome.REFUSED, PromptReason.COMPOSING)] * 2
