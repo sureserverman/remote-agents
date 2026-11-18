@@ -118,6 +118,7 @@ def production_doctor(
     worktrees: tuple[tuple[str, str, str], ...] | None = None,
     unbound_sessions: int | None = None,
     permission_failures: int | None = None,
+    sandbox: tuple[str, str] | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -283,6 +284,13 @@ def production_doctor(
         # A count, and never a verdict: the session works, on its agent's own configuration,
         # and nothing automatic is typed into it until its preset is applied.
         report["permission_failures"] = permission_failures
+    if sandbox is not None:
+        # Whether a pane can start Codex's sandbox (BL-147, DEC-140), as (whose label, label):
+        # the tmux server's when one runs, else the service's, whose label the next server
+        # inherits. Reported, never aggregated: a pane without a sandbox still runs its agent,
+        # and Codex escalates each command instead. None -- no AppArmor, macOS, a label that
+        # could not be read -- omits the line rather than claiming either answer.
+        report["sandbox"] = _sandbox_line(*sandbox)
     if worktrees is not None:
         # Every session worktree recorded and not removed, as `path · branch · reason kept`
         # (BL-116). Reported beside `console` and for its reason: a worktree kept because its
@@ -293,3 +301,19 @@ def production_doctor(
         report["worktrees"] = [" · ".join(row) for row in worktrees]
     report.update(profile_doctor(profiles))
     return report
+
+
+def _sandbox_line(whose: str, label: str) -> dict[str, object]:
+    """One line, and a reason code, for a process's AppArmor label."""
+    if "unprivileged_userns" not in label:
+        return {"line": "sandbox: ok", "reason": None}
+    if whose == "service":
+        return {
+            "line": "sandbox: panes cannot start a sandbox; the installed service unit confines "
+            "the service, so reinstall the unit, then restart the dedicated tmux server",
+            "reason": "service_cannot_sandbox",
+        }
+    return {
+        "line": "sandbox: panes cannot start a sandbox; restart the dedicated tmux server",
+        "reason": "panes_cannot_sandbox",
+    }

@@ -864,6 +864,43 @@ def _unbound_sessions(config, paths: ProductionPaths) -> int | None:
         return None
 
 
+def _sandbox_label(supervisor) -> tuple[str, str] | None:
+    """Whose AppArmor label decides whether a pane can start a sandbox, and the label (BL-147).
+
+    The dedicated tmux server's when one runs: every pane inherits it, and it outlives a service
+    restart. Otherwise the service's, which the next server inherits -- asked only of systemd,
+    because launchd's pid verb would start a job that is not running. A diagnostic never
+    raises: anything unreadable answers None, and `doctor` omits the line.
+    """
+    from remote_agents.adapters.supervisor.pane_confinement import read_confinement
+    from remote_agents.adapters.tmux.gateway import TmuxGateway
+    from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
+
+    try:
+        gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
+        server = asyncio.run(asyncio.wait_for(gateway.server_pid(), timeout=5))
+        if server is not None:
+            label = read_confinement(server)
+            return None if label is None else ("tmux_server", label)
+        if supervisor.kind is not SupervisorKind.SYSTEMD:
+            return None
+        completed = subprocess.run(
+            supervisor.pid_command(),
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        text = completed.stdout.strip()
+        if completed.returncode != 0 or not text.isdigit():
+            return None
+        label = read_confinement(int(text))
+        return None if label is None else ("service", label)
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return None
+
+
 _KEPT_WORKTREES_TIMEOUT_SECONDS = 30.0
 """Bounds the whole listing: each git read has its own bound, and a host with many kept
 worktrees must not hold `doctor` for minutes."""
@@ -912,6 +949,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         worktrees=_kept_worktrees(config),
         unbound_sessions=_unbound_sessions(config, paths),
         permission_failures=_permission_failures(config),
+        sandbox=_sandbox_label(supervisor),
         telegram_ready=_telegram_credentials_are_private(paths),
         service_ready=_command_succeeds(supervisor.liveness_command()),
         profiles=profiles,

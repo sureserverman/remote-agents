@@ -29,16 +29,16 @@ other side so that exactly one parser reads the credential file; here the same c
 has a disclosure argument behind it, and `tests/integration/test_secret_sources.py` already
 treats "no injected environment" as *the* launchd case. Only PATH goes in.
 
-**What has no analogue, said out loud rather than dropped quietly.** The shipped unit's
-hardening block -- `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality` -- is systemd's
-privilege and seccomp machinery. launchd has no equivalent key for any of the three; macOS spends that budget through
-a different mechanism entirely (code signing, entitlements, TCC), which is not something a
-LaunchAgent plist configures. They are absent because there is nothing to write, not because
-the translation forgot them. `After=`/`Wants=network-online.target` has no ordering analogue
-either: `KeepAlive`'s `NetworkState` is a *run condition*, not an ordering edge, and adding it
-beside `SuccessfulExit` would change the restart policy, because launchd ORs the KeepAlive
-keys. The service must therefore tolerate starting before the network is up, and the
-`SuccessfulExit` policy is what carries it if it does not.
+**What has no analogue, said out loud rather than dropped quietly.** The shipped unit's hardening
+block -- `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality` -- is systemd's privilege and
+seccomp machinery. launchd has no equivalent key for any of the three; macOS spends that budget
+through a different mechanism entirely (code signing, entitlements, TCC), which is not something a
+LaunchAgent plist configures. They are absent because there is nothing to write, not because the
+translation forgot them. `After=`/`Wants=network-online.target` has no ordering analogue either:
+`KeepAlive`'s `NetworkState` is a *run condition*, not an ordering edge, and adding it beside
+`SuccessfulExit` would change the restart policy, because launchd ORs the KeepAlive keys. The
+service must therefore tolerate starting before the network is up, and the `SuccessfulExit` policy
+is what carries it if it does not.
 """
 
 from __future__ import annotations

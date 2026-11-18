@@ -535,3 +535,35 @@ async def test_doctor_counts_only_running_sessions_whose_permission_failure_stan
     connection.close()
 
     assert _permission_failures(config) == 2
+
+
+def test_a_confined_tmux_server_says_panes_cannot_sandbox_and_names_the_fix() -> None:
+    """BL-147: after the unit is fixed, the tmux server keeps its old label until it restarts."""
+    report = _healthy_doctor(sandbox=("tmux_server", "unprivileged_userns (enforce)"))
+
+    assert report["sandbox"] == {
+        "line": "sandbox: panes cannot start a sandbox; restart the dedicated tmux server",
+        "reason": "panes_cannot_sandbox",
+    }
+    # Reported, never aggregated: a pane without a sandbox still runs its agent.
+    assert report["healthy"] is True
+    assert "sandbox" not in report["components"]
+
+
+def test_a_confined_service_says_its_unit_confines_it() -> None:
+    report = _healthy_doctor(sandbox=("service", "unprivileged_userns (enforce)"))
+
+    assert report["sandbox"]["reason"] == "service_cannot_sandbox"
+    assert report["sandbox"]["line"].startswith("sandbox: panes cannot start a sandbox")
+
+
+def test_an_unconfined_server_says_ok() -> None:
+    report = _healthy_doctor(sandbox=("tmux_server", "unconfined"))
+
+    assert report["sandbox"] == {"line": "sandbox: ok", "reason": None}
+
+
+def test_an_unreadable_label_gives_no_sandbox_line() -> None:
+    """No AppArmor, macOS, or a label that could not be read: nothing is claimed either way."""
+    assert "sandbox" not in _healthy_doctor(sandbox=None)
+    assert "sandbox" not in _healthy_doctor()

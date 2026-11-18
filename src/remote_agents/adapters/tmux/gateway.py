@@ -855,6 +855,22 @@ class TmuxGateway:
         ):
             await self._runner.run(*self._base_argv(), *arguments)
 
+    async def server_pid(self) -> int | None:
+        """The dedicated server's process id, or None when no server is running.
+
+        Read by `doctor` (BL-147): every pane inherits the server's AppArmor label, and the
+        server outlives a service restart (`KillMode=process`), so the server -- not the
+        service -- is the process whose label decides whether a pane can start a sandbox.
+        """
+        try:
+            output = await self._runner.run(*self._base_argv(), "display-message", "-p", "#{pid}")
+        except RuntimeError as error:
+            if _reports_absent_server(str(error)):
+                return None
+            raise
+        text = output.strip()
+        return int(text) if text.isdigit() else None
+
     async def read_console_option(self, name: str) -> str:
         """One window option, empty when unset -- which is every console built before this."""
         try:
