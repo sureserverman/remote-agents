@@ -370,6 +370,37 @@ state, observed on this host: `is-active` said `active`, `is-enabled` said `not-
 moment. It means the running code is not the code on disk. Re-run `remote-agents onboard
 --install-daemon` to put the definition back and restart onto it.
 
+#### Codex's sandbox under the service
+
+**Symptom.** A managed Codex session's commands print `bwrap: No permissions to create new
+namespace`, and under Approve for me every command is escalated instead of running in Codex's
+sandbox. On Ubuntu, a process that builds an unprivileged user namespace is moved into AppArmor's
+`unprivileged_userns` profile, and every pane inherits the label of the dedicated tmux server that
+started it. Units before v0.70.3 set two hardening lines that did exactly that to the service
+(BL-147, DEC-140); v0.70.3's unit no longer sets them.
+
+**The doctor line.** `remote-agents doctor` reports one of:
+
+- `sandbox: ok` — panes can start a sandbox.
+- `sandbox: panes cannot start a sandbox; restart the dedicated tmux server` (reason
+  `panes_cannot_sandbox`) — the unit is fixed, but the tmux server still carries the old label.
+  `KillMode=process` keeps it, and its label, across a service restart and an upgrade.
+- `sandbox: panes cannot start a sandbox; the installed service unit confines the service …`
+  (reason `service_cannot_sandbox`) — the installed unit is older than the code. Re-run
+  `remote-agents onboard --install-daemon`, then restart the tmux server.
+
+No line at all means the label could not be read: no AppArmor, macOS, or no process to ask.
+
+**The restart.** Restarting the dedicated tmux server interrupts every managed session; restart
+resume (DEC-127) brings them back and lists any it skips.
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+tmux -L remote-agents kill-server
+systemctl --user restart remote-agents.service
+remote-agents doctor   # expect: sandbox: ok
+```
+
 ### Health checks — macOS
 
 ```bash
