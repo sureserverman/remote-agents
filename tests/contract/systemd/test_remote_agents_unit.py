@@ -29,6 +29,29 @@ def test_user_unit_has_private_paths_bounded_restart_and_tmux_survival() -> None
     assert "PrivateTmp=" not in contents
 
 
+def test_user_unit_leaves_user_namespaces_usable(tmp_path: Path) -> None:
+    """BL-147: either directive moves the service into AppArmor's `unprivileged_userns` profile.
+
+    In a user unit each one needs a user namespace to build its mount namespace, and Ubuntu's
+    `kernel.apparmor_restrict_unprivileged_userns = 1` then confines the process. Every pane the
+    service's tmux server starts inherits the label, so Codex's `bwrap` sandbox never starts.
+    Both the rendered template and the checked-in mirror are read: the mirror is what the
+    operator diffs against, and the template is what the installer writes.
+    """
+    from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
+
+    (artifact,) = SystemdSupervisor(home=tmp_path).artifacts()
+    for name, contents in (
+        ("rendered template", artifact.content),
+        ("checked-in mirror", UNIT.read_text(encoding="utf-8")),
+    ):
+        assert "ProtectControlGroups=" not in contents, name
+        assert "ProtectKernelTunables=" not in contents, name
+        assert "NoNewPrivileges=yes" in contents, name
+        assert "RestrictSUIDSGID=yes" in contents, name
+        assert "LockPersonality=yes" in contents, name
+
+
 def test_user_unit_contains_no_secret_literal() -> None:
     contents = UNIT.read_text(encoding="utf-8")
 

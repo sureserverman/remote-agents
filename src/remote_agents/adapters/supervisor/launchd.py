@@ -30,9 +30,8 @@ has a disclosure argument behind it, and `tests/integration/test_secret_sources.
 treats "no injected environment" as *the* launchd case. Only PATH goes in.
 
 **What has no analogue, said out loud rather than dropped quietly.** The shipped unit's
-hardening block -- `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`,
-`ProtectControlGroups`, `ProtectKernelTunables` -- is systemd's namespace and seccomp
-machinery. launchd has no equivalent key for any of the five; macOS spends that budget through
+hardening block -- `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality` -- is systemd's
+privilege and seccomp machinery. launchd has no equivalent key for any of the three; macOS spends that budget through
 a different mechanism entirely (code signing, entitlements, TCC), which is not something a
 LaunchAgent plist configures. They are absent because there is nothing to write, not because
 the translation forgot them. `After=`/`Wants=network-online.target` has no ordering analogue

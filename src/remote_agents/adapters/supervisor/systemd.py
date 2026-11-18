@@ -101,6 +101,11 @@ delete on the strength of a claim that this project once installed it.
 #: reason. `KillMode=process` is the one to be careful with: it is what leaves the managed tmux
 #: sessions running when the service that launched them is stopped, so a session survives a
 #: restart of its own control plane. Stage 3 drills the launchd analogue of exactly that.
+#:
+#: `ProtectControlGroups` and `ProtectKernelTunables` were dropped on purpose (BL-147,
+#: DEC-140). In a user unit each needs a user namespace, and on Ubuntu that puts the service in
+#: AppArmor's `unprivileged_userns` profile, which every pane inherits -- so Codex's `bwrap`
+#: sandbox could not start. Putting either back brings that failure back.
 _UNIT_TEMPLATE = """\
 [Unit]
 Description=Remote Agents private Telegram control plane
@@ -119,8 +124,6 @@ UMask=0077
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-ProtectControlGroups=yes
-ProtectKernelTunables=yes
 
 [Install]
 WantedBy=default.target
