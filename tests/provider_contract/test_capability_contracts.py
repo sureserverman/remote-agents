@@ -133,6 +133,18 @@ def test_thread_permissions_contract(descriptor) -> None:
     )
 
 
+def test_daemon_contract(descriptor) -> None:
+    """A provider declaring `daemon` names its pid without raising and says how to replace it.
+
+    Called for real: the reader only reads a pid file and `/proc`, and answers None when no
+    daemon runs, so the host's own daemon is read and never touched.
+    """
+    daemon = drive_or_skip(descriptor, "daemon")
+    pid = daemon.pid()
+    assert pid is None or (isinstance(pid, int) and pid > 0)
+    assert daemon.stop_hint.strip(), f"{descriptor.profile_id}'s daemon has no stop hint"
+
+
 def test_remote_control_contract(descriptor) -> None:
     """The host-level toggle answers three verbs and offers no way to tear the daemon down.
 

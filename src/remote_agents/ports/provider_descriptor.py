@@ -293,6 +293,22 @@ class HookLicence:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentDaemon:
+    """A provider process outside the pane that runs the agent's turns (BL-147, DEC-140).
+
+    Such a process starts its own session from a pane, keeps the pane's AppArmor label, and
+    outlives the tmux server -- so when it is confined, restarting the server does not free the
+    agent's sandbox. `doctor` reads its label and, when it confines, prints `stop_hint`.
+    """
+
+    pid: Callable[[], int | None]
+    """The running daemon's pid, or None when none runs or no record names a live process."""
+
+    stop_hint: str
+    """What the owner does to replace a confined daemon, worded as an instruction."""
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderDescriptor:
     """One provider's declared capability set, keyed by its profile.
 
@@ -417,6 +433,12 @@ class ProviderDescriptor:
     Codex's alone (2026-11-12, v0.70.0). A preset passed as a launch flag runs Codex's TUI off
     its shared daemon and so without Remote Control, so presets are applied here instead, once
     the service knows the session's thread. Typed, because the port is a ports-layer protocol."""
+
+    daemon: AgentDaemon | None = None
+    """The provider's turn-running process outside the pane, or None when its turns run in it.
+
+    Codex's alone (2026-11-18): its shared app-server daemon runs every turn (v0.158 onwards)
+    and is the process whose label decides whether Codex can start its sandbox."""
 
     reserved_keys: frozenset[str] = frozenset()
     """The tmux key names this provider's own agent binds, which a console must pass through.

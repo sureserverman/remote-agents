@@ -1,6 +1,7 @@
 """Doctor reports component health rather than configuration-shaped guesses."""
 
 from remote_agents.application.doctor import (
+    SandboxReading,
     doctor,
     production_doctor,
     profile_doctor,
@@ -537,9 +538,17 @@ async def test_doctor_counts_only_running_sessions_whose_permission_failure_stan
     assert _permission_failures(config) == 2
 
 
+_CONFINED = "unprivileged_userns (enforce)"
+_DAEMON_FIX = "stop the provider's daemon (`provider daemon stop`)"
+
+
+def _r(holder: str, label: str, fix: str | None = None) -> SandboxReading:
+    return SandboxReading(holder, label, fix)  # type: ignore[arg-type]
+
+
 def test_a_confined_tmux_server_says_panes_cannot_sandbox_and_names_the_fix() -> None:
     """BL-147: after the unit is fixed, the tmux server keeps its old label until it restarts."""
-    report = _healthy_doctor(sandbox=("tmux_server", "unprivileged_userns (enforce)"))
+    report = _healthy_doctor(sandbox=(_r("service", "unconfined"), _r("tmux_server", _CONFINED)))
 
     assert report["sandbox"] == {
         "line": "sandbox: panes cannot start a sandbox; restart the dedicated tmux server",
@@ -550,15 +559,51 @@ def test_a_confined_tmux_server_says_panes_cannot_sandbox_and_names_the_fix() ->
     assert "sandbox" not in report["components"]
 
 
-def test_a_confined_service_says_its_unit_confines_it() -> None:
-    report = _healthy_doctor(sandbox=("service", "unprivileged_userns (enforce)"))
+def test_a_confined_service_is_named_even_while_its_tmux_server_runs() -> None:
+    """The server inherits the service's label, so restarting it alone would change nothing."""
+    report = _healthy_doctor(sandbox=(_r("tmux_server", _CONFINED), _r("service", _CONFINED)))
 
     assert report["sandbox"]["reason"] == "service_cannot_sandbox"
-    assert report["sandbox"]["line"].startswith("sandbox: panes cannot start a sandbox")
+    line = report["sandbox"]["line"]
+    assert "remote-agents onboard --install-daemon" in line
+    assert line.index("install-daemon") < line.index("restart the dedicated tmux server")
+
+
+def test_a_confined_agent_daemon_is_named_with_its_own_fix_when_the_server_is_clean() -> None:
+    """A provider daemon runs the turns, has its own session, and outlives the server."""
+    report = _healthy_doctor(
+        sandbox=(
+            _r("service", "unconfined"),
+            _r("tmux_server", "unconfined"),
+            _r("agent_daemon", _CONFINED, _DAEMON_FIX),
+        )
+    )
+
+    assert report["sandbox"] == {
+        "line": f"sandbox: panes cannot start a sandbox; {_DAEMON_FIX}",
+        "reason": "agent_daemon_cannot_sandbox",
+    }
+
+
+def test_every_confined_process_is_named_in_the_order_it_must_be_fixed() -> None:
+    report = _healthy_doctor(
+        sandbox=(_r("agent_daemon", _CONFINED, _DAEMON_FIX), _r("tmux_server", _CONFINED))
+    )
+
+    assert report["sandbox"]["reason"] == "panes_cannot_sandbox"
+    line = report["sandbox"]["line"]
+    assert line.index("restart the dedicated tmux server") < line.index(_DAEMON_FIX)
+
+
+def test_complain_mode_does_not_confine() -> None:
+    """Complain mode logs and allows; only an enforcing profile stops the namespace."""
+    report = _healthy_doctor(sandbox=(_r("tmux_server", "unprivileged_userns (complain)"),))
+
+    assert report["sandbox"] == {"line": "sandbox: ok", "reason": None}
 
 
 def test_an_unconfined_server_says_ok() -> None:
-    report = _healthy_doctor(sandbox=("tmux_server", "unconfined"))
+    report = _healthy_doctor(sandbox=(_r("service", "unconfined"), _r("tmux_server", "unconfined")))
 
     assert report["sandbox"] == {"line": "sandbox: ok", "reason": None}
 
@@ -566,4 +611,5 @@ def test_an_unconfined_server_says_ok() -> None:
 def test_an_unreadable_label_gives_no_sandbox_line() -> None:
     """No AppArmor, macOS, or a label that could not be read: nothing is claimed either way."""
     assert "sandbox" not in _healthy_doctor(sandbox=None)
+    assert "sandbox" not in _healthy_doctor(sandbox=())
     assert "sandbox" not in _healthy_doctor()

@@ -1,11 +1,26 @@
 """Technology-neutral health reporting for configured core dependencies."""
 
 from collections import Counter
+from dataclasses import dataclass
+from typing import Literal
 
 from remote_agents.application.health import health_report
 from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.profiles import ProfileCompatibility
 from remote_agents.ports.service_supervisor import LivenessMeaning, SupervisorKind
+
+#: Whose label decides whether a pane can start a sandbox, in the order the fixes must run:
+#: a confined service re-confines every server it starts, and a confined server every daemon.
+SandboxHolder = Literal["service", "tmux_server", "agent_daemon"]
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxReading:
+    """One process's AppArmor label. `fix` is the provider's own wording, for a daemon only."""
+
+    holder: SandboxHolder
+    label: str
+    fix: str | None = None
 
 
 def doctor(
@@ -118,7 +133,7 @@ def production_doctor(
     worktrees: tuple[tuple[str, str, str], ...] | None = None,
     unbound_sessions: int | None = None,
     permission_failures: int | None = None,
-    sandbox: tuple[str, str] | None = None,
+    sandbox: tuple[SandboxReading, ...] | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -284,13 +299,14 @@ def production_doctor(
         # A count, and never a verdict: the session works, on its agent's own configuration,
         # and nothing automatic is typed into it until its preset is applied.
         report["permission_failures"] = permission_failures
-    if sandbox is not None:
-        # Whether a pane can start Codex's sandbox (BL-147, DEC-140), as (whose label, label):
-        # the tmux server's when one runs, else the service's, whose label the next server
-        # inherits. Reported, never aggregated: a pane without a sandbox still runs its agent,
-        # and Codex escalates each command instead. None -- no AppArmor, macOS, a label that
-        # could not be read -- omits the line rather than claiming either answer.
-        report["sandbox"] = _sandbox_line(*sandbox)
+    if sandbox:
+        # Whether a pane can start an agent's sandbox (BL-147, DEC-140): one reading per
+        # process that decides it -- the service, whose label the next tmux server inherits;
+        # the tmux server, whose label every pane inherits; and any provider daemon that runs
+        # the turns and outlives the server. Reported, never aggregated: a
+        # pane without a sandbox still runs its agent, and Codex escalates each command
+        # instead. Nothing readable -- no AppArmor, macOS -- omits the line.
+        report["sandbox"] = _sandbox_line(sandbox)
     if worktrees is not None:
         # Every session worktree recorded and not removed, as `path · branch · reason kept`
         # (BL-116). Reported beside `console` and for its reason: a worktree kept because its
@@ -303,17 +319,36 @@ def production_doctor(
     return report
 
 
-def _sandbox_line(whose: str, label: str) -> dict[str, object]:
-    """One line, and a reason code, for a process's AppArmor label."""
-    if "unprivileged_userns" not in label:
+_SANDBOX_FIXES: dict[str, tuple[str, str]] = {
+    "service": (
+        "service_cannot_sandbox",
+        "re-run `remote-agents onboard --install-daemon` (the installed unit confines the service)",
+    ),
+    "tmux_server": ("panes_cannot_sandbox", "restart the dedicated tmux server"),
+    "agent_daemon": ("agent_daemon_cannot_sandbox", "stop the agent's daemon"),
+}
+
+
+def _confines(label: str) -> bool:
+    """Only an enforcing `unprivileged_userns` stops the namespace; complain mode allows it."""
+    return label.startswith("unprivileged_userns") and label.endswith("(enforce)")
+
+
+def _sandbox_line(readings: tuple[SandboxReading, ...]) -> dict[str, object]:
+    """One line naming every confined process's fix, in order, and the first one's reason."""
+    order = list(_SANDBOX_FIXES)
+    confined = sorted(
+        (reading for reading in readings if _confines(reading.label)),
+        key=lambda reading: order.index(reading.holder),
+    )
+    if not confined:
         return {"line": "sandbox: ok", "reason": None}
-    if whose == "service":
-        return {
-            "line": "sandbox: panes cannot start a sandbox; the installed service unit confines "
-            "the service, so reinstall the unit, then restart the dedicated tmux server",
-            "reason": "service_cannot_sandbox",
-        }
+    fixes: list[str] = []
+    for reading in confined:
+        fix = reading.fix or _SANDBOX_FIXES[reading.holder][1]
+        if fix not in fixes:
+            fixes.append(fix)
     return {
-        "line": "sandbox: panes cannot start a sandbox; restart the dedicated tmux server",
-        "reason": "panes_cannot_sandbox",
+        "line": f"sandbox: panes cannot start a sandbox; {'; then '.join(fixes)}",
+        "reason": _SANDBOX_FIXES[confined[0].holder][0],
     }

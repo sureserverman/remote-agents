@@ -126,6 +126,7 @@ from remote_agents.ports.agent_usage import (
 )
 from remote_agents.ports.limit_screen import LimitScreen
 from remote_agents.ports.provider_descriptor import (
+    AgentDaemon,
     HookIdentity,
     HookLicence,
     ProviderDescriptor,
@@ -448,6 +449,14 @@ def profile_composers(
         if descriptor is not None and descriptor.composer is not None:
             resolved[name] = descriptor
     return resolved
+
+
+def agent_daemons(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> tuple[AgentDaemon, ...]:
+    """Every provider's turn-running process outside the pane, for `doctor` (BL-147)."""
+    built = provider_descriptors() if descriptors is None else descriptors
+    return tuple(descriptor.daemon for descriptor in built if descriptor.daemon is not None)
 
 
 def profile_limit_screens(

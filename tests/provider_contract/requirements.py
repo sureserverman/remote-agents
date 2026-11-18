@@ -62,6 +62,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "limit_screen": (SUPPORTED, "limit sentence read from the 2.1.284 bundle, 2026-09-28"),
         "adopt_template": (SUPPORTED, "the `/` command of the planning plugin (staged-planning)"),
         "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
+        "daemon": (UNSUPPORTED, "turns run in the pane; the registry declares None"),
     },
     "codex": {
         "permission_presets": (SUPPORTED, "four closed permission presets, applied after launch"),
@@ -81,6 +82,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "planning@engineering-skills 0.2.1's `$` skill mention (engineering-skills DEC-045)",
         ),
         "thread_permissions": (SUPPORTED, "thread/settings/update on the shared daemon"),
+        "daemon": (SUPPORTED, "the shared app-server daemon, named by its pid file"),
     },
     "opencode": {
         "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
@@ -106,6 +108,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "no handoff writer ported to opencode (BL-123); the registry declares None",
         ),
         "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
+        "daemon": (UNSUPPORTED, "turns run in the pane; the registry declares None"),
     },
     "cursor-agent": {
         "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
@@ -128,5 +131,6 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
             "no handoff writer ported to cursor (BL-123); the registry declares None",
         ),
         "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
+        "daemon": (UNSUPPORTED, "turns run in the pane; the registry declares None"),
     },
 }

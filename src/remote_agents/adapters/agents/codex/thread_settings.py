@@ -174,36 +174,8 @@ class CodexThreadPermissions:
         changed leaves an applied preset alone. One stat and one read of a few hundred bytes,
         so it stays on the loop, as `CodexHomeSettings` does.
         """
-        try:
-            home = self._home
-            if home is None:
-                # As `codex` resolves it, so a drill's private home reads its own daemon.
-                configured = os.environ.get("CODEX_HOME")
-                home = Path(configured).expanduser() if configured else Path.home() / ".codex"
-            # One descriptor, never following a link: what is checked is what is read.
-            descriptor = os.open(
-                _daemon_pid_file(home),
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-            )
-        except (OSError, RuntimeError, ValueError):
-            # RuntimeError: a `~user` home that cannot be expanded.
-            return None
-        try:
-            status = os.fstat(descriptor)
-            if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
-                return None
-            raw = os.read(descriptor, _DAEMON_PID_MAX_BYTES + 1)
-        except OSError:
-            return None
-        finally:
-            os.close(descriptor)
-        if len(raw) > _DAEMON_PID_MAX_BYTES:
-            return None
-        try:
-            record = json.loads(raw.decode("utf-8"))
-        except (ValueError, RecursionError):
-            return None
-        if not isinstance(record, dict):
+        record = _daemon_record(self._home)
+        if record is None:
             return None
         pid = record.get("pid")
         started = record.get("processStartTime")
@@ -341,6 +313,72 @@ class CodexThreadPermissions:
             with contextlib.suppress(Exception):
                 # Bounded on its own: this runs after the deadline has fired, too.
                 await asyncio.wait_for(writer.wait_closed(), 1.0)
+
+
+def _daemon_record(home: Path | None) -> dict[str, object] | None:
+    """The JSON object in this home's daemon pid file, or None for anything less.
+
+    `home=None` resolves as `codex` does, so a drill's private home reads its own daemon. One
+    descriptor, never following a link: what is checked is what is read. Every failure is None.
+    """
+    try:
+        if home is None:
+            configured = os.environ.get("CODEX_HOME")
+            home = Path(configured).expanduser() if configured else Path.home() / ".codex"
+        descriptor = os.open(
+            _daemon_pid_file(home),
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        )
+    except (OSError, RuntimeError, ValueError):
+        # RuntimeError: a `~user` home that cannot be expanded.
+        return None
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid():
+            return None
+        raw = os.read(descriptor, _DAEMON_PID_MAX_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    if len(raw) > _DAEMON_PID_MAX_BYTES:
+        return None
+    try:
+        record = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def daemon_pid(home: Path | None = None, *, proc: Path = Path("/proc")) -> int | None:
+    """The pid of this home's running daemon, or None unless the record names a live process.
+
+    For `doctor` (BL-147): the daemon runs every turn, so its AppArmor label decides whether
+    Codex can start its sandbox, and it keeps that label across a tmux restart. A pid alone is
+    reused, so the record's boot id and start ticks must match the process now holding it.
+    """
+    record = _daemon_record(home)
+    if record is None:
+        return None
+    pid = record.get("pid")
+    process = record.get("processIdentity")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if not isinstance(process, dict):
+        return None
+    boot, ticks = process.get("bootId"), process.get("startTicks")
+    if not isinstance(boot, str) or not isinstance(ticks, int) or isinstance(ticks, bool):
+        return None
+    try:
+        current_boot = (proc / "sys" / "kernel" / "random" / "boot_id").read_text().strip()
+        stat_line = (proc / str(pid) / "stat").read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    # Field 2, the command name, may hold spaces and `)`; field 22 counts from after the last.
+    after_name = stat_line.rpartition(")")[2].split()
+    if current_boot != boot or len(after_name) < 20 or after_name[19] != str(ticks):
+        return None
+    return pid
 
 
 def _daemon_pid_file(home: Path) -> Path:

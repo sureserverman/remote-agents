@@ -379,27 +379,39 @@ sandbox. On Ubuntu, a process that builds an unprivileged user namespace is move
 started it. Units before v0.70.3 set two hardening lines that did exactly that to the service
 (BL-147, DEC-140); v0.70.3's unit no longer sets them.
 
-**The doctor line.** `remote-agents doctor` reports one of:
+**The doctor line.** `remote-agents doctor` reads the AppArmor label of three processes: the
+service (whose label the next tmux server inherits), the dedicated tmux server (whose label every
+pane inherits), and Codex's shared app-server daemon (which runs Codex's turns, starts its own
+session from a pane, keeps that pane's label, and outlives the tmux server). Only an enforcing
+`unprivileged_userns` label counts; complain mode allows the namespace. The report's `sandbox`
+entry holds a `line` and a `reason`:
 
-- `sandbox: ok` — panes can start a sandbox.
-- `sandbox: panes cannot start a sandbox; restart the dedicated tmux server` (reason
-  `panes_cannot_sandbox`) — the unit is fixed, but the tmux server still carries the old label.
-  `KillMode=process` keeps it, and its label, across a service restart and an upgrade.
-- `sandbox: panes cannot start a sandbox; the installed service unit confines the service …`
-  (reason `service_cannot_sandbox`) — the installed unit is older than the code. Re-run
-  `remote-agents onboard --install-daemon`, then restart the tmux server.
+- `sandbox: ok` — none of the three is in an enforcing `unprivileged_userns` profile.
+- `sandbox: panes cannot start a sandbox; …` — then each fix that is needed, in the order it must
+  run, and the reason of the first:
+  - `service_cannot_sandbox` — the installed unit is older than the code and still confines the
+    service. Re-run `remote-agents onboard --install-daemon`.
+  - `panes_cannot_sandbox` — restart the dedicated tmux server. `KillMode=process` keeps it, and
+    its label, across a service restart and an upgrade.
+  - `agent_daemon_cannot_sandbox` — stop Codex's daemon with `codex app-server daemon stop`; the
+    next Codex session starts a new one under the clean server.
 
-No line at all means the label could not be read: no AppArmor, macOS, or no process to ask.
+No `sandbox` entry at all means no label could be read: no AppArmor, macOS, or no process to ask.
 
-**The restart.** Restarting the dedicated tmux server interrupts every managed session; restart
-resume (DEC-127) brings them back and lists any it skips.
+**The restart.** Killing the dedicated tmux server ends every managed session and the console,
+including its four surface panes. Restart resume (DEC-127) brings the sessions back when the
+service restarts, and lists any it skips. Stopping Codex's daemon ends any Codex pane still
+attached to it, so do it in the same window.
 
 ```bash
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 tmux -L remote-agents kill-server
+codex app-server daemon stop
 systemctl --user restart remote-agents.service
-remote-agents doctor   # expect: sandbox: ok
+remote-agents doctor   # its 'sandbox' entry reads: 'line': 'sandbox: ok'
 ```
+
+Re-enter the console afterwards so its surface panes are drawn again.
 
 ### Health checks — macOS
 

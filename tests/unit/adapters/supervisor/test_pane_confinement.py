@@ -22,6 +22,7 @@ def _proc_with(tmp_path: Path, pid: int, content: bytes) -> Path:
         (b"unprivileged_userns (enforce)\n", "unprivileged_userns (enforce)"),
         (b"unconfined\n", "unconfined"),
         (b"unconfined", "unconfined"),
+        (b"unconfined\n\0", "unconfined"),
         (b"snap.codex.codex (complain)\n", "snap.codex.codex (complain)"),
     ],
 )

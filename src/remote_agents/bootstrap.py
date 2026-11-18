@@ -60,6 +60,7 @@ from remote_agents.adapters.sqlite.store_split import split_stores
 from remote_agents.agent_event import HOOK_PROVIDERS, run_session_id, spool_from_stdin
 from remote_agents.application.console import CloseOutcome
 from remote_agents.application.doctor import (
+    SandboxReading,
     credential_file_report,
     production_doctor,
     profile_doctor,
@@ -864,24 +865,22 @@ def _unbound_sessions(config, paths: ProductionPaths) -> int | None:
         return None
 
 
-def _sandbox_label(supervisor) -> tuple[str, str] | None:
-    """Whose AppArmor label decides whether a pane can start a sandbox, and the label (BL-147).
+def _sandbox_labels(supervisor) -> tuple[SandboxReading, ...]:
+    """The AppArmor label of each process that decides whether a pane can sandbox (BL-147).
 
-    The dedicated tmux server's when one runs: every pane inherits it, and it outlives a service
-    restart. Otherwise the service's, which the next server inherits -- asked only of systemd,
-    because launchd's pid verb would start a job that is not running. A diagnostic never
-    raises: anything unreadable answers None, and `doctor` omits the line.
+    The service's, under systemd only (launchd's pid verb would start a job that is not
+    running), whose label the next tmux server inherits; the dedicated tmux server's, which
+    every pane inherits and which outlives a service restart; and each provider daemon's that
+    runs turns outside the pane and outlives the server, with the provider's own stop hint.
+    Each is read on its own and an unreadable one is left out, so one failure never hides the
+    others. Never raises.
     """
+    from remote_agents.adapters.agents.registry import agent_daemons
     from remote_agents.adapters.supervisor.pane_confinement import read_confinement
     from remote_agents.adapters.tmux.gateway import TmuxGateway
     from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
 
-    try:
-        gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
-        server = asyncio.run(asyncio.wait_for(gateway.server_pid(), timeout=5))
-        if server is not None:
-            label = read_confinement(server)
-            return None if label is None else ("tmux_server", label)
+    def service() -> int | None:
         if supervisor.kind is not SupervisorKind.SYSTEMD:
             return None
         completed = subprocess.run(
@@ -893,12 +892,30 @@ def _sandbox_label(supervisor) -> tuple[str, str] | None:
             timeout=5,
         )
         text = completed.stdout.strip()
-        if completed.returncode != 0 or not text.isdigit():
-            return None
-        label = read_confinement(int(text))
-        return None if label is None else ("service", label)
+        return int(text) if completed.returncode == 0 and text.isdigit() else None
+
+    def tmux_server() -> int | None:
+        gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
+        return asyncio.run(asyncio.wait_for(gateway.server_pid(), timeout=5))
+
+    readers: list[tuple[str, Callable[[], int | None], str | None]] = [
+        ("service", service, None),
+        ("tmux_server", tmux_server, None),
+    ]
+    try:
+        readers += [("agent_daemon", daemon.pid, daemon.stop_hint) for daemon in agent_daemons()]
     except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
-        return None
+        pass
+    readings: list[SandboxReading] = []
+    for holder, read_pid, fix in readers:
+        try:
+            pid = read_pid()
+            label = None if pid is None else read_confinement(pid)
+        except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+            continue
+        if label is not None:
+            readings.append(SandboxReading(holder, label, fix))  # type: ignore[arg-type]
+    return tuple(readings)
 
 
 _KEPT_WORKTREES_TIMEOUT_SECONDS = 30.0
@@ -949,7 +966,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         worktrees=_kept_worktrees(config),
         unbound_sessions=_unbound_sessions(config, paths),
         permission_failures=_permission_failures(config),
-        sandbox=_sandbox_label(supervisor),
+        sandbox=_sandbox_labels(supervisor),
         telegram_ready=_telegram_credentials_are_private(paths),
         service_ready=_command_succeeds(supervisor.liveness_command()),
         profiles=profiles,

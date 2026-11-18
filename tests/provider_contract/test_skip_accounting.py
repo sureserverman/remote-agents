@@ -57,7 +57,9 @@ def test_the_skip_count_is_fully_accounted_for() -> None:
     # unsupported for claude, opencode and cursor-agent (Task 1.2 of the codex-permissions-on-
     # the-daemon plan). The live run, re-summed that day, reported 14 SKIPPED tests from these 13
     # declarations, for the same opencode reason.
-    assert expected_skips() == 13, (
+    # 13 -> 16 on 2026-11-18: `daemon` joined the capability set, declared unsupported for
+    # claude, opencode and cursor-agent, whose turns run in the pane (BL-147, DEC-140).
+    assert expected_skips() == 16, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

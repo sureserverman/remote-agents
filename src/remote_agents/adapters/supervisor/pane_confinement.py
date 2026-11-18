@@ -24,7 +24,7 @@ def read_confinement(pid: int, *, proc: Path = Path("/proc")) -> str | None:
     except OSError:
         return None
     try:
-        label = raw.decode("ascii").strip().rstrip("\0")
+        label = raw.decode("ascii").rstrip("\0").strip()
     except UnicodeDecodeError:
         return None
     return label if _APPARMOR_LABEL.fullmatch(label) else None

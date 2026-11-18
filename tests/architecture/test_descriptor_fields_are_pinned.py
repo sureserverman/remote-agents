@@ -65,6 +65,10 @@ import typing
 #: `2026-11-12-codex-permissions-on-the-daemon-plan.md` (Task 1.2), which grew the capability
 #: half: `thread_permissions` applies a preset to a running thread on the provider's shared
 #: server. A real `None`: only Codex takes presets, and only after launch.
+#: It moved 15 -> 16 on 2026-11-18 by the plan
+#: `2026-11-18-backlog-sweep-sub-01-codex-sandbox-plan.md` (Stage 1 gate, BL-147, DEC-140),
+#: which grew the capability half: `daemon` is the provider's turn-running process outside the
+#: pane, whose AppArmor label `doctor` reads. A real `None`: only Codex runs turns in a daemon.
 _IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
     "permission_presets",
@@ -78,6 +82,7 @@ _CAPABILITY_FIELDS = (
     "limit_screen",
     "adopt_template",
     "thread_permissions",
+    "daemon",
 )
 _RESERVATION_FIELDS = ("reserved_keys",)
 

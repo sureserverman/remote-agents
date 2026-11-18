@@ -194,3 +194,54 @@ async def test_a_legacy_home_with_a_daemon_pid_beside_it_reads_app_server_pid(tm
 
     assert await _identity(home) is not None
     assert await _identity(home) == await _identity(_home(tmp_path / "again", MEASURED))
+
+
+# --- `daemon_pid`: which live process is the daemon, for `doctor`'s sandbox line (BL-147) ---
+
+_BOOT = MEASURED["processIdentity"]["bootId"]
+_TICKS = MEASURED["processIdentity"]["startTicks"]
+
+
+def _proc(tmp_path: Path, pid: int, ticks: int, boot: str = _BOOT) -> Path:
+    proc = tmp_path / "proc"
+    (proc / "sys" / "kernel" / "random").mkdir(parents=True, exist_ok=True)
+    (proc / "sys" / "kernel" / "random" / "boot_id").write_text(boot + "\n")
+    (proc / str(pid)).mkdir(parents=True, exist_ok=True)
+    # Field 2 holds spaces and a parenthesis on purpose: the start time is field 22, counted
+    # after the last `)`.
+    fields = ["S"] + ["0"] * 18 + [str(ticks)] + ["0"] * 10
+    (proc / str(pid) / "stat").write_text(f"{pid} (codex app) server) " + " ".join(fields) + "\n")
+    return proc
+
+
+def test_the_live_daemon_is_named_by_its_pid(tmp_path) -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import daemon_pid
+
+    home = _home(tmp_path, MEASURED)
+    proc = _proc(tmp_path, MEASURED["pid"], _TICKS)
+
+    assert daemon_pid(home, proc=proc) == MEASURED["pid"]
+
+
+@pytest.mark.parametrize(
+    ("ticks", "boot"),
+    [
+        (_TICKS + 1, _BOOT),  # the pid was reused by a later process
+        (_TICKS, "another-boot"),  # the file is from before a reboot
+    ],
+)
+def test_a_record_that_does_not_name_the_live_process_is_none(tmp_path, ticks, boot) -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import daemon_pid
+
+    home = _home(tmp_path, MEASURED)
+    proc = _proc(tmp_path, MEASURED["pid"], ticks, boot)
+
+    assert daemon_pid(home, proc=proc) is None
+
+
+def test_no_file_or_no_process_is_none(tmp_path) -> None:
+    from remote_agents.adapters.agents.codex.thread_settings import daemon_pid
+
+    proc = _proc(tmp_path, 1, _TICKS)
+    assert daemon_pid(tmp_path / "nothing", proc=proc) is None
+    assert daemon_pid(_home(tmp_path / "h", MEASURED), proc=proc) is None

@@ -69,6 +69,15 @@ def test_a_unit_hardened_like_the_service_can_start_bwrap(tmp_path: Path) -> Non
         pytest.skip("no systemd user manager answers here (needs XDG_RUNTIME_DIR and a login)")
     if shutil.which("bwrap") is None:
         pytest.skip("bwrap is not installed")
+    # Without the kernel's restriction bwrap starts under either directive, so a pass here
+    # would prove nothing; skip, visibly, rather than pass vacuously.
+    restriction = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+    try:
+        restricted = restriction.read_text().strip() == "1"
+    except OSError:
+        restricted = False
+    if not restricted:
+        pytest.skip("kernel.apparmor_restrict_unprivileged_userns is not 1 on this host")
 
     (artifact,) = SystemdSupervisor(home=tmp_path).artifacts()
     properties = _confinement_properties(artifact.content)
