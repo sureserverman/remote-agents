@@ -380,6 +380,26 @@ def test_a_tmux_failure_before_anything_was_typed_is_a_refusal() -> None:
     assert pane.typed == []
 
 
+def test_a_tmux_failure_leaving_the_mode_is_a_refusal_with_nothing_typed() -> None:
+    """`copy-mode -q` runs before the paste, so a failure there typed nothing."""
+    pane = PromptPane([_screen("claude", "idle")], fail_on="copy-mode")
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
+    assert pane.typed == []
+
+
+def test_a_busy_pane_is_refused_without_leaving_its_mode() -> None:
+    """Out of a mode only to type: a refused relay keeps the owner's scroll-back."""
+    pane = PromptPane([_screen("claude", "busy")])
+
+    _send(pane, "hello")
+
+    assert pane.typed == []
+    assert not any("copy-mode" in call for call in pane.calls), pane.calls
+
+
 def test_a_cleanup_that_hangs_does_not_outlast_the_bound() -> None:
     """The buffer's deletion is bounded too, or a stalled tmux freezes the bot after all."""
     import time

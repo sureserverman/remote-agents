@@ -176,10 +176,13 @@ def test_every_locked_send_leaves_any_tmux_mode_first() -> None:
     typing = [region for region in _locked_regions(tree) if _typing_constants(region)]
     assert typing, "no locked region types, so this check would be vacuous"
     for region in typing:
+        # `copy-mode` without `-q` would enter the mode, not leave it: the argv is matched whole.
         leaves = [
             node.lineno
             for node in ast.walk(region)
-            if isinstance(node, ast.Constant) and node.value == "copy-mode"
+            if isinstance(node, ast.Call)
+            and [arg.value for arg in node.args if isinstance(arg, ast.Constant)][:2]
+            == ["copy-mode", "-q"]
         ]
         first_key = min(constant.lineno for constant in _typing_constants(region))
         assert leaves and min(leaves) < first_key, (

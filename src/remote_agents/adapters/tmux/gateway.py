@@ -595,8 +595,6 @@ class TmuxGateway:
         target = await self._following_target(session_id)
         async with self._keys_for(session_id):
             try:
-                # Out of any mode first, or the keys go to the mode (see `deliver_prompt`).
-                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
                 capture = await self._runner.run(
                     *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )
@@ -604,6 +602,12 @@ class TmuxGateway:
                 raise _target_missing_or(error, f"ra-{session_id}") from error
             if not allowed(capture):
                 return capture
+            try:
+                # Out of any mode before the first key, or the keys go to the mode (see
+                # `deliver_prompt`); after the look, so a refusal leaves the owner's scroll-back.
+                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
+            except RuntimeError as error:
+                raise _target_missing_or(error, f"ra-{session_id}") from error
             # Inline rather than shared with `send_keys`: every `send-keys` argv must sit inside
             # a `_keys_for` block to exist (`test_key_lock.py` parses this file for it).
             for index, key in enumerate(keys):
@@ -650,15 +654,6 @@ class TmuxGateway:
             loading = False
             pasted = False
             try:
-                # Out of any mode before anything is looked at or typed. In copy-mode or
-                # view-mode a key goes to the mode, not the agent: `Enter` is swallowed, and `/`
-                # opens a search prompt that `send-keys` waits on for as long as any client is
-                # attached -- a rollover's `/exit` held the operation lock 3.5 hours that way
-                # (v0.70.3). The wheel enters copy-mode (the console turns `mouse` on), and a
-                # binding whose shell command prints shows it in view-mode. `capture-pane` reads
-                # the screen under the mode, so no look can see it. `-q` leaves every mode and
-                # is a no-op on a pane in none; the owner's scroll position is the cost.
-                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
                 # The title first, then the screen, both inside this hold: Codex draws no busy
                 # line while it streams its answer and marks the turn only in its title.
                 title = await self._runner.run(*self._base_argv(), *pane_title_args(target))
@@ -668,6 +663,16 @@ class TmuxGateway:
                 )
                 if not may_paste(before, title):
                     return PromptSteps(before, title=title)
+                # Out of any mode before anything is typed. In copy-mode or view-mode a key goes
+                # to the mode, not the agent: `Enter` is swallowed, and `/` opens a search prompt
+                # that `send-keys` waits on for as long as any client is attached -- a rollover's
+                # `/exit` held the operation lock 3.5 hours that way (v0.70.3). The wheel enters
+                # copy-mode (the console turns `mouse` on), and a binding whose shell command
+                # prints shows it in view-mode. `capture-pane` reads the screen under the mode, so
+                # the look above is unchanged by it. `-q` leaves every mode, and is a no-op on a
+                # pane in none or a dead one (measured, tmux 3.4); the owner's scroll position
+                # is the cost, paid only when something is about to be typed.
+                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
                 loading = True
                 await self._runner.feed(text, *self._base_argv(), "load-buffer", "-b", buffer, "-")
                 await self._runner.run(
