@@ -84,6 +84,9 @@ class Rig:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            # `attach` refuses TERM=dumb ("terminal does not support clear"), which a systemd
+            # unit and a hosted CI runner both set.
+            env={**os.environ, "TERM": "xterm-256color"},
         )
         for _ in range(50):
             if self.tmux("list-clients", "-F", "#{client_name}").strip():
