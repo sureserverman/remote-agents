@@ -48,13 +48,14 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from datetime import date
+from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -79,6 +80,7 @@ from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
+from remote_agents.adapters.tmux.composer import PaneState, classify, unstyled
 from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
 from remote_agents.application.interrupted_resume import ResumeReport
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
@@ -102,6 +104,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.domain.trust import TrustState
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.production import ProductionPaths
 
 _TURN = "Reply with exactly the word: ok"
@@ -150,10 +153,19 @@ def _workspace(parent: Path) -> Path:
 
 
 def _isolated_home(
-    root: Path, repo: Path, claude: Path, codex: Path, codex_home: Path
+    root: Path,
+    repo: Path,
+    claude: Path,
+    codex: Path,
+    codex_home: Path,
+    *,
+    mcp_delay: float | None = None,
 ) -> ProductionPaths:
     """A temporary operator home: config with the restart switch at its default, a registry
-    naming only `repo`, and the two wrappers that point each agent's hooks at this run's spool."""
+    naming only `repo`, and the two wrappers that point each agent's hooks at this run's spool.
+
+    `mcp_delay` gives Codex one MCP server that answers nothing for that many seconds after it
+    starts, as a slow real one does at boot (`_SLOW_MCP`)."""
     paths = ProductionPaths.for_home(root)
     paths.ensure_directories(include_unit_directory=False)
     dev_root = root / "dev"
@@ -200,9 +212,19 @@ def _isolated_home(
     # One daemon, as the owner's panes share one: its own namespace would hide it from the resume.
     codex_argv = sharing_daemon(codex_command(codex, root, codex_home, repo, operator_home=root))
     claude_argv = claude_command(claude, root, repo)
+    slow = ""
+    if mcp_delay is not None:
+        server = root / "slow_mcp.py"
+        server.write_text(_SLOW_MCP, encoding="utf-8")
+        slow = (
+            "[mcp_servers.slow]\n"
+            f"command = {json.dumps(sys.executable)}\n"
+            f"args = [{json.dumps(str(server))}, {json.dumps(str(mcp_delay))}]\n"
+            "startup_timeout_sec = 60\n"
+        )
     (codex_home / "config.toml").write_text(
         'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
-        "[notice]\nhide_rate_limit_model_nudge = true\n",
+        "[notice]\nhide_rate_limit_model_nudge = true\n" + slow,
         encoding="utf-8",
     )
     install_agent_hooks(
@@ -278,6 +300,56 @@ class _Process:
         self.answers: list[str] = []
         self.notices: list[tuple[tuple[ResumeReport, ...], int]] = []
         self.passes = 0
+        self.descriptors = {descriptor.profile_id: descriptor for descriptor in descriptors}
+        #: What each session's pane showed when the restart pass came to type into it: the first
+        #: send only, or every send under `capture_only` (BL-137, Task 3.1).
+        self.looks: dict[SessionId, list[dict[str, object]]] = {}
+        #: Look, never type: each send is answered from the look itself (`_capture_answer`).
+        self.capture_only = False
+
+    async def look(self, session_id: SessionId) -> dict[str, object]:
+        """The pane at this instant: its screen read three ways -- the on-screen busy line, the
+        title spinner, and the classification with and without the session's turn marker."""
+        at = time.monotonic()
+        screen = title = ""
+        with contextlib.suppress(Exception):
+            screen = await self.terminal.capture(session_id)
+        with contextlib.suppress(Exception):
+            title = (await self.terminal.pane_title(session_id)).rstrip("\n")
+        record = await self.store.get(session_id)
+        descriptor = None if record is None else self.descriptors.get(record.profile_id)
+        declared = None if descriptor is None else descriptor.composer
+        plain = unstyled(screen)
+        busy_lines = (
+            []
+            if declared is None
+            else [
+                line.rstrip()
+                for line in plain.splitlines()
+                if any(re.search(pattern, line) for pattern in declared.busy)
+            ]
+        )
+        started = FileTurnMarkers(self.paths.activity_directory).started_at(str(session_id))
+        return {
+            "at": at,
+            "state": None if descriptor is None else classify(screen, descriptor).value,
+            "state_with_title": (
+                None if descriptor is None else classify(screen, descriptor, title).value
+            ),
+            "state_with_marker": (
+                None
+                if descriptor is None
+                else classify(
+                    screen, descriptor, title, turn_started_at=started, now=datetime.now(UTC)
+                ).value
+            ),
+            "busy_lines": busy_lines,
+            "title": title,
+            "title_busy": declared is not None
+            and any(re.search(pattern, title) for pattern in declared.busy_title),
+            "marker": None if started is None else started.isoformat(),
+            "screen": "\n".join(line.rstrip() for line in plain.splitlines() if line.strip()),
+        }
 
     def project(self, repo: Path):
         found = next((pid for pid, path in self.projects.paths.items() if path == repo), None)
@@ -290,6 +362,12 @@ class _Process:
 
         async def counted(session_id: SessionId, text: str):
             self.sends.append((session_id, text))
+            if self.capture_only or session_id not in self.looks:
+                self.looks.setdefault(session_id, []).append(await self.look(session_id))
+            if self.capture_only:
+                delivery = _capture_answer(self.looks[session_id][-1])
+                self.answers.append(f"{delivery.outcome.value}:{delivery.reason}")
+                return delivery
             delivery = await send(session_id, text)
             self.answers.append(f"{delivery.outcome.value}:{delivery.reason}")
             return delivery
@@ -552,6 +630,158 @@ async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged
         if repo is not None:
             shutil.rmtree(repo, ignore_errors=True)
         shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+#: An MCP server over stdio that answers nothing until its first argument's seconds have passed,
+#: then answers `initialize` and an empty `tools/list`: a slow MCP start at Codex's boot.
+_SLOW_MCP = """\
+import json, sys, time
+time.sleep(float(sys.argv[1]))
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {
+            "protocolVersion": message.get("params", {}).get("protocolVersion", "2025-06-18"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "slow", "version": "0"},
+        }
+        answer = {"jsonrpc": "2.0", "id": message["id"], "result": result}
+    elif method == "tools/list":
+        answer = {"jsonrpc": "2.0", "id": message["id"], "result": {"tools": []}}
+    else:
+        answer = {"jsonrpc": "2.0", "id": message["id"],
+                  "error": {"code": -32601, "message": "not offered"}}
+    print(json.dumps(answer), flush=True)
+"""
+#: How long the slow MCP server keeps Codex's boot waiting: inside the 1.9-10 s measured
+#: 2026-10-17, and longer than the pass's first look takes to come.
+_MCP_DELAY = 8.0
+
+
+def _capture_answer(look: dict[str, object]) -> PromptDelivery:
+    """What the capture drill answers the pass instead of typing: a booting refusal while the
+    pane reads busy or unrecognised from its screen and title, so the pass looks again on its
+    own cadence, and a final refusal once it reads anything else. Nothing is ever typed."""
+    state = look["state_with_title"]
+    if state == PaneState.BUSY.value:
+        return PromptDelivery(PromptOutcome.REFUSED, PromptReason.BUSY)
+    if state == PaneState.UNKNOWN.value:
+        return PromptDelivery(PromptOutcome.REFUSED, PromptReason.UNRECOGNISED)
+    if state == PaneState.DIALOG.value:
+        return PromptDelivery(PromptOutcome.REFUSED, PromptReason.DIALOG)
+    return PromptDelivery(PromptOutcome.REFUSED, PromptReason.EMPTY)
+
+
+@pytest.mark.live_acceptance
+@pytest.mark.parametrize("shape", ["survivor", "boot"])
+async def test_first_look_capture(
+    shape: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BL-137's measurement (Task 3.1): what a resumed Codex pane shows each time the restart
+    pass comes to type into it, with nothing ever typed.
+
+    `survivor`: only the tmux server is killed under a turn running `sleep 40`; the daemon and
+    the turn live on. `boot`: a reboot -- the server and the daemon go -- under the same turn,
+    with an MCP server that keeps Codex's boot waiting `_MCP_DELAY` seconds. Each look is
+    printed as one `FIRST_LOOK` JSON line. Opt-in twice: it spends one short turn per run
+    (OD-2), and asserts only that the pass looked."""
+    if os.environ.get("REMOTE_AGENTS_FIRST_LOOK_CAPTURE") != "1":
+        pytest.skip("BLOCKED: not asked for; run with REMOTE_AGENTS_FIRST_LOOK_CAPTURE=1")
+    claude, codex = _prerequisites()
+    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-rfl-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
+    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
+    codex_home = short_codex_home()
+    repo: Path | None = None
+    connections = []
+    seen: dict[str, object] = {"shape": shape, "codex": _codex_version(codex)}
+    try:
+        repo = _workspace(tmp_path)
+        paths = _isolated_home(
+            tmp_path / "home",
+            repo,
+            claude,
+            codex,
+            codex_home,
+            mcp_delay=_MCP_DELAY if shape == "boot" else None,
+        )
+        config = load_config(paths.config_path)
+        connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
+        first = _Process(config, connections[-1], paths)
+        outcome = await first.backend.sessions.launch(
+            LaunchCommand(
+                first.project(repo),
+                CODEX,
+                _key(f"first-look-{shape}"),
+                "restart-live",
+                # Shares the daemon, so a tmux-only crash leaves the turn running there.
+                permissions=PermissionPreset.PROVIDER_DEFAULT,
+            )
+        )
+        session_id = outcome.record.session_id
+        if outcome.record.state is SessionState.UNTRUSTED:
+            await _answer_trust(first, session_id)
+        await _until_running(first, session_id, socket)
+        await _type(first, session_id, _LONG_TURN)
+        markers = FileTurnMarkers(paths.activity_directory)
+        await _until_sleeping(first, markers, session_id)
+
+        subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30)
+        if shape == "boot":
+            _stop_codex_daemon(codex, codex_home)
+        await _until_gone(first)
+        seen["after_kill"] = _alive(codex_home)
+        killed = time.monotonic()
+
+        connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
+        second = _Process(config, connections[-1], paths)
+        second.capture_only = True
+
+        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            deadline = time.monotonic() + _PASS_SECONDS
+            while not second.notices and time.monotonic() < deadline:
+                await asyncio.sleep(_POLL_SECONDS)
+
+        await _serve_with_reconciliation(
+            TelegramSecrets("token", 7, 11), second.composition(), poll, 3600
+        )
+        seen["after_pass"] = _alive(codex_home)
+        seen["notices"] = [
+            [(str(report.record.session_id), report.outcome) for report in reports]
+            for reports, _ in second.notices
+        ]
+        looks = [look for session_looks in second.looks.values() for look in session_looks]
+        for index, look in enumerate(looks):
+            print(
+                "FIRST_LOOK",
+                json.dumps({**seen, "look": index, "after_kill_s": look["at"] - killed, **look}),
+            )
+        assert looks, await _diagnosis(second, f"the pass never came to type: {seen}")
+    finally:
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["tmux", "-S", str(socket), "kill-server"],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        retire_codex_home(codex_home)
+        for connection in connections:
+            with contextlib.suppress(Exception):
+                connection.close()
+        if repo is not None:
+            shutil.rmtree(repo, ignore_errors=True)
+        shutil.rmtree(tmux_directory, ignore_errors=True)
+
+
+def _codex_version(codex: Path) -> str:
+    completed = subprocess.run(
+        [str(codex), "--version"], capture_output=True, text=True, timeout=30, check=False
+    )
+    return completed.stdout.strip()
 
 
 def _alive(home: Path | None = None) -> dict[str, int]:
