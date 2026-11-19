@@ -179,8 +179,8 @@ def test_the_text_is_never_an_argument_to_any_tmux_call() -> None:
 @pytest.mark.parametrize(
     ("screen", "reason"),
     [
-        (("claude", "busy"), PromptReason.BUSY_ON_SCREEN),
-        (("claude", "busy_tool"), PromptReason.BUSY_ON_SCREEN),
+        (("claude", "busy"), PromptReason.BUSY),
+        (("claude", "busy_tool"), PromptReason.BUSY),
         (("claude", "dialog_approval"), PromptReason.DIALOG),
         (("claude", "composed"), PromptReason.COMPOSING),
         (("codex", "idle"), PromptReason.UNRECOGNISED),
@@ -536,6 +536,29 @@ def test_a_codex_busy_line_on_screen_is_refused_as_busy_on_screen(name: str) -> 
             PromptReason.BUSY_ON_SCREEN,
         ), title
         assert pane.typed == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "• Starting MCP servers (0s • esc to interrupt)",
+        "◦ Booting MCP server: slow (3s • esc to interrupt)",
+        "• Press esc to interrupt if this takes too long…",
+    ],
+    ids=["mcp-start", "mcp-boot", "transcript-line"],
+)
+def test_a_codex_busy_line_that_is_not_a_running_turn_is_plain_busy(line: str) -> None:
+    """A boot's MCP status and a transcript line match Codex's busy pattern, so the pane is not
+    typed into, but neither is a turn that outlived the pane (BL-137, DEC-142)."""
+    idle = _screen("codex", "idle_0170_after_reboot")
+    screen = idle.replace("› Ask Codex to do anything", f"{line}\n› Ask Codex to do anything", 1)
+    assert line in screen
+    pane = PromptPane([screen], profile="codex", title="workspace")
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.BUSY)
+    assert pane.typed == []
 
 
 def test_a_codex_boot_whose_title_spins_over_an_idle_screen_is_plain_busy() -> None:

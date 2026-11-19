@@ -228,11 +228,14 @@ def spool_agent_event(
             and event == found.conversation_event
         ):
             # The agent's own conversation id, for the resume after a restart; it goes into the
-            # mark and no record (`_observed` reads only the licence's fields). Guarded on its
-            # own: it never costs the record.
+            # mark and no record (`_observed` reads only the licence's fields). The owner rule
+            # (DEC-127): an agent that keeps no turn marker marks the session only while no
+            # other agent's turn holds it -- a nested agent started by a tool inside a parent's
+            # turn inherits the pane's session and must not replace the parent's conversation.
+            # Guarded on its own: it never costs the record.
             try:
                 conversation = safe_session_id(fields.get("session_id"))
-                if conversation is not None:
+                if conversation is not None and turns.started_at(session_id) is None:
                     FileConversationMarks(activity_directory).record(session_id, conversation)
             except Exception:
                 pass

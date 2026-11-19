@@ -6,7 +6,9 @@ from a Codex that is still booting.
 
 ## How it was measured
 
-`tests/live/test_restart_resume_live.py::test_first_look_capture`, opted in with
+`tests/live/test_first_look_capture.py::test_first_look_capture` (written in
+`tests/live/test_restart_resume_live.py` and moved there by Task 3.4; its `_Process.look` and
+`capture_only` stay in `test_restart_resume_live.py`), opted in with
 `REMOTE_AGENTS_LIVE_ACCEPTANCE=1 REMOTE_AGENTS_FIRST_LOOK_CAPTURE=1` and
 `REMOTE_AGENTS_LIVE_HOOK_TRUST=owner-approved`, run from an unconfined `systemd-run --user` unit
 with no `REMOTE_AGENTS_SESSION_ID`. Each run:
@@ -92,10 +94,15 @@ run 1 at the first look:
 
 ## What follows
 
-- On Codex 0.170.0 the two cases are told apart at the first look by the on-screen busy line
-  (`ComposerScreen.busy`, `^[•◦] [^\n]*esc to interrupt`) alone: present for a survivor running
-  a command, absent at a boot whose title spins. OD-1's rule holds as measured; Tasks 3.2 to 3.5
-  go ahead.
+- On Codex 0.170.0 the two cases are told apart at the first look by the turn's own status
+  line, `• Working (5s • esc to interrupt)`: present for a survivor running a command, absent at
+  a boot whose title spins. OD-1's rule holds as measured; Tasks 3.2 to 3.5 go ahead.
+- Read as declared (gate round 1): Codex's `ComposerScreen.running_turn` matches that line only
+  with its timer, `(<n>s • esc to interrupt)`, and never a line headed `Booting MCP server` or
+  `Starting MCP servers`. Those two headers are strings in the 0.170.0 binary for its MCP start,
+  which a boot that starts MCP in the pane itself (an embedded session, DEC-071) can draw in the
+  same slot; that shape was not captured here. Only Codex declares the line, so every other
+  agent's busy stays plain `BUSY`.
 - The residual: a survivor that is streaming text, or between tool calls with no busy line, at
   the first look reads as a boot, is waited out, and is nudged after it ends.
 - Cleanup: every run retired its `CODEX_HOME`; no `/tmp/ra-cx-*` daemon remained, and

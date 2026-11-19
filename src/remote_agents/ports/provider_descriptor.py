@@ -119,6 +119,12 @@ class ComposerScreen:
     after the paste do not read it: a composer showing the draft just pasted is one no turn has
     taken yet. The title and the capture are two tmux calls, so one may be a frame newer than the
     other; that can only add a BUSY, never an IDLE."""
+    running_turn: tuple[str, ...] = ()
+    """Patterns (multiline) for the line the agent draws only while a turn runs -- never while
+    it boots, and never in its transcript -- for an agent whose turn can outlive its pane (Codex's
+    app-server daemon). A busy pane that shows one refuses with `PromptReason.BUSY_ON_SCREEN`,
+    which the restart nudge reads as a turn that survived (DEC-142). Empty for an agent whose turn
+    dies with its pane: its busy is always plain `BUSY`."""
     dialogs: tuple[str, ...] = ()
     """Patterns (multiline) any of which means a dialog is up. Checked before anything else: a
     dialog can be drawn over a composer that is still on screen."""

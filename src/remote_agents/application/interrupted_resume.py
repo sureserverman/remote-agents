@@ -43,7 +43,7 @@ from remote_agents.ports.interrupted_resumes import (
     InterruptedResumes,
 )
 from remote_agents.ports.rollover_store import Rollover
-from remote_agents.ports.terminal import PromptDelivery, PromptReason
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.ports.worktree_store import Worktree
 
 _LOG = logging.getLogger(__name__)
@@ -483,7 +483,10 @@ class InterruptedResumePass:
             verdict = delivery_verdict(delivery)
             if verdict is DeliveryVerdict.SENT:
                 return None
-            if delivery.reason is PromptReason.BUSY_ON_SCREEN:
+            if (
+                delivery.outcome is PromptOutcome.REFUSED
+                and delivery.reason is PromptReason.BUSY_ON_SCREEN
+            ):
                 # The agent draws a running turn, and nothing typed so far can have started it:
                 # it survived the lost server in the agent's own process, so it was not cut off.
                 # Never waited out: typed when it ends, the nudge starts a turn nobody asked for

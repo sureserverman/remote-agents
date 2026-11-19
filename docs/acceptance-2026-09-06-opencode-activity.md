@@ -229,6 +229,20 @@ Per event, and nothing else:
 - **Every other event type → dropped at the handler**, by name, rather than parsed and
   discarded later.
 
+**Amended 2026-11-19 (BL-134, DEC-076 as amended).** The licence above is widened by two reads.
+The September text stays as measured.
+
+- **`session.idle` → also `properties.sessionID`**, OpenCode's own id for its session, when it
+  has the spool's id shape. It goes into the session's conversation mark alone, never into a
+  record, and only while no other agent's turn holds the session (DEC-127's owner rule). A real
+  OpenCode 1.19.3 turn was measured carrying it (`tests/live/test_opencode_activity_plugin.py`,
+  `-k marks_opencodes`).
+- **`session.created` / `session.updated` → `properties.info.id` and `info.parentID`**, kept in
+  the plugin's memory only, to know which sessions are a sub-agent's; nothing is delivered for
+  them, and a sub-agent's `session.idle` is dropped. Both types were in the September stream
+  (above), but their `info` fields were not sampled, and no live sub-agent case was run: the
+  parent filter rests on OpenCode's SDK types (`Session.parentID`), not on a measurement.
+
 ## Not established here
 
 - **`permission`'s value space.** One sample, one value (`"bash"`). OpenCode's config schema

@@ -21,7 +21,7 @@ from remote_agents.adapters.agents.activity_spool import (
 from remote_agents.adapters.agents.codex import hooks as codex_hooks
 from remote_agents.adapters.agents.hook_identity import RosterEntry, roster_path, write_roster
 from remote_agents.adapters.agents.hook_licences import hook_licence
-from remote_agents.adapters.agents.turn_markers import FileConversationMarks
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks, FileTurnMarkers
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _STOP_PAYLOAD: dict[str, Any] = {
@@ -1474,6 +1474,24 @@ def test_an_opencode_idle_marks_its_conversation_and_keeps_the_id_out_of_the_rec
     (path,) = _records(directory)
     assert json.loads(path.read_text())["session_id"] == "s-42"
     assert "ses_01ABC" not in path.read_text()
+
+
+@pytest.mark.parametrize("owner", ["claude-turn-1", None])
+def test_an_opencode_idle_inside_another_agents_running_turn_marks_nothing(
+    tmp_path: Path, owner: str | None
+) -> None:
+    """A nested `opencode run`, started by a tool inside a Claude or Codex turn, inherits the
+    pane's session and loads the global plugin. Its idle must not replace the parent's
+    conversation: the owner rule (DEC-127) -- only the agent whose turn holds the session marks
+    it. OpenCode keeps no turn marker of its own, so any marker is another agent's turn."""
+    directory = _spool(tmp_path)
+    FileConversationMarks(directory).record("s-42", "claude-conversation")
+    FileTurnMarkers(directory).start("s-42", owner=owner)
+
+    assert _run(_stream(_IDLE_PAYLOAD), directory, provider="opencode") == 0
+
+    assert FileConversationMarks(directory).latest("s-42") == "claude-conversation"
+    assert len(_records(directory)) == 1
 
 
 @pytest.mark.parametrize("value", ["-x", "x" * 200, 7, None, "has space"])

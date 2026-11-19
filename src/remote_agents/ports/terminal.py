@@ -207,8 +207,10 @@ class PromptReason(StrEnum):
     BUSY = "busy"
     """A turn is running, read from the pane's title or the session's turn marker alone."""
     BUSY_ON_SCREEN = "busy_on_screen"
-    """A turn is running, read from the agent's own busy line on screen. Codex's title spins
-    while it boots, but it draws this line only during a turn (BL-137)."""
+    """A turn is running, read from the line the agent draws only while one runs
+    (`ComposerScreen.running_turn`, declared by an agent whose turn can outlive its pane).
+    Codex 0.170.0 spins its title while it boots and draws its MCP start, but not this line
+    (BL-137, `docs/acceptance-2026-11-surviving-codex-turn.md`)."""
     COMPOSING = "composing"
     """The composer already holds text; a paste would be joined to it."""
     DIALOG = "dialog"

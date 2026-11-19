@@ -73,13 +73,15 @@ QUIET_SECONDS = 4.0
 
 
 def _codex_screen() -> ComposerScreen:
-    """The fake agent's one-line composer, read with Codex's own busy line and title spinner."""
+    """The fake agent's one-line composer, read with Codex's own busy, running-turn and title
+    patterns."""
     codex = next(d for d in provider_descriptors() if str(d.profile_id) == "codex").composer
-    assert codex is not None and codex.busy and codex.busy_title
+    assert codex is not None and codex.busy and codex.busy_title and codex.running_turn
     return ComposerScreen(
         composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*)\Z",
         busy=codex.busy,
         busy_title=codex.busy_title,
+        running_turn=codex.running_turn,
     )
 
 

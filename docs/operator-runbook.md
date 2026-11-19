@@ -968,19 +968,23 @@ this. The terminal never does.
   at each turn's start to `~/.local/state/remote-agents/activity/conversations/<session>`. With
   no such mark, the session's `resume_source_id` is used. OpenCode has no turn-start hook: its
   plugin writes the mark when a turn ends, from OpenCode's own session id; a sub-agent's session
-  is never marked. That needs the plugin from v0.71.0, so run `remote-agents install-agent-hooks`
+  is never marked, nor is an `opencode run` started inside another agent's running turn. That needs the plugin from v0.71.0, so run `remote-agents install-agent-hooks`
   after upgrading; until then `doctor` prints `OpenCode plugin out of date`. Sessions that were
   in the middle of a turn are then sent
   the same one-line nudge as a session resumed after a usage limit. Idle ones are resumed and
   left alone.
   **A turn that survived is left alone (DEC-142).** If tmux alone crashes while a Codex turn
-  runs, the turn goes on in Codex's daemon, and the resumed pane shows it running
-  (`• Working (… esc to interrupt)`). Nothing is typed into it, and the notice lists it as
+  runs in a session that shares Codex's daemon, the turn goes on there, and the resumed pane
+  shows it running (`• Working (12s • esc to interrupt)`). Nothing is typed into it, and the
+  notice lists it as
   resumed but not told to carry on, because its turn was still running. A reboot ends the daemon
   and the turn with it, so that session is nudged once Codex has booted; a spinning title while a
   slow MCP server starts is waited out, not taken for a turn. One residual: a surviving turn that
   shows no busy line when the service looks -- Codex streaming its answer, or between tool calls
-  -- is read as a boot, waited out, and nudged after it ends.
+  -- is read as a boot, waited out, and nudged after it ends. A Codex session that runs
+  embedded (the default *approve for me* preset) loses its turn with the pane, so it is nudged
+  as after a reboot. And a session whose agent starts a turn of its own before the nudge is
+  typed is left alone too, with the same reason.
   **The stale marker (BL-138).** A turn's marker names the conversation that started the turn.
   If you interrupt a turn, run `/clear`, or submit a new prompt before the old turn's marker has
   ended, the older conversation can stay marked. A restart then resumes and nudges that one.

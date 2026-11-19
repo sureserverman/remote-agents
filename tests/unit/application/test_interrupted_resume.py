@@ -686,6 +686,19 @@ async def test_a_title_only_busy_first_look_is_a_boot_and_is_nudged_once() -> No
     assert {text for _session, text in sends} == {NUDGE}
 
 
+async def test_an_unconfirmed_send_is_never_read_as_a_survived_turn() -> None:
+    """Something may have been typed: whatever reason it carries, it is `unconfirmed`, never
+    `turn_survived`, which would hide it (DEC-099)."""
+    _record_, resumed, snapshot = _cut_off()
+    unconfirmed = PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.BUSY_ON_SCREEN)
+    resume_pass, sends, _sleeps = _nudging_pass(_Outcomes(), resumed, [unconfirmed])
+
+    (report,) = await resume_pass.run(snapshot)
+
+    assert report.outcome == f"resumed:{resumed.session_id}; not nudged:unconfirmed"
+    assert len(sends) == 1
+
+
 @pytest.mark.parametrize(
     ("reason", "said"),
     [

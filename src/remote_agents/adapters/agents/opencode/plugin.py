@@ -28,9 +28,10 @@ JavaScript** (`docs/acceptance-2026-09-06-opencode-activity.md`, measured agains
     carried 14 distinct types across two short runs, 90 `plugin.added` among them, so a handler
     that parsed first and filtered afterwards would be reading payloads it has no licence for.
 
-`patterns`, `metadata`, `always`, `tool` and `id` are never named in the generated source. Two
-of them hold the literal command the owner was asked to approve, which is the string this whole
-boundary exists to keep out of a phone notification.
+A permission's `patterns`, `metadata`, `always`, `tool` and `id` are never named in the
+generated source (the only `id` it reads is a session's, `info.id`, above). Two of them hold the
+literal command the owner was asked to approve, which is the string this whole boundary exists
+to keep out of a phone notification.
 
 The spool refuses these fields again on the Python side, admitting only what OpenCode's
 `HOOK_LICENCE` (`opencode/hooks.py`) lists. That is deliberate duplication and not a
@@ -91,7 +92,7 @@ _SOURCE = """// remote-agents activity plugin for OpenCode -- GENERATED FILE, do
 // command with `--remove`. Editing it by hand will not survive a reinstall; the source of truth
 // is `src/remote_agents/adapters/agents/opencode/plugin.py` in that project.
 //
-// It reads exactly two of OpenCode's event types and, from those, exactly the fields
+// It reads exactly four of OpenCode's event types and, from those, exactly the fields
 // docs/acceptance-2026-09-06-opencode-activity.md licenses:
 //
 //   session.idle      the occurrence, and properties.sessionID -- OpenCode's own session id;
@@ -100,8 +101,9 @@ _SOURCE = """// remote-agents activity plugin for OpenCode -- GENERATED FILE, do
 //   session.updated   nothing is delivered
 //   permission.asked  properties.permission, the tool class, and nothing else
 //
-// It never names `patterns`, `metadata`, `always`, `tool` or `id`. Two of those hold the
-// literal command the owner is being asked to approve. Every other event type returns before
+// It never names a permission's `patterns`, `metadata`, `always`, `tool` or `id` (the only id
+// it reads is a session's, info.id). Two of those hold the literal command the owner is being
+// asked to approve. Every other event type returns before
 // anything is read.
 //
 // Nothing here can fail the session it runs in: every path is inside a try, and a spool command

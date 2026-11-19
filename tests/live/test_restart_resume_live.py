@@ -41,8 +41,10 @@ service's composition: `_local_runtime` and `compose_backend`, built the way
 **Side effects outside the temporary directories.** Claude writes its transcript under
 `~/.claude/projects/` and a trust entry for the throwaway folder in `~/.claude.json`. The owner's
 global Claude hooks also fire and may spool these sessions into the production spool, which does
-not know their ids. Each turn spends one trivial prompt of the owner's quota (the plan's
-Preflight records the owner's approval). Everything this test starts is torn down in `finally`.
+not know their ids. Each drill spends the owner's quota: a trivial Claude prompt, a Codex turn
+that runs `sleep 40`, and the nudge's turn (the plan's owner decisions record the approval). The
+Codex home also holds this run's `hooks.json` and, for the reboot drill, a slow MCP server
+(`_SLOW_MCP`), both removed with it. Everything this test starts is torn down in `finally`.
 
 **Opt-in**, as every live acceptance test: `REMOTE_AGENTS_LIVE_ACCEPTANCE=1`. Once asked for, a
 missing prerequisite FAILS, naming it -- never a skip.
@@ -524,6 +526,10 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
         assert {session for session, _text in second.sends} == {running[CODEX]}, second.sends
         assert second.answers.count("sent:None") == 1, second.answers
         assert second.answers[-1] == "sent:None", second.answers
+        # The boot really was waited out from its title alone (Outcome 2), and never read as a
+        # turn that survived.
+        assert "refused:busy" in second.answers, second.answers
+        assert "refused:busy_on_screen" not in second.answers, second.answers
         assert {text for _session, text in second.sends} == {NUDGE}, second.sends
         assert len(managed_daemons(codex_home)) == 1, managed_daemons(codex_home)
         for profile, argument in ((CLAUDE, "--resume"), (CODEX, "resume")):

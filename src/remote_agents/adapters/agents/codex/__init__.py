@@ -119,6 +119,16 @@ def descriptor() -> ProviderDescriptor:
             # reasoning summary (`• Planning edits (9s • esc to interrupt)`), not always `Working`.
             # The bullet is a spinner: `•` and `◦` alternate frame by frame (`busy_hollow.txt`).
             busy=(r"^[•◦] [^\n]*esc to interrupt",),
+            # The running turn's own status line carries its timer: `• Working (5s • esc to
+            # interrupt)`, `• Planning edits (1m 05s • esc to interrupt)`. Measured on 0.170.0 at
+            # a resume after a tmux-only crash (`busy_0170_survivor.txt`). Its boot draws its MCP
+            # start in the same slot (`Booting MCP server:`, `Starting MCP servers`, strings in the
+            # 0.170.0 binary), so those headers are excluded, as is any transcript line without
+            # the timer (BL-137, DEC-142).
+            running_turn=(
+                r"^[•◦] (?!Booting MCP server|Starting MCP servers)[^\n]*"
+                r"\((?:\d+[hms] ?)+• esc to interrupt\)",
+            ),
             # While it streams its answer Codex draws no busy line at all, but its title leads with
             # a braille spinner for the whole turn (`⠋ Count to 150 | workspace`), dropped when
             # the turn ends (measured 2026-09-23).

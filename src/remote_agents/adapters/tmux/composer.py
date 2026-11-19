@@ -339,15 +339,17 @@ REFUSAL_FOR: dict[PaneState, PromptReason] = {
 
 
 def busy_on_screen(capture: str, descriptor: ProviderDescriptor) -> bool:
-    """Whether the capture shows the agent's own busy line (`ComposerScreen.busy`)."""
+    """Whether the capture shows the line the agent draws only while a turn runs
+    (`ComposerScreen.running_turn`)."""
     declared = descriptor.composer
-    return declared is not None and _found(declared.busy, _normalised(capture))
+    return declared is not None and _found(declared.running_turn, _normalised(capture))
 
 
 def prompt_refusal(state: PaneState, capture: str, descriptor: ProviderDescriptor) -> PromptReason:
-    """Why a pane judged `state` on `capture` refuses a message. A BUSY that the busy line on
-    screen shows is `BUSY_ON_SCREEN`; one only the title or a turn marker said stays `BUSY`,
-    because a booting Codex spins its title too (BL-137)."""
+    """Why a pane judged `state` on `capture` refuses a message. A BUSY whose screen shows the
+    agent's running-turn line is `BUSY_ON_SCREEN`; any other BUSY -- the title, a turn marker,
+    a boot's status, a transcript line, or an agent that declares no such line -- stays `BUSY`,
+    because a booting Codex spins its title and draws its MCP start too (BL-137)."""
     if state is PaneState.BUSY and busy_on_screen(capture, descriptor):
         return PromptReason.BUSY_ON_SCREEN
     return REFUSAL_FOR[state]
