@@ -60,6 +60,7 @@ from remote_agents.application.errors import MutationsDraining
 from remote_agents.domain.models import ProjectId, SessionId, SessionRecord
 from remote_agents.domain.state_machine import TERMINAL_STATES
 from remote_agents.ports.git_checkout import GitCheckout, GitError
+from remote_agents.ports.interrupted_resumes import RESUMING
 from remote_agents.ports.rollover_store import Rollover
 from remote_agents.ports.worktree_store import Worktree, WorktreeStore
 
@@ -90,6 +91,10 @@ class _Sessions(Protocol):
 
 class _Rollovers(Protocol):
     async def open_rollovers(self) -> tuple[Rollover, ...]: ...
+
+
+class _Resumes(Protocol):
+    async def outcomes(self) -> Mapping[str, str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +128,7 @@ class WorktreeCleanupPass:
         store: WorktreeStore,
         sessions: _Sessions,
         rollovers: _Rollovers,
+        resumes: _Resumes,
         repository: Callable[[ProjectId], Awaitable[Path | None]],
         operation: Callable[[], contextlib.AbstractAsyncContextManager[None]] = _untracked,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -131,6 +137,7 @@ class WorktreeCleanupPass:
         self._store = store
         self._sessions = sessions
         self._rollovers = rollovers
+        self._resumes = resumes
         self._repository = repository
         # `SessionLocks.operation` in `serve`, so shutdown waits for a removal under way.
         self._operation = operation
@@ -244,6 +251,11 @@ class WorktreeCleanupPass:
             record = await self._sessions.get(session_id)
             if record is None or record.state not in TERMINAL_STATES:
                 return True
+        # An ENDED session whose restart resume was deferred comes back into this folder at the
+        # next start (DEC-124: a `resuming` row references it; BL-138).
+        outcomes = await self._resumes.outcomes()
+        if any(outcomes.get(str(session_id)) == RESUMING for session_id in bound):
+            return True
         return any(
             rollover.predecessor_session_id in bound or rollover.successor_session_id in bound
             for rollover in await self._rollovers.open_rollovers()

@@ -998,6 +998,7 @@ def _cleanup_pass(store: _Candidates, gate: list[str]) -> WorktreeCleanupPass:
         store=store,  # type: ignore[arg-type]
         sessions=None,  # type: ignore[arg-type]
         rollovers=None,  # type: ignore[arg-type]
+        resumes=None,  # type: ignore[arg-type]
         repository=None,  # type: ignore[arg-type]
         operation=operation,
     )
@@ -1087,6 +1088,7 @@ async def test_a_worktree_pass_that_wakes_after_the_drain_shut_the_gate_removes_
         store=store,  # type: ignore[arg-type]
         sessions=None,  # type: ignore[arg-type]
         rollovers=None,  # type: ignore[arg-type]
+        resumes=None,  # type: ignore[arg-type]
         repository=None,  # type: ignore[arg-type]
         operation=locks.operation,
     )

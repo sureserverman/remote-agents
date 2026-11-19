@@ -28,6 +28,7 @@ from remote_agents.adapters.agents.thread_binding import (
 )
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -975,6 +976,7 @@ def build_worktree_cleanup(
         store=worktrees,
         sessions=sessions,
         rollovers=SQLiteRolloverStore(connection),
+        resumes=SQLiteInterruptedResumes(connection),
         repository=partial(main_checkout, git, project_paths),
         operation=operation,
     )
@@ -992,6 +994,7 @@ def build_worktree_listing(
         store=SQLiteWorktreeStore(connection),
         sessions=SQLiteSessionStore(connection),
         rollovers=SQLiteRolloverStore(connection),
+        resumes=SQLiteInterruptedResumes(connection),
         repository=partial(main_checkout, git, project_paths),
     ).kept
 

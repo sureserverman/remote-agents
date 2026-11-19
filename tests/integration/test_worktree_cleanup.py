@@ -19,6 +19,7 @@ import pytest
 
 from remote_agents.adapters.git.checkout import GitCli
 from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
@@ -139,6 +140,7 @@ class _Harness:
             store=self.store,
             sessions=self.sessions,
             rollovers=self.rollovers,
+            resumes=SQLiteInterruptedResumes(connection),
             repository=self.worktrees.repository,
         )
 
