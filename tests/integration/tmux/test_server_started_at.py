@@ -10,7 +10,6 @@ missing only its pane means nothing was interrupted.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -48,29 +47,37 @@ async def test_a_running_server_reports_when_it_started_and_a_killed_one_reports
         assert before <= started <= datetime.now(UTC) + timedelta(seconds=1)
 
         await runner.run("tmux", "-L", socket, "kill-server")
-        assert await _once_gone(gateway) is None
+        assert await gateway.server_started_at() is None
     finally:
         await _kill(socket)
 
 
-async def _once_gone(gateway: TmuxGateway) -> datetime | None:
-    """What the gateway answers once the killed server has exited.
-
-    `kill-server` returns before the server has, and a query in that moment gets "server exited
-    unexpectedly": measured 2026-10-17, 2 in 300 tries. The gateway reads that as a broken server
-    rather than an absent one, on purpose -- the same phrase from a server that is up would end
-    every live record -- so the wait is here, as `test_terminal_restart_resume.py` waits (BL-100's
-    fourth file, which failed on that moment). Only that phrase is waited out; any other failure
-    is raised.
-    """
-    for _ in range(50):
-        try:
-            return await gateway.server_started_at()
-        except RuntimeError as error:
-            if "server exited unexpectedly" not in str(error):
-                raise
-        await asyncio.sleep(0.1)
-    raise AssertionError("the killed tmux server never went away")
+async def test_a_read_straight_after_kill_server_never_raises(tmp_path: Path) -> None:
+    """BL-136: `kill-server` returns before the server exits, and a read in that moment used to
+    get "server exited unexpectedly" (2 in 300 on tmux 3.4). The gateway now waits that out
+    itself, so 100 kill-then-read rounds with no wait here never raise."""
+    socket = _socket()
+    runner = AsyncTmuxRunner()
+    gateway = TmuxGateway(socket, runner, intent_directory=tmp_path / "intents")
+    try:
+        for _ in range(100):
+            await runner.run(
+                "tmux",
+                "-L",
+                socket,
+                "-f",
+                "/dev/null",
+                "new-session",
+                "-d",
+                "-s",
+                "pin",
+                "sleep",
+                "30",
+            )
+            await runner.run("tmux", "-L", socket, "kill-server")
+            assert await gateway.server_started_at() is None
+    finally:
+        await _kill(socket)
 
 
 async def test_a_socket_that_never_existed_has_no_server(tmp_path: Path) -> None:

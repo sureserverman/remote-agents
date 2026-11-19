@@ -595,3 +595,72 @@ def test_list_keys_notes_parse() -> None:
     assert parsed['"'] == "Split window vertically"
     assert parsed["PPage"].startswith("Enter copy mode")
     assert not any(note.startswith("remote-agents:") for note in parsed.values())
+
+
+# --- the boot read waits out a server caught exiting (BL-136, DEC-141) ------------------------
+
+_EXITING = RuntimeError("server exited unexpectedly")
+
+
+class ScriptedRunner:
+    """Answers each call with the next scripted outcome: an error to raise, or output."""
+
+    def __init__(self, *outcomes: RuntimeError | str) -> None:
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    async def run(self, *argv: str) -> str:
+        self.calls += 1
+        outcome = self.outcomes.pop(0) if len(self.outcomes) > 1 else self.outcomes[0]
+        if isinstance(outcome, RuntimeError):
+            raise outcome
+        return outcome
+
+
+@pytest.fixture
+def no_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+    from remote_agents.adapters.tmux import gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "_EXITING_PAUSE_SECONDS", 0)
+
+
+async def test_a_server_caught_exiting_then_gone_reads_as_no_server(no_pause: None) -> None:
+    runner = ScriptedRunner(_EXITING, _EXITING, RuntimeError("no server running on /tmp/x"))
+
+    assert await TmuxGateway("remote-agents-test-console", runner).server_started_at() is None
+    assert runner.calls == 3
+
+
+async def test_a_server_caught_exiting_then_up_reads_its_start(no_pause: None) -> None:
+    runner = ScriptedRunner(_EXITING, "1795069997\n")
+
+    started = await TmuxGateway("remote-agents-test-console", runner).server_started_at()
+
+    assert started is not None and int(started.timestamp()) == 1795069997
+
+
+async def test_a_server_that_keeps_saying_it_exited_is_still_an_error(no_pause: None) -> None:
+    """Past the bound the phrase is raised, never read as an absent server."""
+    from remote_agents.adapters.tmux.gateway import _EXITING_RETRIES
+
+    runner = ScriptedRunner(_EXITING)
+
+    with pytest.raises(RuntimeError, match="server exited unexpectedly"):
+        await TmuxGateway("remote-agents-test-console", runner).server_started_at()
+    assert runner.calls == _EXITING_RETRIES + 1
+
+
+async def test_any_other_error_is_raised_at_once_with_no_second_call(no_pause: None) -> None:
+    runner = ScriptedRunner(RuntimeError("protocol version mismatch"))
+
+    with pytest.raises(RuntimeError, match="protocol version mismatch"):
+        await TmuxGateway("remote-agents-test-console", runner).server_started_at()
+    assert runner.calls == 1
+
+
+async def test_inventory_still_raises_the_phrase_on_its_first_call() -> None:
+    runner = ScriptedRunner(_EXITING)
+
+    with pytest.raises(RuntimeError, match="server exited unexpectedly"):
+        await TmuxGateway("remote-agents-test-console", runner).inventory()
+    assert runner.calls == 1

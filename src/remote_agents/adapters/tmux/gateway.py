@@ -133,6 +133,16 @@ class OrphanEvidence:
 
 
 _ABSENT_SERVER_SIGNATURES = ("no server running on", "error connecting to")
+
+#: What tmux says to a query that lands while a killed server is still exiting: `kill-server`
+#: returns before the server has gone (measured 2026-10-17, 2 in 300 tries on tmux 3.4). It stays
+#: an error everywhere (DEC-141): the same phrase from a server that is up would end every live
+#: record. Only `server_started_at`, read once at boot, asks again until it clears.
+_SERVER_EXITING = "server exited unexpectedly"
+#: How often and how many times that one read asks again: 20 tries 0.1 s apart, about 2 s.
+#: Counted, never read off the clock, as the restart-resume pass counts its own (DEC-127).
+_EXITING_RETRIES = 20
+_EXITING_PAUSE_SECONDS = 0.1
 _ABSENT_TARGET_SIGNATURES = ("can't find session", "can't find pane", "session not found")
 
 # tmux key names this adapter will bind: bare keys and function keys, optionally behind one
@@ -286,15 +296,24 @@ class TmuxGateway:
         `#{start_time}` is a server variable, so every session line carries the same value. It
         has one-second resolution, and a caller comparing it with a record's creation allows
         for that.
+
+        A server caught exiting (`_SERVER_EXITING`, the moment after `kill-server`) is asked
+        again for about 2 s, because this read decides at boot whether sessions are resumed
+        (DEC-127), and a `serve` started in that instant used to resume nothing. Past the bound
+        the phrase is raised as before; any other error is raised at once (DEC-141, BL-136).
         """
-        try:
-            output = await self._runner.run(
-                *self._base_argv(), "list-sessions", "-F", "#{start_time}"
-            )
-        except RuntimeError as error:
-            if _reports_absent_server(str(error)):
-                return None
-            raise
+        for retry in range(_EXITING_RETRIES + 1):
+            try:
+                output = await self._runner.run(
+                    *self._base_argv(), "list-sessions", "-F", "#{start_time}"
+                )
+                break
+            except RuntimeError as error:
+                if _reports_absent_server(str(error)):
+                    return None
+                if _SERVER_EXITING not in str(error) or retry == _EXITING_RETRIES:
+                    raise
+            await asyncio.sleep(_EXITING_PAUSE_SECONDS)
         first = output.split("\n", 1)[0].strip()
         if not first.isdigit():
             raise RuntimeError("tmux reported no server start time")
