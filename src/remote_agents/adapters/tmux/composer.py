@@ -338,6 +338,21 @@ REFUSAL_FOR: dict[PaneState, PromptReason] = {
 """The reason a pane that is not IDLE gives for refusing a message."""
 
 
+def busy_on_screen(capture: str, descriptor: ProviderDescriptor) -> bool:
+    """Whether the capture shows the agent's own busy line (`ComposerScreen.busy`)."""
+    declared = descriptor.composer
+    return declared is not None and _found(declared.busy, _normalised(capture))
+
+
+def prompt_refusal(state: PaneState, capture: str, descriptor: ProviderDescriptor) -> PromptReason:
+    """Why a pane judged `state` on `capture` refuses a message. A BUSY that the busy line on
+    screen shows is `BUSY_ON_SCREEN`; one only the title or a turn marker said stays `BUSY`,
+    because a booting Codex spins its title too (BL-137)."""
+    if state is PaneState.BUSY and busy_on_screen(capture, descriptor):
+        return PromptReason.BUSY_ON_SCREEN
+    return REFUSAL_FOR[state]
+
+
 def _same_text(draft: str, text: str) -> bool:
     """Whether a composer's draft is the pasted text, allowing for how the pane wrapped it."""
     # All whitespace removed, not collapsed: a long token (a URL, a path) wraps in the pane with

@@ -1426,7 +1426,7 @@ async def _sent_once_not_busy(
     started = time.monotonic()
     while True:
         delivery = await terminal.send_binding_line(session_id, line)
-        if delivery.reason is not PromptReason.BUSY:
+        if delivery.reason not in (PromptReason.BUSY, PromptReason.BUSY_ON_SCREEN):
             return delivery
         assert time.monotonic() - started < COMPOSER_PATIENCE_SECONDS, (
             f"busy past the binder's patience:\n{await terminal.capture(session_id)}"

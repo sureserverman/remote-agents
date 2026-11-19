@@ -34,6 +34,7 @@ from remote_agents.ports.turn_markers import TurnMarkers
 WAITABLE: frozenset[PromptReason] = frozenset(
     {
         PromptReason.BUSY,
+        PromptReason.BUSY_ON_SCREEN,
         PromptReason.DIALOG,
     }
 )

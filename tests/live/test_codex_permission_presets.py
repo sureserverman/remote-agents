@@ -575,7 +575,7 @@ async def _prompt_when_idle(terminal, session, text, *, timeout=30):
         delivered = await terminal.send_prompt(session, text)
         if (
             delivered.outcome is not PromptOutcome.REFUSED
-            or delivered.reason is not PromptReason.BUSY
+            or delivered.reason not in (PromptReason.BUSY, PromptReason.BUSY_ON_SCREEN)
             or time.monotonic() >= deadline
         ):
             return delivered

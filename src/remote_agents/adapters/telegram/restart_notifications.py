@@ -65,6 +65,8 @@ _WHY_NOT_NUDGED = {
     "stopping": "the service was stopping",
     "composing": "its input already held text",
     "busy": "the agent was busy",
+    "busy_on_screen": "the agent was busy",
+    "turn_survived": "its turn was still running",
     "keys_busy": "someone else was typing into it",
     "not_running": "the resumed session was not running",
     "no_composer": "this agent has no input to type into",

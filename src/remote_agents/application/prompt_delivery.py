@@ -32,7 +32,14 @@ class DeliveryVerdict(StrEnum):
     """Something may have been typed and was not seen to land: never tried again."""
 
 
-_WAITS = frozenset({PromptReason.BUSY, PromptReason.KEYS_BUSY, PromptReason.TMUX_ERROR})
+_WAITS = frozenset(
+    {
+        PromptReason.BUSY,
+        PromptReason.BUSY_ON_SCREEN,
+        PromptReason.KEYS_BUSY,
+        PromptReason.TMUX_ERROR,
+    }
+)
 _DIALOGS = frozenset({PromptReason.DIALOG, PromptReason.MENU})
 _REFUSED = frozenset({PromptReason.EMPTY, PromptReason.SHELL, PromptReason.NO_COMPOSER})
 

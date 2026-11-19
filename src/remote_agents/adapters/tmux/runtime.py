@@ -16,7 +16,6 @@ from pathlib import Path
 
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.adapters.tmux.composer import (
-    REFUSAL_FOR,
     PaneState,
     classify,
     composer_draft,
@@ -24,6 +23,7 @@ from remote_agents.adapters.tmux.composer import (
     enter_refusal,
     in_shell_mode,
     marker_is_young,
+    prompt_refusal,
     shell_line_refusal,
     stale_shell_line,
     transcript_above_box,
@@ -1070,7 +1070,9 @@ class TmuxTerminal:
             # `may_paste` before it can decline to paste, so `judged` is set here; the fallback
             # only covers a gateway that stopped doing so.
             state = judged[-1] if judged else classify(steps.before, descriptor, steps.title)
-            return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
+            return PromptDelivery(
+                PromptOutcome.REFUSED, prompt_refusal(state, steps.before, descriptor)
+            )
         if not steps.entered:
             reason = enter_refusal(steps.after_paste or "", descriptor, text)
             return PromptDelivery(PromptOutcome.UNCONFIRMED, reason)
@@ -1132,7 +1134,9 @@ class TmuxTerminal:
             return PromptDelivery(PromptOutcome.REFUSED, PromptReason.TMUX_ERROR)
         if not steps.pasted:
             state = judged[-1] if judged else classify(steps.before, descriptor, steps.title)
-            return PromptDelivery(PromptOutcome.REFUSED, REFUSAL_FOR[state])
+            return PromptDelivery(
+                PromptOutcome.REFUSED, prompt_refusal(state, steps.before, descriptor)
+            )
         if not steps.entered:
             reason = shell_line_refusal(steps.after_paste or "", descriptor, line)
 

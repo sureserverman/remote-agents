@@ -1,0 +1,9 @@
+  >_ OpenAI Codex (v0.170.0)
+     /tmp/pytest-of-user/…/test_first_look_capture_surviv0/ra-restart-bxx4yzmm
+› Run the shell command sleep 40, then reply with exactly the word: ok
+• I’ll run sleep 40 now.
+• Working (5s • esc to interrupt) · 1 background terminal running · /ps to view…
+› Ask Codex to do anything
+  GPT-6.2-Sol default · /tmp/pytest-of-user/pytest-171/
+  test_first_look_capture_surviv0/ra-restart-bxx4yzmm
+  ← for agents · ? for shortcuts

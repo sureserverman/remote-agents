@@ -483,6 +483,12 @@ class InterruptedResumePass:
             verdict = delivery_verdict(delivery)
             if verdict is DeliveryVerdict.SENT:
                 return None
+            if delivery.reason is PromptReason.BUSY_ON_SCREEN:
+                # The agent draws a running turn, and nothing typed so far can have started it:
+                # it survived the lost server in the agent's own process, so it was not cut off.
+                # Never waited out: typed when it ends, the nudge starts a turn nobody asked for
+                # (BL-137, DEC-142). A busy read from the title alone is a boot, waited out below.
+                return "turn_survived"
             if verdict not in _BOOTING:
                 if verdict is DeliveryVerdict.REFUSED and delivery.reason is not None:
                     return delivery.reason.value

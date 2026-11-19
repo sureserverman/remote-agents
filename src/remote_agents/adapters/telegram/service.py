@@ -589,6 +589,7 @@ _RELAY_REASON_WORDS: dict[PromptReason, str] = {
     PromptReason.NOT_RUNNING: "the session isn't running",
     PromptReason.NO_COMPOSER: "this agent's input can't be read",
     PromptReason.BUSY: "the agent is working",
+    PromptReason.BUSY_ON_SCREEN: "the agent is working",
     PromptReason.COMPOSING: "the agent's input already holds text",
     PromptReason.DIALOG: "the agent is asking a question",
     PromptReason.UNRECOGNISED: "the agent's screen wasn't recognised",

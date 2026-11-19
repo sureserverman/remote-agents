@@ -205,6 +205,10 @@ class PromptReason(StrEnum):
     NO_COMPOSER = "no_composer"
     """The agent declares no composer, so nothing can tell its idle screen from a turn."""
     BUSY = "busy"
+    """A turn is running, read from the pane's title or the session's turn marker alone."""
+    BUSY_ON_SCREEN = "busy_on_screen"
+    """A turn is running, read from the agent's own busy line on screen. Codex's title spins
+    while it boots, but it draws this line only during a turn (BL-137)."""
     COMPOSING = "composing"
     """The composer already holds text; a paste would be joined to it."""
     DIALOG = "dialog"

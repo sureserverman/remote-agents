@@ -251,7 +251,7 @@ class ThreadBinder:
             return
         if delivery.outcome is not PromptOutcome.REFUSED:
             attempt.sent_at = self._now()
-        elif delivery.reason is PromptReason.BUSY:
+        elif delivery.reason in (PromptReason.BUSY, PromptReason.BUSY_ON_SCREEN):
             # A turn the owner started can run for an hour and says nothing against the pane.
             # The thread is the same when it ends, so the patience starts again then.
             attempt.started_at = self._now()

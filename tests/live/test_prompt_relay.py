@@ -316,10 +316,10 @@ def test_runtime_types_into_an_idle_pane_and_is_refused_by_a_busy_one(
         started = asyncio.run(terminal.send_prompt(session_id, _LONG_TURN))
         assert started.outcome is PromptOutcome.SENT, started
         refused = asyncio.run(terminal.send_prompt(session_id, "This must never be typed."))
-        assert (refused.outcome, refused.reason) == (PromptOutcome.REFUSED, PromptReason.BUSY), (
-            refused,
-            _tmux(socket, "capture-pane", "-p", "-t", pane).stdout,
-        )
+        assert refused.outcome is PromptOutcome.REFUSED and refused.reason in (
+            PromptReason.BUSY,
+            PromptReason.BUSY_ON_SCREEN,
+        ), (refused, _tmux(socket, "capture-pane", "-p", "-t", pane).stdout)
         after = _tmux(socket, "capture-pane", "-p", "-J", "-S", "-400", "-t", pane).stdout
         assert "This must never be typed." not in after
     finally:

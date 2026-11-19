@@ -179,8 +179,8 @@ def test_the_text_is_never_an_argument_to_any_tmux_call() -> None:
 @pytest.mark.parametrize(
     ("screen", "reason"),
     [
-        (("claude", "busy"), PromptReason.BUSY),
-        (("claude", "busy_tool"), PromptReason.BUSY),
+        (("claude", "busy"), PromptReason.BUSY_ON_SCREEN),
+        (("claude", "busy_tool"), PromptReason.BUSY_ON_SCREEN),
         (("claude", "dialog_approval"), PromptReason.DIALOG),
         (("claude", "composed"), PromptReason.COMPOSING),
         (("codex", "idle"), PromptReason.UNRECOGNISED),
@@ -515,6 +515,34 @@ _SPINNING = "⠋ Count to 150 | workspace"
 
 def test_a_codex_pane_whose_title_spins_is_refused_busy_and_nothing_is_typed() -> None:
     pane = PromptPane([_screen("codex", "idle")], profile="codex", title=_SPINNING)
+
+    delivery = _send(pane, "hello")
+
+    assert (delivery.outcome, delivery.reason) == (PromptOutcome.REFUSED, PromptReason.BUSY)
+    assert pane.typed == []
+
+
+@pytest.mark.parametrize("name", ["busy", "busy_hollow", "busy_tool", "busy_0170_survivor"])
+def test_a_codex_busy_line_on_screen_is_refused_as_busy_on_screen(name: str) -> None:
+    """BL-137: the on-screen busy line is a running turn, whatever the title says; the title
+    alone is also a Codex boot, so only the line earns `BUSY_ON_SCREEN`."""
+    for title in (_SPINNING, "workspace"):
+        pane = PromptPane([_screen("codex", name)], profile="codex", title=title)
+
+        delivery = _send(pane, "hello")
+
+        assert (delivery.outcome, delivery.reason) == (
+            PromptOutcome.REFUSED,
+            PromptReason.BUSY_ON_SCREEN,
+        ), title
+        assert pane.typed == []
+
+
+def test_a_codex_boot_whose_title_spins_over_an_idle_screen_is_plain_busy() -> None:
+    """Measured on 0.170.0 after a reboot, a slow MCP server starting (Task 3.1)."""
+    pane = PromptPane(
+        [_screen("codex", "idle_0170_after_reboot")], profile="codex", title="⠋ ra-restart"
+    )
 
     delivery = _send(pane, "hello")
 

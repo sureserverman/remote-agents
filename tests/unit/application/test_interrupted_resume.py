@@ -15,6 +15,7 @@ from remote_agents.application.interrupted_resume import (
     SessionAtRestart,
     plan_resumes,
 )
+from remote_agents.application.limit_resume import NUDGE
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
@@ -28,6 +29,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.interrupted_resumes import RESUMING
 from remote_agents.ports.rollover_store import Rollover
+from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 
 PROJECT = ProjectId("remote-agents")
 CLAUDE = ProfileId("claude")
@@ -517,7 +519,8 @@ def test_a_pending_session_with_no_newer_holder_is_still_resumed() -> None:
 
 
 class _Outcomes:
-    """`InterruptedResumes` in memory: the first outcome stands, except over the intent."""
+    """`InterruptedResumes` in memory, as the SQLite store rules: the first outcome stands,
+    except over an intent -- `RESUMING` yields to anything, `nudging:` only to a final one."""
 
     def __init__(self) -> None:
         self.rows: dict[str, str] = {}
@@ -526,7 +529,9 @@ class _Outcomes:
         return dict(self.rows)
 
     async def record(self, session_id: str, outcome: str, *, decided_at: datetime) -> bool:
-        if self.rows.get(session_id, RESUMING) != RESUMING:
+        current = self.rows.get(session_id, RESUMING)
+        final = outcome != RESUMING and not outcome.startswith("nudging:")
+        if current != RESUMING and not (current.startswith("nudging:") and final):
             return False
         self.rows[session_id] = outcome
         return True
@@ -580,3 +585,120 @@ async def test_a_resume_another_live_session_holds_is_still_already_open() -> No
 
     assert report.outcome == "skipped:already-open"
     assert outcomes.rows[str(record.session_id)] == "skipped:already-open"
+
+
+# --- BL-137: a turn that survived the lost server is never nudged ---------------------------
+
+
+def _nudging_pass(
+    outcomes: _Outcomes, resumed: SessionRecord, deliveries: list[PromptDelivery]
+) -> tuple[InterruptedResumePass, list[tuple[SessionId, str]], list[float]]:
+    """A pass whose resume starts `resumed` and whose send answers `deliveries` in turn, then
+    SENT; every send and every wait is recorded."""
+    sends: list[tuple[SessionId, str]] = []
+    sleeps: list[float] = []
+
+    async def resume(_command: object) -> ResumeOutcome:
+        return ResumeOutcome(resumed, created=True)
+
+    async def no_folder(_session: SessionId) -> None:
+        return None
+
+    async def unclaimed(_key: str) -> bool:
+        return False
+
+    async def send(session_id: SessionId, text: str) -> PromptDelivery:
+        sends.append((session_id, text))
+        return deliveries.pop(0) if deliveries else PromptDelivery(PromptOutcome.SENT)
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    resume_pass = InterruptedResumePass(
+        outcomes,  # type: ignore[arg-type]
+        resume=resume,
+        folder_of=no_folder,
+        key_claimed=unclaimed,
+        send=send,
+        sleep=sleep,
+        now=lambda: REBOOTED,
+    )
+    return resume_pass, sends, sleeps
+
+
+def _cut_off() -> tuple[SessionRecord, SessionRecord, RestartSnapshot]:
+    """A Codex session lost mid-turn, the session its resume starts, and the pass's snapshot."""
+    record = _record(profile=CODEX)
+    resumed = _record(profile=CODEX, created=REBOOTED, resume_source_id="conv-a")
+    snapshot = _snapshot(_lost(record), markers=(record,), marks={record: "conv-a"})
+    return record, resumed, snapshot
+
+
+def _refused(reason: PromptReason) -> PromptDelivery:
+    return PromptDelivery(PromptOutcome.REFUSED, reason)
+
+
+async def test_a_turn_running_on_screen_at_the_first_look_is_never_nudged() -> None:
+    """A turn that survived in the agent's daemon was not cut off: nothing is typed, and the
+    send is never tried again once the screen goes idle."""
+    record, resumed, snapshot = _cut_off()
+    outcomes = _Outcomes()
+    resume_pass, sends, sleeps = _nudging_pass(
+        outcomes, resumed, [_refused(PromptReason.BUSY_ON_SCREEN)]
+    )
+
+    (report,) = await resume_pass.run(snapshot)
+
+    expected = f"resumed:{resumed.session_id}; not nudged:turn_survived"
+    assert report.outcome == expected
+    assert outcomes.rows[str(record.session_id)] == expected
+    assert len(sends) == 1 and sleeps == []
+
+
+async def test_a_running_turn_seen_after_an_unrecognised_first_look_is_not_nudged() -> None:
+    """Nothing typed yet can have started it, so a busy line at any look before the nudge lands
+    is a turn the restart did not cut off."""
+    _record_, resumed, snapshot = _cut_off()
+    resume_pass, sends, _sleeps = _nudging_pass(
+        _Outcomes(),
+        resumed,
+        [_refused(PromptReason.UNRECOGNISED), _refused(PromptReason.BUSY_ON_SCREEN)],
+    )
+
+    (report,) = await resume_pass.run(snapshot)
+
+    assert report.outcome == f"resumed:{resumed.session_id}; not nudged:turn_survived"
+    assert len(sends) == 2
+
+
+async def test_a_title_only_busy_first_look_is_a_boot_and_is_nudged_once() -> None:
+    """Codex's title spins while a slow MCP server starts, with no busy line on screen: waited
+    out, then the nudge is typed once."""
+    _record_, resumed, snapshot = _cut_off()
+    resume_pass, sends, sleeps = _nudging_pass(
+        _Outcomes(), resumed, [_refused(PromptReason.BUSY), _refused(PromptReason.BUSY)]
+    )
+
+    (report,) = await resume_pass.run(snapshot)
+
+    assert report.outcome == f"resumed:{resumed.session_id}"
+    assert len(sends) == 3 and len(sleeps) == 2
+    assert {text for _session, text in sends} == {NUDGE}
+
+
+@pytest.mark.parametrize(
+    ("reason", "said"),
+    [
+        (PromptReason.DIALOG, "dialog"),
+        (PromptReason.COMPOSING, "composing"),
+        (PromptReason.MENU, "menu"),
+    ],
+)
+async def test_a_refusal_other_than_busy_is_unchanged(reason: PromptReason, said: str) -> None:
+    _record_, resumed, snapshot = _cut_off()
+    resume_pass, sends, _sleeps = _nudging_pass(_Outcomes(), resumed, [_refused(reason)])
+
+    (report,) = await resume_pass.run(snapshot)
+
+    assert report.outcome == f"resumed:{resumed.session_id}; not nudged:{said}"
+    assert len(sends) == 1
