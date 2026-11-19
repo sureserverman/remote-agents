@@ -549,6 +549,10 @@ class InterruptedResumePass:
                 # It may have got part-way: decided, never tried again.
                 return await self._decide(decision, f"{SKIPPED}:launch_error")
             return ResumeReport(record, DEFERRED)
+        if not outcome.created and outcome.record.session_id == record.session_id:
+            # The reconcile before this pass failed, so the interrupted record is still live and
+            # holds its own conversation. Nobody else does: left for the next start (BL-138).
+            return ResumeReport(record, DEFERRED)
         if outcome.pane_unavailable:
             return await self._decide(decision, f"{SKIPPED}:pane_unavailable")
         if outcome.folder_unavailable:

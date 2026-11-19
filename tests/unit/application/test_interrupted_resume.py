@@ -8,11 +8,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from remote_agents.application.interrupted_resume import (
+    DEFERRED,
+    InterruptedResumePass,
     RestartSnapshot,
     ResumeSkip,
     SessionAtRestart,
     plan_resumes,
 )
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
     ProfileId,
@@ -23,6 +26,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.rollover import RolloverState
+from remote_agents.ports.interrupted_resumes import RESUMING
 from remote_agents.ports.rollover_store import Rollover
 
 PROJECT = ProjectId("remote-agents")
@@ -510,3 +514,69 @@ def test_a_pending_session_with_no_newer_holder_is_still_resumed() -> None:
     (decision,) = plan_resumes(snapshot)
 
     assert decision.skip is None
+
+
+class _Outcomes:
+    """`InterruptedResumes` in memory: the first outcome stands, except over the intent."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, str] = {}
+
+    async def outcomes(self) -> dict[str, str]:
+        return dict(self.rows)
+
+    async def record(self, session_id: str, outcome: str, *, decided_at: datetime) -> bool:
+        if self.rows.get(session_id, RESUMING) != RESUMING:
+            return False
+        self.rows[session_id] = outcome
+        return True
+
+
+def _resume_pass(outcomes: _Outcomes, answer: ResumeOutcome) -> InterruptedResumePass:
+    async def resume(_command: object) -> ResumeOutcome:
+        return answer
+
+    async def no_folder(_session: SessionId) -> None:
+        return None
+
+    async def unclaimed(_key: str) -> bool:
+        return False
+
+    async def send(_session: SessionId, _text: str) -> object:
+        raise AssertionError("nothing is typed into a resume that started nothing")
+
+    return InterruptedResumePass(
+        outcomes,  # type: ignore[arg-type]
+        resume=resume,
+        folder_of=no_folder,
+        key_claimed=unclaimed,
+        send=send,  # type: ignore[arg-type]
+        now=lambda: REBOOTED,
+    )
+
+
+@pytest.mark.parametrize("pane_unavailable", [False, True])
+async def test_a_resume_that_finds_only_its_own_record_is_deferred(pane_unavailable: bool) -> None:
+    """The reconcile before the pass failed, so the interrupted record is still RUNNING and owns
+    its own conversation: no other session holds it (BL-138 item 4)."""
+    record = _record(resume_source_id="conv-a")
+    outcomes = _Outcomes()
+    answer = ResumeOutcome(record, created=False, pane_unavailable=pane_unavailable)
+
+    (report,) = await _resume_pass(outcomes, answer).run(_snapshot(_lost(record)))
+
+    assert report.outcome == DEFERRED
+    assert outcomes.rows[str(record.session_id)] == RESUMING
+
+
+async def test_a_resume_another_live_session_holds_is_still_already_open() -> None:
+    record = _record(resume_source_id="conv-a")
+    holder = _record(created=REBOOTED + timedelta(minutes=1), resume_source_id="conv-a")
+    outcomes = _Outcomes()
+
+    (report,) = await _resume_pass(outcomes, ResumeOutcome(holder, created=False)).run(
+        _snapshot(_lost(record))
+    )
+
+    assert report.outcome == "skipped:already-open"
+    assert outcomes.rows[str(record.session_id)] == "skipped:already-open"
