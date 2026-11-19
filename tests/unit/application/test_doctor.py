@@ -613,3 +613,38 @@ def test_an_unreadable_label_gives_no_sandbox_line() -> None:
     assert "sandbox" not in _healthy_doctor(sandbox=None)
     assert "sandbox" not in _healthy_doctor(sandbox=())
     assert "sandbox" not in _healthy_doctor()
+
+
+def test_a_stale_opencode_plugin_is_reported_as_plain_data() -> None:
+    line = "OpenCode plugin out of date (run remote-agents install-agent-hooks)"
+
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(),
+        registered_projects=0,
+        discovered_projects=0,
+        catalogue_projects=0,
+        opencode_plugin=line,
+    )
+
+    assert report["opencode_plugin"] == line
+
+
+def test_no_opencode_plugin_line_omits_the_key() -> None:
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(),
+        registered_projects=0,
+        discovered_projects=0,
+        catalogue_projects=0,
+    )
+
+    assert "opencode_plugin" not in report

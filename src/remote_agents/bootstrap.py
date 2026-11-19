@@ -21,6 +21,7 @@ from remote_agents.adapters.agents.registry import (
     claude_status_line_hop_installed,
     default_settings_path,
     install_agent_hooks,
+    opencode_plugin_current,
     profiles_bound_by_thread,
     remove_agent_hooks,
 )
@@ -983,6 +984,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         liveness_meaning=supervisor.liveness_meaning,
         release=_release_state(),
         claude_limits=_claude_limits_state(paths),
+        opencode_plugin=_opencode_plugin_state(paths),
         claude_limits_source=_claude_limits_source_line(config),
         cursor_limits_source=_cursor_limits_source_line(config),
         schedule_zone=schedule_zone_line(),
@@ -1026,6 +1028,21 @@ def _claude_limits_state(paths: ProductionPaths) -> str:
     if installed:
         return "status-line hop installed"
     return "status-line hop not installed (run remote-agents install-agent-hooks --provider claude)"
+
+
+def _opencode_plugin_state(paths: ProductionPaths) -> str | None:
+    """Whether the installed OpenCode plugin is this build's; None when none is installed.
+
+    Asked through the installer's own path rule (`opencode_plugin_current`). The stale sentence
+    names the command that fixes it, because a host that upgraded without it keeps a plugin
+    whose sessions a restart skips as `no-conversation` (BL-134).
+    """
+    current = opencode_plugin_current(default_settings_path(paths.home, provider="opencode"))
+    if current is None:
+        return None
+    if current:
+        return "OpenCode plugin current"
+    return "OpenCode plugin out of date (run remote-agents install-agent-hooks)"
 
 
 def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:

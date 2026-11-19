@@ -134,6 +134,7 @@ def production_doctor(
     unbound_sessions: int | None = None,
     permission_failures: int | None = None,
     sandbox: tuple[SandboxReading, ...] | None = None,
+    opencode_plugin: str | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -299,6 +300,11 @@ def production_doctor(
         # A count, and never a verdict: the session works, on its agent's own configuration,
         # and nothing automatic is typed into it until its preset is applied.
         report["permission_failures"] = permission_failures
+    if opencode_plugin is not None:
+        # One sentence, already worded by the caller: whether the installed OpenCode plugin is
+        # this build's. Never a verdict: a stale one still reports activity, and only a restart
+        # skips its sessions as `no-conversation` (BL-134).
+        report["opencode_plugin"] = opencode_plugin
     if sandbox:
         # Whether a pane can start an agent's sandbox (BL-147, DEC-140): one reading per
         # process that decides it -- the service, whose label the next tmux server inherits;

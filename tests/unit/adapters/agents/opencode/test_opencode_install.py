@@ -26,6 +26,7 @@ from remote_agents.adapters.agents.registry import (
     HookInstallError,
     default_settings_path,
     install_agent_hooks,
+    opencode_plugin_current,
     remove_agent_hooks,
 )
 from remote_agents.bootstrap import main
@@ -823,3 +824,41 @@ def test_the_generated_plugin_reads_opencodes_session_id() -> None:
     from remote_agents.adapters.agents.opencode.plugin import plugin_source
 
     assert "properties.sessionID" in plugin_source(["/bin/true"])
+
+
+_V0_70_PLUGIN = Path(__file__).parents[4] / "fixtures" / "opencode" / "activity-plugin-v0.70.3.mjs"
+"""The plugin v0.70.3 generated, rendered by that release itself: it sends no session id."""
+
+
+def test_a_plugin_this_build_installed_reads_current(tmp_path: Path) -> None:
+    settings = _config(tmp_path)
+    install_agent_hooks(settings, executable=Path("/old/python"), provider="opencode")
+
+    assert opencode_plugin_current(settings) is True
+
+
+def test_the_plugin_v0_70_installed_reads_out_of_date(tmp_path: Path) -> None:
+    """A host that upgraded without `install-agent-hooks` keeps it, and its sessions are
+    skipped as `no-conversation` at every restart (BL-134)."""
+    settings = _config(tmp_path)
+    plugin = _plugin_path(settings)
+    plugin.parent.mkdir(parents=True)
+    plugin.write_text(_V0_70_PLUGIN.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert opencode_plugin_current(settings) is False
+
+
+def test_no_installed_plugin_reads_as_none(tmp_path: Path) -> None:
+    assert opencode_plugin_current(_config(tmp_path)) is None
+
+
+@pytest.mark.parametrize("text", ["", "not a plugin", "const COMMAND = [nope];\n"])
+def test_a_plugin_file_this_installer_did_not_render_reads_out_of_date(
+    tmp_path: Path, text: str
+) -> None:
+    settings = _config(tmp_path)
+    plugin = _plugin_path(settings)
+    plugin.parent.mkdir(parents=True)
+    plugin.write_text(text, encoding="utf-8")
+
+    assert opencode_plugin_current(settings) is False

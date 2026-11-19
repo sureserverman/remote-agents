@@ -114,6 +114,7 @@ from remote_agents.adapters.agents.hook_settings import (
     read_settings_document,
 )
 from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
+from remote_agents.adapters.agents.opencode.plugin import rendered_by_this_build
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import closed_profiles
@@ -862,6 +863,25 @@ def claude_status_line_hop_installed(settings_path: Path) -> bool:
     be read answers no, which is the honest reading for a report and never a refusal.
     """
     return _holds_our_status_line(read_settings_document(settings_path))
+
+
+def opencode_plugin_current(settings_path: Path) -> bool | None:
+    """Whether the OpenCode plugin beside this settings file is the one this build generates.
+
+    None when none is installed, which `doctor` reports as nothing. A plugin another build
+    wrote -- v0.70's sends no session id, so its sessions never come back after a restart
+    (BL-134) -- or a file that is a link or cannot be read answers False.
+    """
+    path = _plugin_path(settings_path, _OPENCODE)
+    try:
+        if os.path.islink(path):
+            return False
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError):
+        return False
+    return rendered_by_this_build(text)
 
 
 def default_settings_path(

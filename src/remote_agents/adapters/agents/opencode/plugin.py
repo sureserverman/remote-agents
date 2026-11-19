@@ -39,6 +39,7 @@ that trusts nothing it reads.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 #: Where the generated file lands, relative to the directory holding `opencode.json`.
@@ -216,3 +217,25 @@ def plugin_source(command: list[str]) -> str:
     JSON string literals are JavaScript string literals.
     """
     return _SOURCE % {"command": json.dumps(command), "wait": _WAIT_MILLISECONDS}
+
+
+_COMMAND_LINE = re.compile(r"^const COMMAND = (\[.*\]);$", re.MULTILINE)
+
+
+def rendered_by_this_build(text: str) -> bool:
+    """Whether `text` is exactly what this build renders around the command it embeds.
+
+    An installed plugin embeds the spool command the installer chose, so it is compared with
+    `plugin_source` of that same command: any other difference means another build wrote it,
+    and its host needs `install-agent-hooks` again. Text with no readable command is not ours.
+    """
+    found = _COMMAND_LINE.search(text)
+    if found is None:
+        return False
+    try:
+        command = json.loads(found.group(1))
+    except ValueError:
+        return False
+    if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
+        return False
+    return plugin_source(command) == text
