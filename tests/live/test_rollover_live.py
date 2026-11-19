@@ -122,6 +122,7 @@ from native_isolation import claude_command, codex_command, sharing_daemon
 from remote_agents.adapters.agents import codex as codex_provider
 from remote_agents.adapters.agents.codex import descriptor as codex_descriptor
 from remote_agents.adapters.agents.codex.sessions import CodexAppServerClient
+from remote_agents.adapters.agents.codex.thread_settings import CodexThreadPermissions
 from remote_agents.adapters.agents.protocols import JsonRpcProcess
 from remote_agents.adapters.agents.registry import (
     adopt_templates,
@@ -176,6 +177,7 @@ from remote_agents.composition.service import (
     _reconcile_periodically,
     _roll_over_periodically,
     _serve_with_reconciliation,
+    build_permission_apply_pass,
     build_restart_resume,
     build_rollover_pass,
     build_thread_binder,
@@ -201,6 +203,7 @@ from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import PromptDelivery, PromptOutcome, PromptReason
 from remote_agents.production import ProductionPaths
 
+from .test_codex_permission_presets import _ThroughWrapper
 from .test_codex_tool_shell_identity import _read_seen
 
 _MARKER = "live_acceptance"
@@ -435,7 +438,9 @@ def _install_codex_plugin(command: tuple[str, ...], root: Path, codex_home: Path
         _blocked("isolated plugin cache does not match the qualified built writer")
 
 
-def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) -> ProductionPaths:
+def _isolated_codex_home(
+    root: Path, repo: Path, codex: Path, codex_home: Path, *, grant_source: bool = True
+) -> ProductionPaths:
     """`_isolated_home` for Codex: the same config and registry, a `CODEX_HOME` holding the
     read-only login mount and local plugin, plus isolated entry-point wrappers."""
     # Beside the repository, so it goes with it; the model's only writable folder outside it.
@@ -473,14 +478,17 @@ def _isolated_codex_home(root: Path, repo: Path, codex: Path, codex_home: Path) 
     (root / ".claude" / "projects-registry.yaml").write_text(
         "version: 1\nprojects: []\n", encoding="utf-8"
     )
+    # `.claude` because a successor in another project records its acceptance here, which its
+    # own workspace does not cover. The product grants no such root (see the backlog).
+    # BL-144: `grant_source=False` grants nothing in the source project, as the product does,
+    # so the drill measures where a cross-project acceptance write lands.
+    granted = [str(repo / ".git"), str(repo / ".claude")] if grant_source else []
+    roots = ", ".join(json.dumps(root_path) for root_path in [*granted, str(scratch)])
     (codex_home / "config.toml").write_text(
         'approval_policy = "never"\nsandbox_mode = "workspace-write"\n'
         'cli_auth_credentials_store = "file"\n'
         "[sandbox_workspace_write]\n"
-        # `.claude` because a successor in another project records its acceptance here, which its
-        # own workspace does not cover. The product grants no such root (see the backlog).
-        f"writable_roots = [{json.dumps(str(repo / '.git'))}, {json.dumps(str(repo / '.claude'))}, "
-        f"{json.dumps(str(scratch))}]\n"
+        f"writable_roots = [{roots}]\n"
         "exclude_slash_tmp = true\nexclude_tmpdir_env_var = true\n"
         "\n",
         encoding="utf-8",
@@ -676,8 +684,20 @@ class _Harness:
         self.daemons: set[int] = set()
 
 
-def _compose(config, connection, paths: ProductionPaths) -> _Harness:
-    """`_private_boundary`'s wiring of everything the rollover needs, with no bot boundary."""
+def _compose(
+    config,
+    connection,
+    paths: ProductionPaths,
+    *,
+    apply_presets_in: Path | None = None,
+    applier_tries: list[str] | None = None,
+) -> _Harness:
+    """`_private_boundary`'s wiring of everything the rollover needs, with no bot boundary.
+
+    `apply_presets_in`, a drill's `CODEX_HOME`, adds `serve`'s permission pass to the rollover's
+    readiness, so a successor is typed its template only under its applied preset, as in
+    production. Its applier reaches that home's daemon through the drill's wrapper
+    (`_ThroughWrapper`), not the owner's; each step lands in `applier_tries`."""
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     descriptors = provider_descriptors(
         claude_context_window=(
@@ -690,6 +710,21 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         cursor_limits_switch=partial(read_cursor_limits_source, config.path or paths.config_path),
         cursor_home=paths.home,
     )
+    if apply_presets_in is not None:
+        applier = CodexThreadPermissions(
+            _ThroughWrapper(
+                paths.home / ".local" / "bin" / "codex",
+                [] if applier_tries is None else applier_tries,
+                apply_presets_in,
+            ),
+            home=apply_presets_in,
+        )
+        descriptors = tuple(
+            descriptor
+            if descriptor.thread_permissions is None
+            else replace(descriptor, thread_permissions=applier)
+            for descriptor in descriptors
+        )
     projects.refresh()
     # As `_private_boundary`: without the folder bindings every destination is refused.
     worktrees = worktree_parts(connection)
@@ -724,11 +759,23 @@ def _compose(config, connection, paths: ProductionPaths) -> _Harness:
         descriptors=descriptors,
         activity_directory=paths.activity_directory,
     )
+    permission_apply = (
+        build_permission_apply_pass(
+            connection=connection,
+            store=store,
+            descriptors=descriptors,
+            activity_directory=paths.activity_directory,
+            binder=thread_binder,
+        )
+        if apply_presets_in is not None
+        else None
+    )
     rollover_pass = build_rollover_pass(
         connection=connection,
         sessions=backend.sessions,
         terminal=runtime.terminal,
         binder=thread_binder,
+        ready=None if permission_apply is None else permission_apply.wait_ready,
         enabled=backend.auto_rollover.read,
         project_paths=projects.paths,
         adopt_templates=adopt_templates(),
@@ -1019,6 +1066,9 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         planning = None
     else:
         executable, planning = _prerequisites(request.config)
+    # BL-144 (Sub-plan 1 Task 3.2): withhold the source grant and run under Approve for me, the
+    # preset the backlog entry is about; the drill may pass or fail, its record is the product.
+    withhold = profile == "codex" and os.environ.get("RA_DRILL_WITHHOLD_SOURCE_GRANT") == "1"
     journey = WriterJourney(tmp_path, Path(checkout), profile)
     # Give the native successor a complete, executable fixture plan, with external records.
     target_text = (_FIXTURES / "fixture-plan.md").read_text()
@@ -1037,10 +1087,13 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
     socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
     codex_home = None
     connection = None
+    applier_tries: list[str] = []
     try:
         if profile == "codex":
             codex_home = short_codex_home()
-            paths = _isolated_codex_home(home, journey.source, executable, codex_home)
+            paths = _isolated_codex_home(
+                home, journey.source, executable, codex_home, grant_source=not withhold
+            )
         else:
             command = claude_command(executable, home, tmp_path)
             paths = _isolated_home(
@@ -1067,7 +1120,14 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         (home / "registry.yaml").write_text(yaml.safe_dump(registry))
         config = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
-        harness = _compose(config, connection, paths)
+        # BL-144: as `serve` does, so the successor's turn runs under Approve for me.
+        harness = _compose(
+            config,
+            connection,
+            paths,
+            apply_presets_in=codex_home if withhold else None,
+            applier_tries=applier_tries,
+        )
         sessions = harness.backend.sessions
         # The source is a native idle pane; its completed plan work is synthetic fixture metadata.
         project_id = next(
@@ -1079,7 +1139,15 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
                 ProfileId(profile),
                 _key("native-source"),
                 # A preset that shares the daemon, so "one daemon" means something here too.
-                permissions=PermissionPreset.PROVIDER_DEFAULT if profile == "codex" else None,
+                permissions=(
+                    (
+                        PermissionPreset.APPROVE_FOR_ME
+                        if withhold
+                        else PermissionPreset.PROVIDER_DEFAULT
+                    )
+                    if profile == "codex"
+                    else None
+                ),
             )
         )
         predecessor = launched.record.session_id
@@ -1172,6 +1240,14 @@ async def test_native_destination_adoption_waits_for_trust_and_preserves_saved_p
         if connection is not None:
             connection.close()
         if codex_home is not None:
+            if withhold:
+                # Keep the rollouts: they say whether the acceptance write ran in the sandbox,
+                # was escalated, or was refused.
+                kept = tmp_path / "bl-144-rollouts"
+                with contextlib.suppress(OSError):
+                    shutil.copytree(codex_home / "sessions", kept)
+                print(f"BL-144 rollouts kept at {kept}")
+                print("BL-144 applier steps:", *applier_tries, sep="\n  ")
             retire_codex_home(codex_home)
 
 
