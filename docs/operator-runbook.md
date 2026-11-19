@@ -973,10 +973,14 @@ this. The terminal never does.
   in the middle of a turn are then sent
   the same one-line nudge as a session resumed after a usage limit. Idle ones are resumed and
   left alone.
-  **One known gap (BL-137).** If tmux alone crashes while a Codex turn runs, the turn goes on
-  in Codex's daemon. A `serve` that starts before it ends waits it out, then types the nudge into
-  a turn that already finished, which starts one more. A reboot ends the daemon too, so it is not
-  affected.
+  **A turn that survived is left alone (DEC-142).** If tmux alone crashes while a Codex turn
+  runs, the turn goes on in Codex's daemon, and the resumed pane shows it running
+  (`• Working (… esc to interrupt)`). Nothing is typed into it, and the notice lists it as
+  resumed but not told to carry on, because its turn was still running. A reboot ends the daemon
+  and the turn with it, so that session is nudged once Codex has booted; a spinning title while a
+  slow MCP server starts is waited out, not taken for a turn. One residual: a surviving turn that
+  shows no busy line when the service looks -- Codex streaming its answer, or between tool calls
+  -- is read as a boot, waited out, and nudged after it ends.
   **The stale marker (BL-138).** A turn's marker names the conversation that started the turn.
   If you interrupt a turn, run `/clear`, or submit a new prompt before the old turn's marker has
   ended, the older conversation can stay marked. A restart then resumes and nudges that one.

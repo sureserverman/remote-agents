@@ -120,8 +120,7 @@ remain discoverable under their recorded project, deduplicated with the provider
 A removed worktree cannot be revived as an outside folder. Automatic legacy recovery without
 an immutable registered-root snapshot holds; explicit current catalogue selection retains
 historical session IDs and supplies its current project context. Existing presets remain
-unchanged on a hold. Ambiguous server loss and surviving-turn restart hardening are still
-separate open work (BL-136/137/138).
+unchanged on a hold.
 
 For Codex writer attribution, only an exact independent managed conversation binding can
 establish identity. Current hook marks can reject a conflicting binding but cannot establish
