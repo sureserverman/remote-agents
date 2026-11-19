@@ -737,7 +737,17 @@ def test_a_claude_needs_input_notification_still_becomes_a_needs_answer(tmp_path
 
     (activity,) = drain_activity(tmp_path)
     assert activity.kind is ActivityKind.NEEDS_ANSWER
-    assert activity.detail == "Waiting on you", "it keeps its message"
+    # It keeps its message, led by where it came from (owner, 2026-11-18; BL-132).
+    assert activity.detail == "from the agents view: Waiting on you"
+
+
+def test_a_needs_input_notice_with_no_message_still_says_where_it_came_from(
+    tmp_path: Path,
+) -> None:
+    _spool(tmp_path, event="Notification", reason="agent_needs_input", detail=None)
+
+    (activity,) = drain_activity(tmp_path)
+    assert activity.detail == "from the agents view"
 
 
 def test_a_cursor_stop_is_a_completion_the_agent_reported(tmp_path: Path) -> None:

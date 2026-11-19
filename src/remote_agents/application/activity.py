@@ -131,7 +131,16 @@ changes to blocked, and it carries `message`, `"<label> needs your input: <needs
 becomes the record's detail (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, pinned in
 `tests/provider_contract/per_provider/test_claude_quirks.py`). By the spool's code, though not yet
 observed end to end, it arrives only when the view runs in a managed pane and is recorded as that
-pane's session, not the blocked agent's (BL-132).
+pane's session, not the blocked agent's. So its detail is led by `_AGENTS_VIEW` (DEC-037 and
+DEC-098 as amended 2026-11-18): without it the line reads as the hosting session asking.
+"""
+
+_AGENTS_VIEW = "from the agents view"
+"""Where an `agent_needs_input` notice came from, at the front of its detail on both surfaces.
+
+At the front because the console cuts a detail at its own width (`feed._elide`), and the label
+before it can be the opening words of a long prompt. Stored in the detail, the field both
+surfaces already render, so nothing new is stored (owner, 2026-11-18).
 """
 
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -328,10 +337,13 @@ def _activity(record: dict) -> AgentActivity | None:
     if resolved is None:
         return None
     kind, confidence = resolved
+    detail = bounded_detail_line(record.get("detail"))
+    if record.get("event") == "Notification" and record.get("reason") == "agent_needs_input":
+        detail = _from_the_agents_view(detail)
     return AgentActivity(
         session_id=session_id,
         kind=kind,
-        detail=bounded_detail_line(record.get("detail")),
+        detail=detail,
         observed_at=observed_at,
         confidence=confidence,
         # Re-narrowed on this side of the spool, as `detail` is: a different process wrote the
@@ -342,6 +354,13 @@ def _activity(record: dict) -> AgentActivity | None:
         # bounds what it finds, and a record from an older build carries no such key.
         paused=kind is ActivityKind.COMPLETED and record.get("paused") is True,
     )
+
+
+def _from_the_agents_view(detail: str | None) -> str:
+    """`detail` led by `_AGENTS_VIEW`, cut again so the whole still fits the shared bound."""
+    if detail is None:
+        return _AGENTS_VIEW
+    return bounded_detail_line(f"{_AGENTS_VIEW}: {detail}") or _AGENTS_VIEW
 
 
 def _ask_token(value: object) -> str | None:
