@@ -1,14 +1,20 @@
 """Opt-in live proof: after a lost tmux server, real Claude and Codex come back in their own turns.
 
 Task 3.4 of the restart-resume plan (DEC-127). One `claude` and one `codex` session are launched
-through the service's own `SessionService.launch`, and each is sent one trivial prompt, so its
-hook writes a conversation mark. Once both are idle the tmux server is killed and the Codex
-daemon stopped, as a reboot would leave them. Then a fresh composition starts `serve`. Asserted:
+through the service's own `SessionService.launch`, and each is sent one prompt, so its hook
+writes a conversation mark: Claude a trivial one, which ends; Codex one that runs `sleep 40`.
+While that runs, the tmux server is killed and the Codex daemon stopped, as a reboot would leave
+them, and Codex is given a slow MCP server, so its boot spins its title. Then a fresh
+composition starts `serve`. Asserted:
 
 1. each session is resumed exactly once, with the production resume argv naming the
    conversation its own mark recorded -- `claude --resume <id>`, `codex resume <id>`;
-2. nothing is typed into either, because neither was mid-turn;
+2. the nudge is typed once into Codex, cut off mid-turn, after its boot is waited out, and
+   nothing into Claude, which was idle (BL-137: a boot's title spinner is not a surviving turn);
 3. one restart notice says both came back.
+
+`test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged` is the tmux-only
+crash: the daemon and its turn survive, and nothing is typed.
 
 **What is real.** The `claude` and `codex` binaries and the owner's own logins. tmux. The
 service's composition: `_local_runtime` and `compose_backend`, built the way
@@ -83,6 +89,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_pr
 from remote_agents.adapters.tmux.composer import PaneState, classify, unstyled
 from remote_agents.application.commands import AnswerTrustCommand, LaunchCommand
 from remote_agents.application.interrupted_resume import ResumeReport
+from remote_agents.application.limit_resume import NUDGE
 from remote_agents.application.prompt_delivery import DeliveryVerdict, delivery_verdict
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.session_folders import SessionFolders
@@ -434,13 +441,17 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
     connections = []
     try:
         repo = _workspace(repo_parent)
-        paths = _isolated_home(tmp_path / "home", repo, claude, codex, codex_home)
+        # A slow MCP server, so the Codex boot after the reboot spins its title (BL-137).
+        paths = _isolated_home(
+            tmp_path / "home", repo, claude, codex, codex_home, mcp_delay=_MCP_DELAY
+        )
         config = load_config(paths.config_path)
         connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
         first = _Process(config, connections[-1], paths)
         project_id = first.project(repo)
 
-        # 1. One session of each, each given one trivial turn so a conversation exists.
+        # 1. One session of each. Claude is given one trivial turn, which ends, so a conversation
+        # exists; Codex one that runs `sleep 40`, still running at the reboot.
         launched = {}
         for profile in (CLAUDE, CODEX):
             outcome = await first.backend.sessions.launch(
@@ -462,19 +473,20 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
                 first, f"{profile} never bound its thread"
             )
             launched[profile] = session_id
-        for session_id in launched.values():
-            await _type(first, session_id, _TURN)
+        await _type(first, launched[CLAUDE], _TURN)
+        await _type(first, launched[CODEX], _LONG_TURN)
         marks = FileConversationMarks(paths.activity_directory)
         markers = FileTurnMarkers(paths.activity_directory)
-        conversations = {
-            profile: await _turn_ended(first, marks, markers, session_id)
-            for profile, session_id in launched.items()
-        }
+        conversations = {CLAUDE: await _turn_ended(first, marks, markers, launched[CLAUDE])}
+        await _until_sleeping(first, markers, launched[CODEX])
+        conversations[CODEX] = marks.latest(str(launched[CODEX]))
+        assert conversations[CODEX] is not None, "the Codex turn left no conversation mark"
         # The line ran in the shell of the thread the turn then used.
         bound = thread_of(paths.activity_directory, str(launched[CODEX]))
         assert bound == conversations[CODEX], (bound, conversations[CODEX])
 
-        # 2. The reboot: the server and every pane on it go, and so does the Codex daemon.
+        # 2. The reboot: the server and every pane on it go, and so does the Codex daemon, and
+        # the Codex turn with it.
         subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30)
         _stop_codex_daemon(codex, codex_home)
         await _until_gone(first)
@@ -499,10 +511,21 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
         assert set(outcomes) == set(launched.values()), outcomes
         assert all(outcome.startswith("resumed:") for outcome in outcomes.values()), outcomes
         assert not any("not nudged" in outcome for outcome in outcomes.values()), outcomes
-        assert second.sends == [], f"nothing is typed into an idle session: {second.sends}"
-        assert len(managed_daemons(codex_home)) == 1, managed_daemons(codex_home)
-
         records = await second.backend.sessions.list_sessions()
+        running = {
+            record.profile_id: record.session_id
+            for record in records
+            if record.state is SessionState.RUNNING
+        }
+        # The cut-off Codex turn is nudged once, after its boot's title spinner is waited out;
+        # the idle Claude session is never typed into.
+        measured = {"looks": _keyed(second.looks), "answers": second.answers}
+        print("MEASURED", json.dumps(measured, default=str))
+        assert {session for session, _text in second.sends} == {running[CODEX]}, second.sends
+        assert second.answers.count("sent:None") == 1, second.answers
+        assert second.answers[-1] == "sent:None", second.answers
+        assert {text for _session, text in second.sends} == {NUDGE}, second.sends
+        assert len(managed_daemons(codex_home)) == 1, managed_daemons(codex_home)
         for profile, argument in ((CLAUDE, "--resume"), (CODEX, "resume")):
             resumed = [
                 record
@@ -546,19 +569,16 @@ _LONG_TURN = "Run the shell command `sleep 40`, then reply with exactly the word
 _SLEEP = ("sleep", "40")
 
 
-# BL-138 is outside this plan; retain its historical skip, exclude it from the live gate.
-@pytest.mark.skip(
-    reason="BL-137: fails as measured 2026-10-17 -- the nudge is typed once the surviving turn "
-    "ends; reading busy as 'survived' also drops a Codex boot nudge (MCP startup reads busy)"
-)
+@pytest.mark.live_acceptance
 async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A tmux crash that spares the Codex daemon: the turn its pane started goes on there, so
     it was not cut off, and `serve` starting while it runs must type nothing into it.
 
-    The closing `not nudged:busy` assumes this turn shows its on-screen busy line at the first
-    look; a title-only busy is also a Codex boot (BL-137's next step)."""
+    The turn shows Codex's on-screen busy line at the first look (measured on 0.170.0,
+    `docs/acceptance-2026-11-surviving-codex-turn.md`), so the pass stands down at once with
+    `not nudged:turn_survived` (BL-137, DEC-142). A title-only busy is a boot, waited out."""
     claude, codex = _prerequisites()
     tmux_directory = Path(tempfile.mkdtemp(prefix="ra-rsd-", dir="/tmp"))
     monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
@@ -574,7 +594,15 @@ async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged
         connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
         first = _Process(config, connections[-1], paths)
         outcome = await first.backend.sessions.launch(
-            LaunchCommand(first.project(repo), CODEX, _key("restart-daemon"), "restart-live")
+            LaunchCommand(
+                first.project(repo),
+                CODEX,
+                _key("restart-daemon"),
+                "restart-live",
+                # Shares the daemon: `approve_for_me` runs embedded (DEC-071), and an embedded turn
+                # dies with its pane.
+                permissions=PermissionPreset.PROVIDER_DEFAULT,
+            )
         )
         session_id = outcome.record.session_id
         if outcome.record.state is SessionState.UNTRUSTED:
@@ -603,6 +631,7 @@ async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged
         seen["after_pass"] = _alive(codex_home)
         seen["old_marker"] = markers.started_at(str(session_id))
         seen["answers"] = second.answers
+        seen["looks"] = _keyed(second.looks)
         seen["notices"] = [
             [(str(report.record.session_id), report.outcome) for report in reports]
             for reports, _ in second.notices
@@ -614,7 +643,10 @@ async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged
         )
         ((reports, _),) = second.notices
         (report,) = reports
-        assert report.outcome.endswith("; not nudged:busy"), report.outcome
+        assert report.outcome.endswith("; not nudged:turn_survived"), report.outcome
+        assert second.answers == ["refused:busy_on_screen"], second.answers
+        # The turn goes on in the daemon and ends there; the pass has already stood down.
+        assert seen["after_kill"]["sleep"] == 1, seen  # type: ignore[index]
     finally:
         with contextlib.suppress(Exception):
             subprocess.run(
@@ -675,113 +707,9 @@ def _capture_answer(look: dict[str, object]) -> PromptDelivery:
     return PromptDelivery(PromptOutcome.REFUSED, PromptReason.EMPTY)
 
 
-@pytest.mark.live_acceptance
-@pytest.mark.parametrize("shape", ["survivor", "boot"])
-async def test_first_look_capture(
-    shape: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """BL-137's measurement (Task 3.1): what a resumed Codex pane shows each time the restart
-    pass comes to type into it, with nothing ever typed.
-
-    `survivor`: only the tmux server is killed under a turn running `sleep 40`; the daemon and
-    the turn live on. `boot`: a reboot -- the server and the daemon go -- under the same turn,
-    with an MCP server that keeps Codex's boot waiting `_MCP_DELAY` seconds. Each look is
-    printed as one `FIRST_LOOK` JSON line. Opt-in twice: it spends one short turn per run
-    (OD-2), and asserts only that the pass looked."""
-    if os.environ.get("REMOTE_AGENTS_FIRST_LOOK_CAPTURE") != "1":
-        pytest.skip("BLOCKED: not asked for; run with REMOTE_AGENTS_FIRST_LOOK_CAPTURE=1")
-    claude, codex = _prerequisites()
-    tmux_directory = Path(tempfile.mkdtemp(prefix="ra-rfl-", dir="/tmp"))
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_directory))
-    socket = tmux_directory / f"tmux-{os.getuid()}" / "remote-agents"
-    codex_home = short_codex_home()
-    repo: Path | None = None
-    connections = []
-    seen: dict[str, object] = {"shape": shape, "codex": _codex_version(codex)}
-    try:
-        repo = _workspace(tmp_path)
-        paths = _isolated_home(
-            tmp_path / "home",
-            repo,
-            claude,
-            codex,
-            codex_home,
-            mcp_delay=_MCP_DELAY if shape == "boot" else None,
-        )
-        config = load_config(paths.config_path)
-        connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
-        first = _Process(config, connections[-1], paths)
-        outcome = await first.backend.sessions.launch(
-            LaunchCommand(
-                first.project(repo),
-                CODEX,
-                _key(f"first-look-{shape}"),
-                "restart-live",
-                # Shares the daemon, so a tmux-only crash leaves the turn running there.
-                permissions=PermissionPreset.PROVIDER_DEFAULT,
-            )
-        )
-        session_id = outcome.record.session_id
-        if outcome.record.state is SessionState.UNTRUSTED:
-            await _answer_trust(first, session_id)
-        await _until_running(first, session_id, socket)
-        await _type(first, session_id, _LONG_TURN)
-        markers = FileTurnMarkers(paths.activity_directory)
-        await _until_sleeping(first, markers, session_id)
-
-        subprocess.run(["tmux", "-S", str(socket), "kill-server"], capture_output=True, timeout=30)
-        if shape == "boot":
-            _stop_codex_daemon(codex, codex_home)
-        await _until_gone(first)
-        seen["after_kill"] = _alive(codex_home)
-        killed = time.monotonic()
-
-        connections.append(open_database(paths.database_path, migrations=MIGRATIONS))
-        second = _Process(config, connections[-1], paths)
-        second.capture_only = True
-
-        async def poll(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
-            deadline = time.monotonic() + _PASS_SECONDS
-            while not second.notices and time.monotonic() < deadline:
-                await asyncio.sleep(_POLL_SECONDS)
-
-        await _serve_with_reconciliation(
-            TelegramSecrets("token", 7, 11), second.composition(), poll, 3600
-        )
-        seen["after_pass"] = _alive(codex_home)
-        seen["notices"] = [
-            [(str(report.record.session_id), report.outcome) for report in reports]
-            for reports, _ in second.notices
-        ]
-        looks = [look for session_looks in second.looks.values() for look in session_looks]
-        for index, look in enumerate(looks):
-            print(
-                "FIRST_LOOK",
-                json.dumps({**seen, "look": index, "after_kill_s": look["at"] - killed, **look}),
-            )
-        assert looks, await _diagnosis(second, f"the pass never came to type: {seen}")
-    finally:
-        with contextlib.suppress(Exception):
-            subprocess.run(
-                ["tmux", "-S", str(socket), "kill-server"],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-        retire_codex_home(codex_home)
-        for connection in connections:
-            with contextlib.suppress(Exception):
-                connection.close()
-        if repo is not None:
-            shutil.rmtree(repo, ignore_errors=True)
-        shutil.rmtree(tmux_directory, ignore_errors=True)
-
-
-def _codex_version(codex: Path) -> str:
-    completed = subprocess.run(
-        [str(codex), "--version"], capture_output=True, text=True, timeout=30, check=False
-    )
-    return completed.stdout.strip()
+def _keyed(looks: dict[SessionId, list[dict[str, object]]]) -> dict[str, list[dict[str, object]]]:
+    """The looks, keyed by session id text, so they print as JSON."""
+    return {str(session_id): session_looks for session_id, session_looks in looks.items()}
 
 
 def _alive(home: Path | None = None) -> dict[str, int]:
