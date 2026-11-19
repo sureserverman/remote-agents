@@ -35,6 +35,7 @@ from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.adapters.telegram.restart_notifications import restart_message
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.tmux.gateway import TmuxGateway
+from remote_agents.adapters.tmux.profiles import build_resume_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.application.interrupted_resume import ResumeReport
 from remote_agents.application.limit_resume import NUDGE
@@ -55,11 +56,14 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.profiles import ProfileDefinition
 from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
 
 _SECRETS = TelegramSecrets("token", 7, 11)
 PROJECT = ProjectId("opaque-editor")
 PROFILE = ProfileId("fake")
+#: Resumed through the real OpenCode argv (`--session <id>`), over the same fake agent.
+OPENCODE = ProfileId("opencode")
 
 #: The agent draws its composer this long after its readiness marker -- which is when the resume
 #: returns -- so the first try of the nudge meets a screen with no composer on it yet.
@@ -89,6 +93,13 @@ class Rig:
     def __init__(self, tmp_path: Path) -> None:
         agent = tmp_path / "fake_agent.py"
         agent.write_text(_AGENT, encoding="utf-8")
+        opencode = tmp_path / "fake_opencode"
+        opencode.write_text(f"#!{sys.executable}\n{_AGENT}", encoding="utf-8")
+        opencode.chmod(0o755)
+        # The curated definition; only the executable it resolves to is the fake agent.
+        opencode_definition = ProfileDefinition(
+            OPENCODE, "opencode", ("opencode",), ("--version",), ("C-c",)
+        )
         self.intents = tmp_path / "intents"
         self.socket = f"remote-agents-test-{uuid4().hex}"
         gateway = TmuxGateway(self.socket, AsyncTmuxRunner(), intent_directory=self.intents)
@@ -102,17 +113,20 @@ class Rig:
                 "READY",
             )
 
+        def opencode_resume(session: SessionId, source: ProviderConversationId) -> LaunchProfile:
+            return build_resume_profile(opencode_definition, opencode, session, source, environment)
+
+        launch = LaunchProfile(sys.executable, (sys.executable, str(agent)), environment, "READY")
         self.terminal = TmuxTerminal(
             gateway,
             {PROJECT: tmp_path},
-            {
-                PROFILE: LaunchProfile(
-                    sys.executable, (sys.executable, str(agent)), environment, "READY"
-                )
-            },
+            {PROFILE: launch, OPENCODE: launch},
             startup_timeout=10.0,
-            resume_profile_factories={PROFILE: resume_profile},
-            composers={"fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER)},
+            resume_profile_factories={PROFILE: resume_profile, OPENCODE: opencode_resume},
+            composers={
+                "fake": ProviderDescriptor(PROFILE, "F", "Fake", composer=_COMPOSER),
+                "opencode": ProviderDescriptor(OPENCODE, "O", "OpenCode", composer=_COMPOSER),
+            },
         )
         self.connection = open_database(tmp_path / "sessions.sqlite3")
         self.store = SQLiteSessionStore(self.connection)
@@ -128,20 +142,20 @@ class Rig:
         self.notices: list[tuple[tuple[ResumeReport, ...], int]] = []
         self.passes = 0
 
-    async def launched(self, sequence: int) -> SessionRecord:
+    async def launched(self, sequence: int, profile: ProfileId = PROFILE) -> SessionRecord:
         """A fake-agent session launched on the real server, then reconciled to RUNNING."""
         session_id = SessionId.new()
         await self.store.save(
             SessionRecord(
                 session_id,
                 PROJECT,
-                PROFILE,
-                SessionDisplayIdentity(str(PROJECT), str(PROFILE), "regular", sequence),
+                profile,
+                SessionDisplayIdentity(str(PROJECT), str(profile), "regular", sequence),
                 SessionState.STARTING,
                 datetime.now(UTC),
             )
         )
-        assert (await self.terminal.launch(session_id, PROJECT, PROFILE)).live
+        assert (await self.terminal.launch(session_id, PROJECT, profile)).live
         await ReconciliationService(self.store, settle_after=timedelta(0)).reconcile(
             await self.terminal.managed_observations()
         )
@@ -159,7 +173,10 @@ class Rig:
             return self.switch
 
         async def capabilities() -> tuple[ProfileResumeCapability, ...]:
-            return (ProfileResumeCapability(PROFILE, True, True),)
+            return (
+                ProfileResumeCapability(PROFILE, True, True),
+                ProfileResumeCapability(OPENCODE, True, True),
+            )
 
         async def notify(reports: tuple[ResumeReport, ...], unchecked: int) -> None:
             self.notices.append((reports, unchecked))
@@ -339,3 +356,20 @@ async def test_with_the_switch_off_a_killed_server_brings_nothing_back(rig: Rig)
     assert rig.notices == [] and rig.passes == 0
     assert await rig.outcomes.outcomes() == {}
     assert await rig.terminal.server_started_at() is None, "nothing was launched"
+
+
+async def test_a_killed_server_resumes_an_opencode_session_by_its_own_id(rig: Rig) -> None:
+    """The mark the OpenCode plugin leaves on `session.idle` brings the session back with
+    `opencode --session <id>` (BL-134): it is not skipped as `no-conversation`."""
+    lost = await rig.launched(1, profile=OPENCODE)
+    rig.marks.record(str(lost.session_id), "ses_01e2eOPENCODE")
+    await rig.kill_server()
+
+    await rig.serve(until=lambda: bool(rig.notices))
+
+    ((reports, _unchecked),) = rig.notices
+    (report,) = reports
+    assert report.outcome.startswith("resumed:"), report
+    (resumed,) = await rig.running()
+    assert resumed.profile_id == OPENCODE
+    assert '"--session", "ses_01e2eOPENCODE"' in rig.intent(resumed.session_id)

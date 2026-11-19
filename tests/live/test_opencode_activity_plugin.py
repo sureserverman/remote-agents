@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +44,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.registry import install_agent_hooks, remove_agent_hooks
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import ActivityKind, AskClass, ask_class
@@ -71,7 +73,14 @@ _APPROVAL_TURN = (
 #: `AI_APICallError: The usage limit has been reached`.
 _BLOCKED_LOG = {
     "quota or billing": ("usage limit", "rate limit", "billing", "credits", "quota exceeded"),
-    "authentication": ("unauthorized", "invalid api key", "not authenticated"),
+    # `token refresh failed`: an expired OAuth login whose refresh is refused, which OpenCode
+    # 1.19.3 prints on stderr only (`Error: Token refresh failed: 401`, 2026-11-19).
+    "authentication": (
+        "unauthorized",
+        "invalid api key",
+        "not authenticated",
+        "token refresh failed",
+    ),
     "network": ("econnrefused", "connection refused", "enotfound"),
 }
 
@@ -135,13 +144,17 @@ def _requirements(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     return workspace, spool, environment
 
 
-def _blocked_reason(environment: dict[str, str]) -> str | None:
-    """Classify an unavailable model from OpenCode's own log, or `None` if it says nothing."""
+def _blocked_reason(environment: dict[str, str], stderr: str = "") -> str | None:
+    """Classify an unavailable model from OpenCode's own log and its stderr, or `None`.
+
+    Both: a refused login is printed on stderr and never logged (opencode 1.19.3).
+    """
     log = Path(environment["XDG_DATA_HOME"]) / "opencode" / "log" / "opencode.log"
     try:
         text = log.read_text(encoding="utf-8", errors="replace").lower()
     except OSError:
-        return None
+        text = ""
+    text += "\n" + stderr.lower()
     return next(
         (name for name, markers in _BLOCKED_LOG.items() if any(m in text for m in markers)),
         None,
@@ -163,10 +176,16 @@ def _refuse_to_blame_the_environment_for_our_own_file(environment: dict[str, str
     )
 
 
+#: A model for the drill's turn, as `provider/model`, when the default one cannot answer: set
+#: on 2026-11-19 to an ollama-cloud model because the OpenAI login had expired (owner, OD-5).
+_MODEL_VARIABLE = "REMOTE_AGENTS_OPENCODE_DRILL_MODEL"
+
+
 def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TURN) -> None:
+    model = environment.get(_MODEL_VARIABLE)
     try:
         completed = subprocess.run(
-            ["opencode", "run", turn],
+            ["opencode", "run", *(("--model", model) if model else ()), turn],
             check=False,
             capture_output=True,
             text=True,
@@ -199,7 +218,7 @@ def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TUR
         # the failure mode this whole classifier exists to prevent, pointed the other way. A
         # close-out evaluator found it.
         return
-    reason = _blocked_reason(environment)
+    reason = _blocked_reason(environment, completed.stderr or "")
     if reason is not None:
         pytest.skip(f"BLOCKED: OpenCode {reason} is unavailable for the live drill")
     raise AssertionError(completed.stderr or f"`opencode run` exited {completed.returncode}")
@@ -224,6 +243,41 @@ def test_a_managed_opencode_turn_spools_its_own_completion(tmp_path: Path) -> No
     # the agent's words -- a property of the event, not a parser waiting to be widened. A detail
     # arriving here would mean the spool had started reading something nobody licensed.
     assert all(one.detail is None for one in activities)
+
+
+def _opencode_session_ids(data_home: Path) -> set[str]:
+    """The session ids OpenCode itself recorded in the disposable data home, read-only.
+
+    OpenCode 1.19.3 keeps sessions in `opencode.db`'s `session` table (measured 2026-11-19).
+    """
+    database = data_home / "opencode" / "opencode.db"
+    connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+    try:
+        return {row[0] for row in connection.execute("SELECT id FROM session")}
+    finally:
+        connection.close()
+
+
+@pytest.mark.live_profile
+def test_a_managed_opencode_turn_marks_opencodes_own_conversation(tmp_path: Path) -> None:
+    """`session.idle` names OpenCode's own session, the id `opencode --session` resumes (BL-134).
+
+    One short turn (owner, 2026-11-18, OD-4). The mark must hold an id OpenCode itself wrote
+    under the disposable data home, and no spooled record may carry it.
+    """
+    workspace, spool, environment = _requirements(tmp_path)
+    session_id = SessionId.new()
+
+    _run_opencode(workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)})
+
+    mark = FileConversationMarks(spool).latest(str(session_id))
+    assert mark is not None and mark.startswith("ses_"), mark
+    assert mark in _opencode_session_ids(Path(environment["XDG_DATA_HOME"])), (
+        f"{mark} is not a session in the disposable OpenCode database"
+    )
+    records = [path.read_text(encoding="utf-8") for path in spool.glob("*.json")]
+    assert records, "the turn spooled no record"
+    assert not any(mark in text for text in records)
 
 
 @pytest.mark.live_profile
