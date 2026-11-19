@@ -296,6 +296,9 @@ def build_resume_profile(
         # A resumed agent never reprints the banner in _READINESS_MARKERS, so requiring one
         # here marked every resumed session failed once its startup window elapsed, while
         # its pane carried on working. Blockers still apply: those are drawn on resume too.
+        # The started mark (`SessionStart` also fires on resume) could tell a resume that hangs
+        # from one that is live. The owner closed BL-142 on 2026-11-18: no hung resume has been
+        # seen, and such a check must never fail a working resume on a host with old hooks.
         None,
         definition.graceful_keys,
         _PRE_TRUST_SCREENS.get(str(definition.profile_id), ()),

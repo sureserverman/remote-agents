@@ -241,7 +241,8 @@ class LaunchProfile:
     a restored conversation into the alternate screen buffer instead, so the banner is in
     neither the viewport nor the scrollback and no marker can ever match. Those profiles
     pass None and are judged by the pane, which is honest evidence here: an agent that
-    fails to start exits, and an exited agent leaves a dead pane.
+    fails to start exits, and an exited agent leaves a dead pane. Why a resume gets no
+    started-mark check either is said where the rule lives, in `build_resume_profile`.
     """
     graceful_keys: tuple[str, ...] = ("C-c",)
     readiness_blockers: tuple[str, ...] = ()
