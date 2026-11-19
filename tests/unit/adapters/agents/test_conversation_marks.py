@@ -17,10 +17,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from remote_agents.adapters.agents import turn_markers
 from remote_agents.adapters.agents.activity_spool import (
     MAXIMUM_PAYLOAD_BYTES,
     SESSION_ID_VARIABLE,
@@ -200,3 +202,78 @@ def test_an_abandoned_temporary_is_collected_and_a_fresh_one_is_left(tmp_path: P
     assert marks.sessions() == (_SESSION,)
     assert not old.exists()
     assert fresh.exists()
+
+
+def _fsyncs(monkeypatch) -> list[int]:
+    calls: list[int] = []
+    real = turn_markers.os.fsync
+
+    def counted(descriptor: int) -> None:
+        calls.append(descriptor)
+        real(descriptor)
+
+    monkeypatch.setattr(turn_markers.os, "fsync", counted)
+    return calls
+
+
+def test_recording_the_conversation_a_mark_already_holds_touches_nothing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Every turn's start records its conversation; the same id again is a no-op (BL-138)."""
+    directory = _spool(tmp_path)
+    marks = FileConversationMarks(directory)
+    marks.record(_SESSION, _PARENT)
+    target = directory / "conversations" / _SESSION
+    an_hour_ago = datetime.now(UTC).timestamp() - 3600
+    os.utime(target, (an_hour_ago, an_hour_ago))
+    before = os.lstat(target)
+    created: list[str] = []
+    real_open = turn_markers.os.open
+
+    def watched(path, *args, **kwargs):
+        created.append(os.path.basename(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(turn_markers.os, "open", watched)
+    fsyncs = _fsyncs(monkeypatch)
+
+    marks.record(_SESSION, _PARENT)
+
+    after = os.lstat(target)
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert not [name for name in created if name.startswith(".pending-")]
+    assert fsyncs == []
+
+
+def test_recording_a_different_conversation_replaces_the_mark(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    marks = FileConversationMarks(directory)
+    marks.record(_SESSION, _PARENT)
+    before = os.lstat(directory / "conversations" / _SESSION)
+
+    marks.record(_SESSION, _CHILD)
+
+    assert os.lstat(directory / "conversations" / _SESSION).st_ino != before.st_ino
+    assert marks.latest(_SESSION) == _CHILD
+
+
+def test_a_mark_that_cannot_be_read_as_this_id_is_written_as_before(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    marks = FileConversationMarks(directory)
+    target = directory / "conversations" / _SESSION
+    marks.record("ra-other", _CHILD)
+
+    target.write_text("has space\n")
+    marks.record(_SESSION, _PARENT)
+    assert marks.latest(_SESSION) == _PARENT
+
+    target.unlink()
+    os.mkfifo(target, 0o600)
+    marks.record(_SESSION, _PARENT)
+    assert marks.latest(_SESSION) == _PARENT
+
+    target.unlink()
+    target.write_text(_PARENT)
+    target.chmod(0o644)
+    marks.record(_SESSION, _PARENT)
+    assert stat.S_IMODE(os.lstat(target).st_mode) == 0o600

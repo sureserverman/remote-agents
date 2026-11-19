@@ -182,6 +182,10 @@ class FileConversationMarks:
         directory = open_private_directory(self._directory)
         if directory is None:
             return
+        # Every turn's start records its conversation, and it is usually the one already
+        # marked: no temporary, no fsync, no rename then (BL-138).
+        if _holds(directory / name, conversation):
+            return
         temporary = directory / f".pending-{os.urandom(6).hex()}"
         try:
             descriptor = os.open(temporary, _CREATE | os.O_EXCL, 0o600)
@@ -299,6 +303,26 @@ def _owner_of(descriptor: int) -> str | None:
         return safe_session_id(os.pread(descriptor, _OWNER_BYTES, 0).decode("ascii"))
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _holds(path: Path, conversation: str) -> bool:
+    """True only when `path` is this user's private regular file holding exactly `conversation`.
+
+    Anything else -- absent, a link, another mode or owner, other bytes -- is rewritten.
+    """
+    try:
+        descriptor = os.open(path, _READ)
+    except OSError:
+        return False
+    try:
+        status = os.fstat(descriptor)
+        if status.st_uid != os.geteuid() or stat.S_IMODE(status.st_mode) != 0o600:
+            return False
+        return _owner_of(descriptor) == conversation
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
 
 
 def _is_regular(entry: os.DirEntry[str]) -> bool:
