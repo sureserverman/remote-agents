@@ -586,7 +586,8 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
         config = load_config(paths.config_path)
         connection = open_database(paths.database_path, migrations=MIGRATIONS)
         harness = _compose(config, connection, paths)
-        # A preset that shares the daemon: `approve_for_me` and `ask` run embedded (DEC-071).
+        # The provider's own preset, so no preset is applied after launch. Every managed Codex
+        # shares the daemon since DEC-139 moved presets off its argv; once they ran embedded.
         await _drive(
             harness,
             repo,

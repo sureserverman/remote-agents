@@ -205,7 +205,8 @@ class PromptReason(StrEnum):
     NO_COMPOSER = "no_composer"
     """The agent declares no composer, so nothing can tell its idle screen from a turn."""
     BUSY = "busy"
-    """A turn is running, read from the pane's title or the session's turn marker alone."""
+    """A turn is running, by any reading but the agent's declared running-turn line: its busy
+    patterns on screen, its title, or the session's turn marker."""
     BUSY_ON_SCREEN = "busy_on_screen"
     """A turn is running, read from the line the agent draws only while one runs
     (`ComposerScreen.running_turn`, declared by an agent whose turn can outlive its pane).

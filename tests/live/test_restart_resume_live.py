@@ -462,8 +462,8 @@ async def test_a_lost_server_brings_real_claude_and_codex_back_in_their_own_conv
                     profile,
                     _key(f"restart-{profile}"),
                     "restart-live",
-                    # A preset that shares the daemon: the default, `approve_for_me`, runs embedded
-                    # (DEC-071), so there would be no daemon to count.
+                    # The provider's own preset, so no preset is applied after launch. Every
+                    # managed Codex shares the daemon since DEC-139 moved presets off its argv.
                     permissions=PermissionPreset.PROVIDER_DEFAULT if profile == CODEX else None,
                 )
             )
@@ -605,8 +605,8 @@ async def test_a_codex_turn_that_outlives_the_server_in_its_daemon_is_not_nudged
                 CODEX,
                 _key("restart-daemon"),
                 "restart-live",
-                # Shares the daemon: `approve_for_me` runs embedded (DEC-071), and an embedded turn
-                # dies with its pane.
+                # As the capture ran it (no preset applied after launch). Every managed Codex
+                # shares the daemon (DEC-139), which is where the turn survives.
                 permissions=PermissionPreset.PROVIDER_DEFAULT,
             )
         )

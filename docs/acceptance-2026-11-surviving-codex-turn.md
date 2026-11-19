@@ -100,8 +100,9 @@ run 1 at the first look:
 - Read as declared (gate round 1): Codex's `ComposerScreen.running_turn` matches that line only
   with its timer, `(<n>s • esc to interrupt)`, and never a line headed `Booting MCP server` or
   `Starting MCP servers`. Those two headers are strings in the 0.170.0 binary for its MCP start,
-  which a boot that starts MCP in the pane itself (an embedded session, DEC-071) can draw in the
-  same slot; that shape was not captured here. Only Codex declares the line, so every other
+  which a Codex that starts MCP in its own pane -- one run off the daemon, with a config override
+  on its command line, which no managed session is since DEC-139 -- can draw in the same slot;
+  that shape was not captured here, and the exclusion is a guard. Only Codex declares the line, so every other
   agent's busy stays plain `BUSY`.
 - The residual: a survivor that is streaming text, or between tool calls with no busy line, at
   the first look reads as a boot, is waited out, and is nudged after it ends.
