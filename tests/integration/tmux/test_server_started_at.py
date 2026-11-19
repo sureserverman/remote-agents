@@ -55,7 +55,9 @@ async def test_a_running_server_reports_when_it_started_and_a_killed_one_reports
 async def test_a_read_straight_after_kill_server_never_raises(tmp_path: Path) -> None:
     """BL-136: `kill-server` returns before the server exits, and a read in that moment used to
     get "server exited unexpectedly" (2 in 300 on tmux 3.4). The gateway now waits that out
-    itself, so 100 kill-then-read rounds with no wait here never raise."""
+    itself, so 100 kill-then-read rounds with no wait here never raise. The race is rare, so
+    this meets it only most runs; the fake-runner cases in `test_gateway_console.py` are the
+    deterministic guard."""
     socket = _socket()
     runner = AsyncTmuxRunner()
     gateway = TmuxGateway(socket, runner, intent_directory=tmp_path / "intents")

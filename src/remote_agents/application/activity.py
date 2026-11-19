@@ -338,6 +338,8 @@ def _activity(record: dict) -> AgentActivity | None:
         return None
     kind, confidence = resolved
     detail = bounded_detail_line(record.get("detail"))
+    # The one `_NOTIFICATIONS` entry the agents view raises; a second mapped type needs its own
+    # answer to where it came from, not this one by default.
     if record.get("event") == "Notification" and record.get("reason") == "agent_needs_input":
         detail = _from_the_agents_view(detail)
     return AgentActivity(
