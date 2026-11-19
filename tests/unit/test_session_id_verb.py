@@ -616,3 +616,30 @@ def test_a_recorded_resume_binding_remains_valid_after_its_turn_ends(shell, monk
     FileTurnMarkers(shell).end(mine)
     monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
     assert _run(shell, capsys) == (0, f"{mine}\n")
+
+
+@pytest.mark.parametrize("spoil", ["symlink", "garbage"])
+def test_session_id_command_exits_3_when_the_sessions_own_mark_is_untrusted(
+    shell: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    spoil: str,
+) -> None:
+    """The writer then writes nothing: a broken mark is not "no mark" (BL-143)."""
+    mine = str(SessionId.new())
+    _roster(
+        shell, RosterEntry(mine, str(Path.cwd().resolve()), _MINTED - timedelta(minutes=1), _THREAD)
+    )
+    monkeypatch.setenv("CODEX_THREAD_ID", _THREAD)
+    assert _run(shell, capsys) == (0, f"{mine}\n")
+
+    FileConversationMarks(shell).record("ra-other", _THREAD)
+    mark = shell / "conversations" / mine
+    if spoil == "symlink":
+        (tmp_path / "elsewhere").write_text(_THREAD)
+        mark.symlink_to(tmp_path / "elsewhere")
+    else:
+        mark.write_text("not an id\n")
+        mark.chmod(0o600)
+    assert _run(shell, capsys) == (3, "")

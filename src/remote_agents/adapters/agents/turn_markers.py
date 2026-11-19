@@ -160,6 +160,14 @@ class FileTurnMarkers:
             return False
 
 
+class UntrustedMark(Exception):
+    """A conversation mark exists and cannot be trusted as the session's own (BL-143).
+
+    Raised only by `FileConversationMarks.latest_strict`, for the exact identity path, which
+    must fail closed rather than read a broken mark as no mark.
+    """
+
+
 class FileConversationMarks:
     """`ConversationMarks` as one 0600 file per session in a private directory.
 
@@ -219,6 +227,43 @@ class FileConversationMarks:
             return _owner_of(descriptor)
         finally:
             os.close(descriptor)
+
+    def latest_strict(self, session_id: str) -> str | None:
+        """`latest` for the exact identity path: None only when there is no mark at all.
+
+        A mark that exists and is not this user's private regular file holding an id -- a link,
+        a directory, another owner or mode, other bytes -- raises `UntrustedMark`, as does a
+        conversations directory that is not a real one. The hook path keeps `latest`.
+        """
+        name = safe_session_id(session_id)
+        if name is None:
+            return None
+        try:
+            os.lstat(self._directory)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise UntrustedMark(str(error)) from error
+        if not _is_real_directory(self._directory):
+            raise UntrustedMark("conversations is not a directory")
+        try:
+            descriptor = os.open(self._directory / name, _READ)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise UntrustedMark(str(error)) from error
+        try:
+            status = os.fstat(descriptor)
+            if status.st_uid != os.geteuid() or stat.S_IMODE(status.st_mode) != 0o600:
+                raise UntrustedMark("mark is not this user's private file")
+            owner = _owner_of(descriptor)
+        except OSError as error:
+            raise UntrustedMark(str(error)) from error
+        finally:
+            os.close(descriptor)
+        if owner is None:
+            raise UntrustedMark("mark holds no id")
+        return owner
 
     def sessions(self) -> tuple[str, ...]:
         if not _is_real_directory(self._directory):

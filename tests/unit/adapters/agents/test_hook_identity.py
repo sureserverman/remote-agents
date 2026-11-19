@@ -382,3 +382,59 @@ def test_an_exact_binding_needs_the_activity_directory(tmp_path):
         resolve(_DRILL_THREAD, None, roster, require_exact=True, activity_directory=tmp_path)
         == bound
     )
+
+
+def _plant(target: Path, kind: str, victim: Path) -> None:
+    if kind == "symlink":
+        victim.write_text(_DRILL_THREAD)
+        target.symlink_to(victim)
+    elif kind == "directory":
+        target.mkdir()
+        target.chmod(0o600)
+    elif kind == "foreign mode":
+        target.write_text(_DRILL_THREAD)
+        target.chmod(0o644)
+    else:
+        target.write_bytes(b"\xff not an id \x00")
+        target.chmod(0o600)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "foreign mode", "garbage"])
+def test_the_exact_path_refuses_a_mark_it_cannot_trust(tmp_path: Path, kind: str) -> None:
+    """A mark that exists and cannot be read as this session's own is not "no mark" (BL-143)."""
+    from remote_agents.adapters.agents.turn_markers import FileConversationMarks
+
+    roster = (_entry("managed", tmp_path, datetime(2026, 1, 1, tzinfo=UTC), _DRILL_THREAD),)
+    FileConversationMarks(tmp_path).record("other", _INCIDENT_THREAD)
+
+    def exact() -> str | None:
+        return resolve(_DRILL_THREAD, None, roster, require_exact=True, activity_directory=tmp_path)
+
+    def hook() -> str | None:
+        return resolve(_DRILL_THREAD, str(tmp_path), roster, activity_directory=tmp_path)
+
+    assert exact() == "managed"
+    assert hook() == "managed"
+
+    _plant(tmp_path / "conversations" / "managed", kind, tmp_path / "victim")
+
+    assert exact() is None
+    assert hook() == "managed"
+
+
+@pytest.mark.parametrize("kind", ["absent", "symlink", "file"])
+def test_the_exact_path_reads_the_conversations_directory_strictly(
+    tmp_path: Path, kind: str
+) -> None:
+    """No directory is no mark; a directory that is a link or a file is untrusted."""
+    roster = (_entry("managed", tmp_path, datetime(2026, 1, 1, tzinfo=UTC), _DRILL_THREAD),)
+    directory = tmp_path / "conversations"
+    if kind == "symlink":
+        (tmp_path / "elsewhere").mkdir(mode=0o700)
+        directory.symlink_to(tmp_path / "elsewhere")
+    elif kind == "file":
+        directory.write_text(_DRILL_THREAD)
+
+    answer = resolve(_DRILL_THREAD, None, roster, require_exact=True, activity_directory=tmp_path)
+
+    assert answer == ("managed" if kind == "absent" else None)

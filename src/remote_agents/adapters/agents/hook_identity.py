@@ -131,6 +131,7 @@ def resolve(
         from remote_agents.adapters.agents.turn_markers import (
             FileConversationMarks,
             FileTurnMarkers,
+            UntrustedMark,
         )
 
         try:
@@ -147,7 +148,11 @@ def resolve(
         session_id = next(iter(claimants))
         turns = None if activity_directory is None else FileTurnMarkers(activity_directory)
         marks = None if activity_directory is None else FileConversationMarks(activity_directory)
-        current = None if marks is None else marks.latest(session_id)
+        try:
+            current = None if marks is None else marks.latest_strict(session_id)
+        except UntrustedMark:
+            # A mark that cannot be read is not "no mark": it might name another thread.
+            return None
         owner = None if turns is None else turns.owner(session_id)
         # Marks are vetoes only; they cannot select one of two recorded owners. An ended
         # turn's retained conversation can still agree with the persisted launch binding.
