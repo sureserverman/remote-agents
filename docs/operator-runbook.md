@@ -2212,7 +2212,10 @@ three surface panes report `mouse_any_flag=1`: they want it and will use it.
 *The cost, which is why tmux did not default to it before 3.8:* **native terminal text selection now needs
 Shift held**, and the wheel enters tmux copy-mode in panes that do not request mouse. To undo it
 for a session — `tmux -L remote-agents set -g mouse off`; it returns on the next surface start,
-since `ensure()` is idempotent. Opened as BL-098.
+since `ensure()` is idempotent. Opened as BL-098. Since v0.70.4 the service leaves any mode a pane
+is in (copy-mode from the wheel, or view-mode showing a binding's output) before it types into
+that pane, so a message, a stop or a rollover can drop you out of a scroll-back. Before that, keys
+went to the mode, and a stop's `/exit` hung there and froze the bot until it was killed.
 
 **The console is one window of four panes** — projects left, and on the right sessions, limits,
 then feed — and it shows an agent by **exchanging** that agent's pane into the left slot. The

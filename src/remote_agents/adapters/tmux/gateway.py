@@ -550,6 +550,11 @@ class TmuxGateway:
         # The whole sequence under one hold, so no other sender's keys land between two of
         # these (BL-056).
         async with self._keys_for(session_id):
+            try:
+                # Out of any mode first, or the keys go to the mode (see `deliver_prompt`).
+                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
+            except RuntimeError as error:
+                raise _target_missing_or(error, f"ra-{session_id}") from error
             for index, key in enumerate(keys):
                 try:
                     await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
@@ -590,6 +595,8 @@ class TmuxGateway:
         target = await self._following_target(session_id)
         async with self._keys_for(session_id):
             try:
+                # Out of any mode first, or the keys go to the mode (see `deliver_prompt`).
+                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
                 capture = await self._runner.run(
                     *self._base_argv(), "capture-pane", "-p", "-e", "-t", target
                 )
@@ -643,6 +650,15 @@ class TmuxGateway:
             loading = False
             pasted = False
             try:
+                # Out of any mode before anything is looked at or typed. In copy-mode or
+                # view-mode a key goes to the mode, not the agent: `Enter` is swallowed, and `/`
+                # opens a search prompt that `send-keys` waits on for as long as any client is
+                # attached -- a rollover's `/exit` held the operation lock 3.5 hours that way
+                # (v0.70.3). The wheel enters copy-mode (the console turns `mouse` on), and a
+                # binding whose shell command prints shows it in view-mode. `capture-pane` reads
+                # the screen under the mode, so no look can see it. `-q` leaves every mode and
+                # is a no-op on a pane in none; the owner's scroll position is the cost.
+                await self._runner.run(*self._base_argv(), "copy-mode", "-q", "-t", target)
                 # The title first, then the screen, both inside this hold: Codex draws no busy
                 # line while it streams its answer and marks the turn only in its title.
                 title = await self._runner.run(*self._base_argv(), *pane_title_args(target))
