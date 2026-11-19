@@ -13,10 +13,12 @@ A static asset could not carry it.
 JavaScript** (`docs/acceptance-2026-09-06-opencode-activity.md`, measured against
 `opencode 1.18.16` on 2026-09-06):
 
-  * `session.idle` -> the occurrence, and nothing from the payload. Not even
-    `properties.sessionID`, which is OpenCode's identifier and not one this project has ever
-    heard of; identity comes from `REMOTE_AGENTS_SESSION_ID`, which the same measurement proved
-    visible to plugin code.
+  * `session.idle` -> the occurrence, and `properties.sessionID` when it is a string:
+    OpenCode's own id for its session, sent as `session_id`. It names the conversation a
+    restart resumes with `opencode --session <id>` (BL-134), and the spool keeps it in the
+    conversation mark alone, never in a record. Which managed session the event belongs to
+    still comes from `REMOTE_AGENTS_SESSION_ID`, which the same measurement proved visible to
+    plugin code.
   * `permission.asked` -> `properties.permission` at most, as an **ask class** (DEC-074), never
     as `detail`.
   * Every other event type -> dropped **by name**, before anything is read. The measured stream
@@ -88,7 +90,7 @@ _SOURCE = """// remote-agents activity plugin for OpenCode -- GENERATED FILE, do
 // It reads exactly two of OpenCode's event types and, from those, exactly the fields
 // docs/acceptance-2026-09-06-opencode-activity.md licenses:
 //
-//   session.idle      the occurrence alone -- no payload field at all
+//   session.idle      the occurrence, and properties.sessionID -- OpenCode's own session id
 //   permission.asked  properties.permission, the tool class, and nothing else
 //
 // It never names `patterns`, `metadata`, `always`, `tool` or `id`. Two of those hold the
@@ -108,7 +110,13 @@ const WAIT_MILLISECONDS = %(wait)d;
 function licensed(event) {
   const type = event && event.type;
   if (type === "session.idle") {
-    return { hook_event_name: "session.idle" };
+    // OpenCode's own id for the session that went idle: the handle a restart resumes it by
+    // (`opencode --session <id>`). The spool keeps it in the conversation mark and nowhere else.
+    const properties = event.properties;
+    const session = properties && properties.sessionID;
+    return typeof session === "string"
+      ? { hook_event_name: "session.idle", session_id: session }
+      : { hook_event_name: "session.idle" };
   }
   if (type === "permission.asked") {
     const properties = event.properties;

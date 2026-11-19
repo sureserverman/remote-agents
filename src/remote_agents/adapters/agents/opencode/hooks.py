@@ -100,6 +100,8 @@ HOOK_LICENCE = HookLicence(
     # Its plugin forwards only these two events, and "finished" is `session.idle`, which ends
     # no marker: a marker started here would never end (DEC-104).
     starts_turn_marker=False,
+    # Its `session.idle` names OpenCode's own session, the conversation a restart resumes.
+    conversation_event="session.idle",
     source=ActivitySource.HOOK_EXCLUSIVE,
     # The same limit reasoning as Codex's, for the same reason: nothing in this stream tells a
     # rate limit from an ordinary finish, so neither limit kind is claimed.

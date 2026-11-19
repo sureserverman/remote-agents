@@ -21,6 +21,7 @@ from remote_agents.adapters.agents.activity_spool import (
 from remote_agents.adapters.agents.codex import hooks as codex_hooks
 from remote_agents.adapters.agents.hook_identity import RosterEntry, roster_path, write_roster
 from remote_agents.adapters.agents.hook_licences import hook_licence
+from remote_agents.adapters.agents.turn_markers import FileConversationMarks
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _STOP_PAYLOAD: dict[str, Any] = {
@@ -1456,3 +1457,45 @@ def test_only_a_provider_that_declares_the_event_gets_a_mark(provider: str, tmp_
     assert _run(_stream(_SESSION_START_PAYLOAD), directory, provider=provider) == 0
 
     assert not (directory / "started").exists()
+
+
+_IDLE_PAYLOAD: dict[str, Any] = {"hook_event_name": "session.idle", "session_id": "ses_01ABC"}
+
+
+def test_an_opencode_idle_marks_its_conversation_and_keeps_the_id_out_of_the_record(
+    tmp_path: Path,
+) -> None:
+    """OpenCode's own id is the resume's handle and nothing else (BL-134, DEC-076)."""
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_IDLE_PAYLOAD), directory, provider="opencode") == 0
+
+    assert FileConversationMarks(directory).latest("s-42") == "ses_01ABC"
+    (path,) = _records(directory)
+    assert json.loads(path.read_text())["session_id"] == "s-42"
+    assert "ses_01ABC" not in path.read_text()
+
+
+@pytest.mark.parametrize("value", ["-x", "x" * 200, 7, None, "has space"])
+def test_an_opencode_idle_with_no_usable_id_marks_nothing_and_keeps_its_record(
+    tmp_path: Path, value: object
+) -> None:
+    directory = _spool(tmp_path)
+
+    assert (
+        _run(_stream({**_IDLE_PAYLOAD, "session_id": value}), directory, provider="opencode") == 0
+    )
+
+    assert FileConversationMarks(directory).sessions() == ()
+    assert len(_records(directory)) == 1
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_finished_turn_of_another_provider_marks_no_conversation(
+    provider: str, tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+
+    assert _run(_stream(_STOP_PAYLOAD), directory, provider=provider) == 0
+
+    assert FileConversationMarks(directory).sessions() == ()

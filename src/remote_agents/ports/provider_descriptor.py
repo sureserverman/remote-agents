@@ -257,6 +257,14 @@ class HookLicence:
     that has not re-run the installer (DEC-051).
     """
 
+    conversation_event: str | None = None
+    """The admitted event whose payload `session_id` is the agent's own conversation id, or None.
+
+    OpenCode's alone: its plugin sends no turn start, so a turn-start mark is never written for
+    it, and its `session.idle` carries OpenCode's session id instead (BL-134). The spool writes
+    the conversation mark from it, under `safe_session_id`, and keeps it out of the record.
+    """
+
     started_event: str | None = None
     """The event that means this provider's agent came up, or None for none (DEC-135).
 

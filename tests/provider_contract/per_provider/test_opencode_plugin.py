@@ -141,9 +141,26 @@ def _drive(
     return delivered.read_bytes() if delivered.exists() else None
 
 
-def test_session_idle_delivers_its_occurrence_and_nothing_from_the_payload(tmp_path: Path) -> None:
-    """The event's occurrence is the whole signal — not even OpenCode's own session id."""
-    delivered = _drive(tmp_path, _event("session_idle"))
+def test_session_idle_delivers_its_occurrence_and_opencodes_own_session_id(tmp_path: Path) -> None:
+    """The occurrence, and `properties.sessionID` as `session_id` -- the conversation a restart
+    resumes with `opencode --session` (BL-134). Nothing else from the payload: not its `id`."""
+    event = _event("session_idle")
+    delivered = _drive(tmp_path, event)
+
+    assert delivered is not None
+    assert json.loads(delivered) == {
+        "hook_event_name": "session.idle",
+        "session_id": event["properties"]["sessionID"],
+    }
+    assert event["id"] not in delivered.decode()
+
+
+@pytest.mark.parametrize("properties", [{}, {"sessionID": 7}, None])
+def test_session_idle_sends_no_id_it_cannot_read_as_a_string(
+    tmp_path: Path, properties: dict | None
+) -> None:
+    event = {**_event("session_idle"), "properties": properties}
+    delivered = _drive(tmp_path, event)
 
     assert delivered is not None
     assert json.loads(delivered) == {"hook_event_name": "session.idle"}

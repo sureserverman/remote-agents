@@ -222,6 +222,20 @@ def spool_agent_event(
         if found is not None and found.started_event is not None and event == found.started_event:
             FileStartedMarks(activity_directory).mark(session_id)
             return 0
+        if (
+            found is not None
+            and found.conversation_event is not None
+            and event == found.conversation_event
+        ):
+            # The agent's own conversation id, for the resume after a restart; it goes into the
+            # mark and no record (`_observed` reads only the licence's fields). Guarded on its
+            # own: it never costs the record.
+            try:
+                conversation = safe_session_id(fields.get("session_id"))
+                if conversation is not None:
+                    FileConversationMarks(activity_directory).record(session_id, conversation)
+            except Exception:
+                pass
         observed = _observed(document, session_id, now(), found)
         if observed is not None:
             _write_privately(observed, activity_directory)

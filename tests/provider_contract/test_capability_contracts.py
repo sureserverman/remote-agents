@@ -114,6 +114,12 @@ def test_activity_contract(descriptor) -> None:
         f"{descriptor.profile_id}'s licence admits {sorted(licence.events)} but its hook is "
         f"installed for {sorted(installed)}"
     )
+    # The event that names the conversation is one the licence admits, so its record is
+    # still written; a name it does not admit would mark from an event nobody delivers.
+    assert licence.conversation_event is None or licence.conversation_event in licence.events, (
+        f"{descriptor.profile_id} names its conversation on {licence.conversation_event!r}, "
+        "which its licence does not admit"
+    )
 
 
 def test_thread_permissions_contract(descriptor) -> None:

@@ -816,3 +816,10 @@ def test_a_removal_with_no_config_and_no_plugin_is_still_a_quiet_no_op(tmp_path:
 
     assert not outcome.changed
     assert "no settings file" in outcome.summary
+
+
+def test_the_generated_plugin_reads_opencodes_session_id() -> None:
+    """Driven under node in `tests/provider_contract/per_provider/test_opencode_plugin.py`."""
+    from remote_agents.adapters.agents.opencode.plugin import plugin_source
+
+    assert "properties.sessionID" in plugin_source(["/bin/true"])
