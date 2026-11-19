@@ -638,6 +638,20 @@ async def test_a_ready_for_a_session_of_another_profile_or_state_opens_nothing(r
     assert rig.launches == []
 
 
+async def test_a_ready_stamped_with_a_session_that_is_not_running_opens_nothing(
+    rig: Rig,
+) -> None:
+    """A dead starter's id is bounded here: its `ready` names no session that can hand over."""
+    rig.sessions[rig.predecessor] = _record(rig.predecessor, SessionState.ENDED)
+    rig.ready()
+    await rig.run()
+    del rig.sessions[rig.predecessor]
+    await rig.run()
+
+    assert rig.store._select("1 = 1", ()) == ()
+    assert rig.launches == [] and rig.stops == []
+
+
 async def test_an_unconfirmed_send_is_never_typed_again(rig: Rig) -> None:
     rig.deliveries = [PromptDelivery(PromptOutcome.UNCONFIRMED, PromptReason.SUBMIT_NOT_SEEN)]
     rig.ready()

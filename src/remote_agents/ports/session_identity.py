@@ -53,7 +53,7 @@ the command resolves the session by its own rule, and only then records this roo
 """
 
 
-_SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,127}")
 
 
 def safe_session_id(value: object) -> str | None:
@@ -70,5 +70,8 @@ def safe_session_id(value: object) -> str | None:
 
     Rejecting rather than truncating, because a truncated id would name a different session,
     or no session at all, while looking like an answer.
+
+    An id never begins with `-`: no agent mints one, and one that did would reach
+    `codex resume <id>` as a flag (BL-138).
     """
     return value if isinstance(value, str) and _SAFE_SESSION_ID.fullmatch(value) else None

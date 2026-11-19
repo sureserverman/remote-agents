@@ -49,6 +49,9 @@ class ProviderConversationId:
             or any(not character.isprintable() or character.isspace() for character in self.value)
         ):
             raise ValueError("provider conversation ID must be a bounded visible token")
+        # It ends a resume argv bare, where a leading `-` is read as an option (BL-138).
+        if self.value.startswith("-"):
+            raise ValueError("provider conversation ID must not start with '-'")
 
 
 @dataclass(frozen=True, slots=True)

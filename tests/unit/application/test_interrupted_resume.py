@@ -254,6 +254,23 @@ def test_without_a_mark_the_resume_source_is_the_conversation() -> None:
     assert decision.conversation_id == ProviderConversationId("from-resume")
 
 
+@pytest.mark.parametrize("flag", ["-x", "--help"])
+def test_a_resume_source_that_is_a_flag_is_no_conversation(flag: str) -> None:
+    """It would reach `codex resume <id>` as an option (BL-138 item 5)."""
+    record = _record(resume_source_id=flag)
+
+    (decision,) = plan_resumes(_snapshot(_lost(record), markers=(record,)))
+
+    assert decision.skip is ResumeSkip.NO_CONVERSATION
+    assert decision.conversation_id is None
+
+
+@pytest.mark.parametrize("flag", ["-x", "--help", "-"])
+def test_a_provider_conversation_id_never_starts_with_a_dash(flag: str) -> None:
+    with pytest.raises(ValueError):
+        ProviderConversationId(flag)
+
+
 def test_without_a_mark_or_a_resume_source_the_session_is_skipped() -> None:
     record = _record()
 
