@@ -75,6 +75,7 @@ import asyncio
 import os
 import shlex
 import sqlite3
+import stat
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -114,7 +115,7 @@ from remote_agents.adapters.agents.hook_settings import (
     read_settings_document,
 )
 from remote_agents.adapters.agents.opencode.hooks import PROVIDER as _OPENCODE
-from remote_agents.adapters.agents.opencode.plugin import rendered_by_this_build
+from remote_agents.adapters.agents.opencode.plugin import PLUGIN_MARKER, rendered_by_this_build
 from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import closed_profiles
@@ -865,23 +866,51 @@ def claude_status_line_hop_installed(settings_path: Path) -> bool:
     return _holds_our_status_line(read_settings_document(settings_path))
 
 
-def opencode_plugin_current(settings_path: Path) -> bool | None:
-    """Whether the OpenCode plugin beside this settings file is the one this build generates.
+#: The generated plugin is a few KB; a file past this is not one this project rendered.
+_PLUGIN_READ_LIMIT = 65_536
 
-    None when none is installed, which `doctor` reports as nothing. A plugin another build
-    wrote -- v0.70's sends no session id, so its sessions never come back after a restart
-    (BL-134) -- or a file that is a link or cannot be read answers False.
+
+def opencode_plugin_state(settings_path: Path) -> str | None:
+    """Whether the OpenCode plugin beside this settings file is this build's, for `doctor`.
+
+    `"current"`; `"out_of_date"` -- ours by the installer's own test (a regular file that begins
+    with the generated-file marker) but another build's text, which `install-agent-hooks`
+    replaces: v0.70's sends no session id, so its sessions never come back after a restart
+    (BL-134); `"not_ours"` -- a link, a pipe, any non-regular file, an unreadable one, or one
+    without the marker, which the installer refuses to overwrite; None when nothing is there.
+
+    Read as the turn markers are: without following a link, without blocking on a pipe, a
+    regular file only, and bounded, so no file at this path can hang or exhaust `doctor`.
     """
     path = _plugin_path(settings_path, _OPENCODE)
     try:
-        if os.path.islink(path):
-            return False
-        text = path.read_text(encoding="utf-8")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
-    except (OSError, UnicodeDecodeError):
-        return False
-    return rendered_by_this_build(text)
+    except OSError:
+        return "not_ours"
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return "not_ours"
+        data = b""
+        while len(data) <= _PLUGIN_READ_LIMIT:
+            chunk = os.read(descriptor, _PLUGIN_READ_LIMIT + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        return "not_ours"
+    finally:
+        os.close(descriptor)
+    if not data.startswith(PLUGIN_MARKER.encode("utf-8")):
+        return "not_ours"
+    if len(data) > _PLUGIN_READ_LIMIT:
+        return "out_of_date"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "out_of_date"
+    return "current" if rendered_by_this_build(text) else "out_of_date"
 
 
 def default_settings_path(

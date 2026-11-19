@@ -21,12 +21,12 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.opencode.plugin import PLUGIN_RELATIVE_PATH
+from remote_agents.adapters.agents.opencode.plugin import PLUGIN_MARKER, PLUGIN_RELATIVE_PATH
 from remote_agents.adapters.agents.registry import (
     HookInstallError,
     default_settings_path,
     install_agent_hooks,
-    opencode_plugin_current,
+    opencode_plugin_state,
     remove_agent_hooks,
 )
 from remote_agents.bootstrap import main
@@ -830,35 +830,83 @@ _V0_70_PLUGIN = Path(__file__).parents[4] / "fixtures" / "opencode" / "activity-
 """The plugin v0.70.3 generated, rendered by that release itself: it sends no session id."""
 
 
+def _planted(settings: Path) -> Path:
+    plugin = _plugin_path(settings)
+    plugin.parent.mkdir(parents=True, exist_ok=True)
+    return plugin
+
+
 def test_a_plugin_this_build_installed_reads_current(tmp_path: Path) -> None:
     settings = _config(tmp_path)
     install_agent_hooks(settings, executable=Path("/old/python"), provider="opencode")
 
-    assert opencode_plugin_current(settings) is True
+    assert opencode_plugin_state(settings) == "current"
 
 
 def test_the_plugin_v0_70_installed_reads_out_of_date(tmp_path: Path) -> None:
     """A host that upgraded without `install-agent-hooks` keeps it, and its sessions are
     skipped as `no-conversation` at every restart (BL-134)."""
     settings = _config(tmp_path)
-    plugin = _plugin_path(settings)
-    plugin.parent.mkdir(parents=True)
-    plugin.write_text(_V0_70_PLUGIN.read_text(encoding="utf-8"), encoding="utf-8")
+    _planted(settings).write_text(_V0_70_PLUGIN.read_text(encoding="utf-8"), encoding="utf-8")
 
-    assert opencode_plugin_current(settings) is False
+    assert opencode_plugin_state(settings) == "out_of_date"
 
 
 def test_no_installed_plugin_reads_as_none(tmp_path: Path) -> None:
-    assert opencode_plugin_current(_config(tmp_path)) is None
+    assert opencode_plugin_state(_config(tmp_path)) is None
 
 
-@pytest.mark.parametrize("text", ["", "not a plugin", "const COMMAND = [nope];\n"])
-def test_a_plugin_file_this_installer_did_not_render_reads_out_of_date(
-    tmp_path: Path, text: str
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "",
+        "const COMMAND = [nope];\n",
+        # Deep enough that `json.loads` raises RecursionError, not ValueError.
+        "const COMMAND = " + "[" * 100_000 + "]" * 100_000 + ";\n",
+        "x" * 200_000,
+    ],
+)
+def test_a_marked_file_this_build_did_not_render_reads_out_of_date(
+    tmp_path: Path, tail: str
 ) -> None:
+    """Ours by its marker, so `install-agent-hooks` replaces it; never a crash."""
     settings = _config(tmp_path)
-    plugin = _plugin_path(settings)
-    plugin.parent.mkdir(parents=True)
-    plugin.write_text(text, encoding="utf-8")
+    _planted(settings).write_text(f"{PLUGIN_MARKER}\n{tail}", encoding="utf-8")
 
-    assert opencode_plugin_current(settings) is False
+    assert opencode_plugin_state(settings) == "out_of_date"
+
+
+@pytest.mark.parametrize("text", ["", "not a plugin", "// someone else's plugin\n"])
+def test_a_file_without_the_marker_reads_not_ours(tmp_path: Path, text: str) -> None:
+    """The installer refuses to overwrite it, so `doctor` must not tell the owner to run it."""
+    settings = _config(tmp_path)
+    _planted(settings).write_text(text, encoding="utf-8")
+
+    assert opencode_plugin_state(settings) == "not_ours"
+
+
+def test_a_link_at_the_plugin_path_reads_not_ours(tmp_path: Path) -> None:
+    settings = _config(tmp_path)
+    target = tmp_path / "elsewhere.mjs"
+    target.write_text(_V0_70_PLUGIN.read_text(encoding="utf-8"), encoding="utf-8")
+    _planted(settings).symlink_to(target)
+
+    assert opencode_plugin_state(settings) == "not_ours"
+
+
+def test_a_fifo_at_the_plugin_path_reads_not_ours_without_blocking(tmp_path: Path) -> None:
+    """Opened without blocking: a pipe with no writer would otherwise hang `doctor`."""
+    import threading
+
+    settings = _config(tmp_path)
+    os.mkfifo(_planted(settings), 0o600)
+    answer: list[str | None] = []
+    reader = threading.Thread(target=lambda: answer.append(opencode_plugin_state(settings)))
+    reader.start()
+    reader.join(timeout=5.0)
+
+    if reader.is_alive():
+        os.close(os.open(_plugin_path(settings), os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(timeout=5.0)
+        pytest.fail("reading a plugin path that is a pipe blocked until a writer came")
+    assert answer == ["not_ours"]

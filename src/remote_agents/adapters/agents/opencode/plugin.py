@@ -13,8 +13,11 @@ A static asset could not carry it.
 JavaScript** (`docs/acceptance-2026-09-06-opencode-activity.md`, measured against
 `opencode 1.18.16` on 2026-09-06):
 
-  * `session.idle` -> the occurrence, and `properties.sessionID` when it is a string:
-    OpenCode's own id for its session, sent as `session_id`. It names the conversation a
+  * `session.created` / `session.updated` -> `properties.info.id` and `info.parentID`, read
+    only to remember which sessions are sub-agents'; nothing is delivered for them.
+  * `session.idle` -> nothing for a sub-agent's session: it is not the managed session
+    finishing. Otherwise the occurrence, and `properties.sessionID` when it has the spool's id
+    shape: OpenCode's own id for its session, sent as `session_id`. It names the conversation a
     restart resumes with `opencode --session <id>` (BL-134), and the spool keeps it in the
     conversation mark alone, never in a record. Which managed session the event belongs to
     still comes from `REMOTE_AGENTS_SESSION_ID`, which the same measurement proved visible to
@@ -91,7 +94,10 @@ _SOURCE = """// remote-agents activity plugin for OpenCode -- GENERATED FILE, do
 // It reads exactly two of OpenCode's event types and, from those, exactly the fields
 // docs/acceptance-2026-09-06-opencode-activity.md licenses:
 //
-//   session.idle      the occurrence, and properties.sessionID -- OpenCode's own session id
+//   session.idle      the occurrence, and properties.sessionID -- OpenCode's own session id;
+//                     nothing at all for a sub-agent's session
+//   session.created,  properties.info.id and .parentID, only to know a sub-agent's session;
+//   session.updated   nothing is delivered
 //   permission.asked  properties.permission, the tool class, and nothing else
 //
 // It never names `patterns`, `metadata`, `always`, `tool` or `id`. Two of those hold the
@@ -108,14 +114,31 @@ const COMMAND = %(command)s;
 const SESSION_VARIABLE = "REMOTE_AGENTS_SESSION_ID";
 const WAIT_MILLISECONDS = %(wait)d;
 
+// The shape the spool accepts as an id (`safe_session_id`). Anything else is dropped here, so a
+// malformed id costs the mark and never the finished record.
+const SESSION_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,127}$/;
+
+// Sub-agent sessions, by id. OpenCode announces each with `info.parentID`; their idle is not
+// the managed session finishing, and their id is not the conversation a restart resumes.
+const children = new Set();
+
 function licensed(event) {
   const type = event && event.type;
+  if (type === "session.created" || type === "session.updated") {
+    // Only `info.id` and `info.parentID` are read, to know a child; nothing is delivered.
+    const info = event.properties && event.properties.info;
+    if (info && typeof info.id === "string" && typeof info.parentID === "string") {
+      children.add(info.id);
+    }
+    return null;
+  }
   if (type === "session.idle") {
     // OpenCode's own id for the session that went idle: the handle a restart resumes it by
     // (`opencode --session <id>`). The spool keeps it in the conversation mark and nowhere else.
     const properties = event.properties;
     const session = properties && properties.sessionID;
-    return typeof session === "string"
+    if (typeof session === "string" && children.has(session)) return null;
+    return typeof session === "string" && SESSION_TOKEN.test(session)
       ? { hook_event_name: "session.idle", session_id: session }
       : { hook_event_name: "session.idle" };
   }
@@ -234,7 +257,8 @@ def rendered_by_this_build(text: str) -> bool:
         return False
     try:
         command = json.loads(found.group(1))
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: a deeply nested array, which `json.loads` does not report as ValueError.
         return False
     if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
         return False

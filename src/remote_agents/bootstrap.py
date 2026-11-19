@@ -21,7 +21,7 @@ from remote_agents.adapters.agents.registry import (
     claude_status_line_hop_installed,
     default_settings_path,
     install_agent_hooks,
-    opencode_plugin_current,
+    opencode_plugin_state,
     profiles_bound_by_thread,
     remove_agent_hooks,
 )
@@ -1030,19 +1030,30 @@ def _claude_limits_state(paths: ProductionPaths) -> str:
     return "status-line hop not installed (run remote-agents install-agent-hooks --provider claude)"
 
 
+_OPENCODE_PLUGIN_LINES = {
+    "current": "OpenCode plugin current",
+    "out_of_date": "OpenCode plugin out of date (run remote-agents install-agent-hooks)",
+    "not_ours": (
+        "OpenCode plugin path holds something the installer did not write"
+        " (move it aside, then run remote-agents install-agent-hooks)"
+    ),
+}
+
+
 def _opencode_plugin_state(paths: ProductionPaths) -> str | None:
     """Whether the installed OpenCode plugin is this build's; None when none is installed.
 
-    Asked through the installer's own path rule (`opencode_plugin_current`). The stale sentence
-    names the command that fixes it, because a host that upgraded without it keeps a plugin
-    whose sessions a restart skips as `no-conversation` (BL-134).
+    Asked through the installer's own path rule and ownership test (`opencode_plugin_state`), so
+    the advice is a command the installer will carry out: a stale plugin of ours is replaced by
+    `install-agent-hooks`, while anything else at that path is refused until it is moved aside.
+    A probe that fails costs this line and never the report.
     """
-    current = opencode_plugin_current(default_settings_path(paths.home, provider="opencode"))
-    if current is None:
-        return None
-    if current:
-        return "OpenCode plugin current"
-    return "OpenCode plugin out of date (run remote-agents install-agent-hooks)"
+    try:
+        state = opencode_plugin_state(default_settings_path(paths.home, provider="opencode"))
+    except Exception:
+        _LOG.exception("could not read the installed OpenCode plugin")
+        return "OpenCode plugin could not be read"
+    return None if state is None else _OPENCODE_PLUGIN_LINES[state]
 
 
 def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:

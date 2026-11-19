@@ -54,11 +54,14 @@ _PLUGIN_INPUT = """{{
 _HARNESS = """
 import * as plugin from "./{module}";
 
-const event = JSON.parse(process.argv[2]);
+// One event, or a list of them delivered in order to the same plugin instance.
+const given = JSON.parse(process.argv[2]);
+const events = Array.isArray(given) ? given : [given];
 for (const exported of Object.values(plugin)) {{
   if (typeof exported !== "function") continue;
   const hooks = await exported({input});
-  if (hooks && typeof hooks.event === "function") await hooks.event({{ event }});
+  if (!hooks || typeof hooks.event !== "function") continue;
+  for (const event of events) await hooks.event({{ event }});
 }}
 """
 
@@ -89,7 +92,12 @@ def _event(name: str) -> dict:
 
 
 def _run(
-    tmp_path: Path, event: dict, command: list[str], *, session_id: str | None, timeout: float
+    tmp_path: Path,
+    event: dict | list[dict],
+    command: list[str],
+    *,
+    session_id: str | None,
+    timeout: float,
 ) -> float:
     """Render the plugin around `command`, drive one event through node, return the elapsed."""
     node = _node()
@@ -115,7 +123,7 @@ def _run(
 
 
 def _drive(
-    tmp_path: Path, event: dict, *, session_id: str | None = "sess-opencode"
+    tmp_path: Path, event: dict | list[dict], *, session_id: str | None = "sess-opencode"
 ) -> bytes | None:
     """Run the generated plugin under node against one event; return what it delivered."""
     delivered = tmp_path / "delivered.json"
@@ -161,6 +169,62 @@ def test_session_idle_sends_no_id_it_cannot_read_as_a_string(
 ) -> None:
     event = {**_event("session_idle"), "properties": properties}
     delivered = _drive(tmp_path, event)
+
+    assert delivered is not None
+    assert json.loads(delivered) == {"hook_event_name": "session.idle"}
+
+
+def _child(kind: str = "session.created") -> dict:
+    """A sub-agent's session as OpenCode announces it: `info.parentID` names its parent."""
+    return {
+        "type": kind,
+        "properties": {
+            "info": {
+                "id": "ses_child00000000000000000000",
+                "parentID": "ses_parent0000000000000000000",
+                "title": "a secret task title",
+                "directory": "/home/owner/secret-project",
+            }
+        },
+    }
+
+
+def _idle(session: str) -> dict:
+    return {"type": "session.idle", "properties": {"sessionID": session}}
+
+
+@pytest.mark.parametrize("kind", ["session.created", "session.updated"])
+def test_a_child_sessions_idle_delivers_nothing(tmp_path: Path, kind: str) -> None:
+    """A sub-agent finishing is not the managed session finishing, and its id is not the
+    conversation a restart resumes (Stage 2 gate review)."""
+    events = [_child(kind), _idle("ses_child00000000000000000000")]
+
+    assert _drive(tmp_path, events) is None
+
+
+def test_the_parents_idle_after_its_childs_is_still_delivered(tmp_path: Path) -> None:
+    events = [
+        _child(),
+        _idle("ses_child00000000000000000000"),
+        _idle("ses_parent0000000000000000000"),
+    ]
+    delivered = _drive(tmp_path, events)
+
+    assert delivered is not None
+    assert json.loads(delivered) == {
+        "hook_event_name": "session.idle",
+        "session_id": "ses_parent0000000000000000000",
+    }
+    for secret in ("secret task title", "secret-project", "ses_child"):
+        assert secret not in delivered.decode()
+
+
+@pytest.mark.parametrize("session", ["-x", "x" * 200, "has space", "a/b"])
+def test_session_idle_with_an_id_that_is_no_token_still_delivers_its_occurrence(
+    tmp_path: Path, session: str
+) -> None:
+    """The id is dropped, never the finished record (it would overflow the spool's bound)."""
+    delivered = _drive(tmp_path, _idle(session))
 
     assert delivered is not None
     assert json.loads(delivered) == {"hook_event_name": "session.idle"}

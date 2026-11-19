@@ -963,21 +963,23 @@ this. The terminal never does.
   and compare them with `ls ~/.local/state/remote-agents/activity/conversations/`. A row with a
   file there will come back. Force stop any you do not want.
 - **What comes back.** Each interrupted session is resumed with `--resume <id>` /
-  `resume <id>` / `--session <id>` of its last conversation, in its worktree if it had one, labelled *resumed after
-  restart*. The conversation is the agent's own id, which the hook writes at each turn's start to
-  `~/.local/state/remote-agents/activity/conversations/<session>`. With no such mark, the
-  session's `resume_source_id` is used. OpenCode has no turn-start hook: its plugin writes the
-  mark when a turn ends, from OpenCode's own session id. That needs the plugin from v0.71.0, so
-  run `remote-agents install-agent-hooks` after upgrading; until then `doctor` prints
-  `OpenCode plugin out of date`. Sessions that were in the middle of a turn are then sent
+  `resume <id>` / `--session <id>` of its last conversation, in its worktree if it had one,
+  labelled *resumed after restart*. The conversation is the agent's own id, which the hook writes
+  at each turn's start to `~/.local/state/remote-agents/activity/conversations/<session>`. With
+  no such mark, the session's `resume_source_id` is used. OpenCode has no turn-start hook: its
+  plugin writes the mark when a turn ends, from OpenCode's own session id; a sub-agent's session
+  is never marked. That needs the plugin from v0.71.0, so run `remote-agents install-agent-hooks`
+  after upgrading; until then `doctor` prints `OpenCode plugin out of date`. Sessions that were
+  in the middle of a turn are then sent
   the same one-line nudge as a session resumed after a usage limit. Idle ones are resumed and
   left alone.
   **One known gap (BL-137).** If tmux alone crashes while a Codex turn runs, the turn goes on
   in Codex's daemon. A `serve` that starts before it ends waits it out, then types the nudge into
   a turn that already finished, which starts one more. A reboot ends the daemon too, so it is not
   affected.
-  **The stale marker (BL-138).** An interrupt, a `/clear`, or a submit made before a stale marker
-  ends can leave the older conversation marked. That one is resumed and nudged.
+  **The stale marker (BL-138).** A turn's marker names the conversation that started the turn.
+  If you interrupt a turn, run `/clear`, or submit a new prompt before the old turn's marker has
+  ended, the older conversation can stay marked. A restart then resumes and nudges that one.
 - **What is skipped, and why.** Each skip is listed in the notice:
   - `not-resumable`: Cursor has no resume.
   - `no-conversation`: no mark and no `resume_source_id`. For example, an OpenCode session that
