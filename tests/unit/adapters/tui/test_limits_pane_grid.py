@@ -49,6 +49,7 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
+from remote_agents.adapters.tui import rows as rows_module
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.rows import (
@@ -1160,6 +1161,40 @@ def test_the_wide_week_bar_never_cuts_a_name_the_plain_bar_leaves_whole(width: i
     assert lines[3].startswith("cursor-agent  "), f"at {width}: {lines[3]!r}"
     weeks = {len(_TICKED_GAUGE.findall(line)[1]) for line in lines[1:]}
     assert weeks == {16 if width >= 74 else 8}, f"at {width}: {lines}"
+
+
+_LONG_NAME = "a-very-long-profile-name"
+
+
+def _long_name_rows() -> tuple[LimitRow, ...]:
+    """Claude and Codex beside a name longer than any agent's today (BL-139)."""
+    claude, codex, cursor = _live_rows()
+    return (claude, codex, replace(cursor, profile=_LONG_NAME))
+
+
+def _name_cell(lines: list[str]) -> str:
+    """The long row's name as drawn: its first cell, ellipsised or whole."""
+    (line,) = [line for line in lines if line.startswith(_LONG_NAME[:2])]
+    return line.split("  ")[0].strip()
+
+
+@pytest.mark.parametrize("width", range(60, 101))
+def test_the_wide_week_bar_never_cuts_a_long_name_harder_than_the_plain_bar(
+    width: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """BL-139: the 16-cell bar used to win wherever the 8-cell table did not fit whole, so a
+    name longer than any agent's lost eight more cells to it. Compared against the same rows
+    with the doubling switched off: the chosen table shows the name at least as fully, and it
+    stacks no earlier."""
+    chosen = [c.plain for c in limit_rows_content(_long_name_rows(), width)]
+    monkeypatch.setattr(rows_module, "_WIDE_PANE", 10**6)
+    plain = [c.plain for c in limit_rows_content(_long_name_rows(), width)]
+
+    if "vs pace" in plain[0]:
+        assert "vs pace" in chosen[0], f"at {width} the chosen table stacks:\n" + "\n".join(chosen)
+    if _name_cell(plain) == _LONG_NAME:
+        assert _name_cell(chosen) == _LONG_NAME, f"at {width}: {chosen}"
+    assert len(_name_cell(chosen)) >= len(_name_cell(plain)), f"at {width}: {chosen} vs {plain}"
 
 
 def test_the_week_bar_still_doubles_where_it_costs_no_name() -> None:

@@ -532,11 +532,14 @@ def _limit_columns(rows: Sequence[LimitRow], width: int | None = None) -> _Limit
     # **The doubled bar never costs a name its room.** Where the table fits at eight cells with
     # every name whole but not at sixteen, doubling only ellipsised the names: `cursor-agent`
     # read `cursor-…` at 70 cells and whole at 69 and 74 (the owner's ask, 2026-10-17).
+    # Nor a long name its cells (BL-139, closed 2026-11-19): where neither table fits every name
+    # whole, the plain bar leaves the name column eight cells more, so the bar doubles there only
+    # when the plain table would stack anyway.
     if width is not None and width >= _WIDE_PANE:
         wide = replace(columns, week_gauge=_WIDE_WEEK_GAUGE)
         fits_wide = profile + _table_width(wide) <= width
-        fits_plain = profile + _table_width(columns) <= width
-        if fits_wide or not fits_plain:
+        plain_stacks = _ONE_LINE_PROFILE_FLOOR + _table_width(columns) > width
+        if fits_wide or plain_stacks:
             columns = wide
     week_gauge = columns.week_gauge
     # **A long name gives way before the table stacks.** The profile column is the widest name,
