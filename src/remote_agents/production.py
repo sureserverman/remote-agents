@@ -114,6 +114,19 @@ class ProductionPaths:
         return self.state_directory / "claude-limits.json"
 
     @property
+    def claude_context_directory(self) -> Path:
+        """Where the status-line hop keeps each managed Claude session's own context figure.
+
+        One `<session id>.json` per session, written by `remote_agents.statusline` at 0600 in a
+        directory it makes at 0700, for `adapters.agents.claude.usage` to read. The hop spells
+        the name itself (`statusline.CONTEXT_DIRECTORY_NAME`) for `claude_limits_path`'s
+        reason, pinned equal by
+        `test_claude_context_directory_is_under_the_state_directory_and_named_as_the_hop_writes_it`.
+        Not in `ensure_directories`: the hop makes it on its first write.
+        """
+        return self.state_directory / "claude-context"
+
+    @property
     def preferences_path(self) -> Path:
         """The one thing the local surface remembers about itself between runs.
 

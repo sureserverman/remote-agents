@@ -166,3 +166,16 @@ def test_claude_limits_path_is_under_the_state_directory_and_named_as_the_hop_wr
     assert paths.claude_limits_path.parent != paths.config_directory
     paths.ensure_directories()
     assert not paths.claude_limits_path.exists()
+
+
+def test_claude_context_directory_is_under_the_state_directory_and_named_as_the_hop_writes_it(
+    tmp_path: Path,
+) -> None:
+    """The hop's second record has the same seam as its first, and the same pin."""
+    from remote_agents.statusline import CONTEXT_DIRECTORY_NAME
+
+    paths = ProductionPaths.for_home(tmp_path)
+
+    assert paths.claude_context_directory == paths.state_directory / CONTEXT_DIRECTORY_NAME
+    paths.ensure_directories()
+    assert not paths.claude_context_directory.exists()
