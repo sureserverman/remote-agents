@@ -30,6 +30,8 @@ def _spool(directory: Path, count: int) -> None:
             "session_id": f"session-{index:04d}",
             "observed_at": datetime.now(UTC).isoformat(),
             "event": "Stop",
+            "kind": "completed",
+            "confidence": "reported",
         }
         (directory / f"s-20260819T00000{index % 10}-{index:04d}.json").write_text(
             json.dumps(record), encoding="utf-8"

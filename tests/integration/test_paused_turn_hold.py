@@ -152,6 +152,8 @@ async def test_the_activity_pass_holds_a_paused_record_and_releases_it_later(tmp
                 "observed_at": _PAUSED_AT.isoformat(),
                 "ask": None,
                 "paused": True,
+                "kind": "completed",
+                "confidence": "reported",
             }
         ),
         encoding="utf-8",

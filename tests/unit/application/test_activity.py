@@ -38,6 +38,10 @@ def _spool(directory: Path, **fields: object) -> Path:
         "reason": None,
         "detail": None,
         "observed_at": _OBSERVED_AT,
+        # What the hook writes from the licence since BL-131; a test about another meaning
+        # names its own.
+        "kind": "completed",
+        "confidence": "reported",
         **fields,
     }
     path = directory / f"{record['session_id']}-{len(list(directory.iterdir()))}.json"
@@ -84,7 +88,7 @@ def test_only_a_true_paused_mark_counts(
 
 
 def test_a_paused_mark_on_anything_but_a_finished_turn_is_ignored(tmp_path: Path) -> None:
-    _spool(tmp_path, event="StopFailure", reason="rate_limit", paused=True)
+    _spool(tmp_path, event="StopFailure", reason="rate_limit", kind="limit_reached", paused=True)
 
     (activity,) = drain_activity(tmp_path)
 
@@ -92,7 +96,7 @@ def test_a_paused_mark_on_anything_but_a_finished_turn_is_ignored(tmp_path: Path
 
 
 def test_a_rate_limit_is_a_limit_reached(tmp_path: Path) -> None:
-    _spool(tmp_path, event="StopFailure", reason="rate_limit")
+    _spool(tmp_path, event="StopFailure", reason="rate_limit", kind="limit_reached")
 
     (activity,) = drain_activity(tmp_path)
 
@@ -107,7 +111,7 @@ def test_an_exhausted_output_budget_is_not_reported_as_a_usage_limit(tmp_path: P
     output ceiling is simply continued. Folded together under one "usage limit" sentence, the
     routine one arrived wearing the alarming one's words.
     """
-    _spool(tmp_path, event="StopFailure", reason="max_output_tokens")
+    _spool(tmp_path, event="StopFailure", reason="max_output_tokens", kind="output_limit")
 
     (activity,) = drain_activity(tmp_path)
 
@@ -122,7 +126,9 @@ def test_a_permission_request_is_an_agent_that_needs_an_answer(tmp_path: Path) -
     was the only route Claude had. That type is no longer mapped -- it was the wordless twin of
     an ask now reported directly -- so this drives the event it is actually named after.
     """
-    _spool(tmp_path, event="PermissionRequest", detail="Allow Bash?", ask="Bash")
+    _spool(
+        tmp_path, event="PermissionRequest", detail="Allow Bash?", ask="Bash", kind="needs_answer"
+    )
 
     (activity,) = drain_activity(tmp_path)
 
@@ -132,7 +138,7 @@ def test_a_permission_request_is_an_agent_that_needs_an_answer(tmp_path: Path) -
 
 
 def test_an_agent_saying_it_needs_input_needs_an_answer(tmp_path: Path) -> None:
-    _spool(tmp_path, event="Notification", reason="agent_needs_input")
+    _spool(tmp_path, event="Notification", reason="agent_needs_input", kind="needs_answer")
 
     (activity,) = drain_activity(tmp_path)
 
@@ -151,9 +157,11 @@ def test_an_idle_timer_is_dropped_rather_than_reported_as_a_need_for_an_answer(
     thinking. The two reported notifications say the same thing when it is actually true.
 
     Dropped means dropped the way every unmapped event is -- read, deleted, and returned as
-    nothing -- rather than left on disk to be reconsidered on every later pass.
+    nothing -- rather than left on disk to be reconsidered on every later pass. Since BL-131 the
+    hook writes no meaning for it (Claude's licence maps no `idle_prompt`), so the record reaching
+    the drain has no `kind`, which is what this spools.
     """
-    _spool(tmp_path, event="Notification", reason="idle_prompt")
+    _spool(tmp_path, event="Notification", reason="idle_prompt", kind=None)
 
     assert drain_activity(tmp_path) == ()
     assert list(tmp_path.iterdir()) == []
@@ -168,7 +176,7 @@ def test_a_session_that_merely_ended_is_dropped_because_it_tells_the_owner_nothi
     "worth acting on" rather than "true". An ending has nothing to act on: either the owner
     ended it, and they know, or the session is gone and the listing already says so.
     """
-    _spool(tmp_path, event="SessionEnd", reason="logout")
+    _spool(tmp_path, event="SessionEnd", reason="logout", kind=None)
 
     assert drain_activity(tmp_path) == ()
     assert list(tmp_path.iterdir()) == []
@@ -177,9 +185,9 @@ def test_a_session_that_merely_ended_is_dropped_because_it_tells_the_owner_nothi
 def test_an_event_this_service_does_not_map_is_dropped_rather_than_guessed(
     tmp_path: Path,
 ) -> None:
-    _spool(tmp_path, event="PreToolUse")
-    _spool(tmp_path, event="StopFailure", reason="authentication_failed")
-    _spool(tmp_path, event="Notification", reason="auth_success")
+    _spool(tmp_path, event="PreToolUse", kind=None)
+    _spool(tmp_path, event="StopFailure", reason="authentication_failed", kind=None)
+    _spool(tmp_path, event="Notification", reason="auth_success", kind=None)
 
     assert drain_activity(tmp_path) == ()
 
@@ -188,7 +196,7 @@ def test_every_drained_file_is_gone_so_a_restart_cannot_deliver_it_twice(
     tmp_path: Path,
 ) -> None:
     _spool(tmp_path, event="Stop", detail="done")
-    _spool(tmp_path, event="PreToolUse")
+    _spool(tmp_path, event="PreToolUse", kind=None)
 
     assert len(drain_activity(tmp_path)) == 1
     assert list(tmp_path.iterdir()) == []
@@ -270,6 +278,8 @@ def _spool_as_the_hook_names_it(
         "reason": None,
         "detail": None,
         "observed_at": observed_at,
+        "kind": "completed",
+        "confidence": "reported",
         **fields,
     }
     path = directory / f"{session_id}-{stamp}.json"
@@ -498,6 +508,8 @@ def test_a_file_with_no_stamp_drains_first_rather_than_waiting_behind_the_bound(
                 "reason": None,
                 "detail": "unstamped",
                 "observed_at": _OBSERVED_AT,
+                "kind": "completed",
+                "confidence": "reported",
             }
         ),
         encoding="utf-8",
@@ -717,10 +729,11 @@ def test_a_claude_permission_prompt_notification_no_longer_becomes_a_notificatio
     for Claude, leaving `permission_prompt` mapped would send the owner a wordless twin of an
     ask they are already being told about, in the same pass.
 
-    It is dropped rather than deduplicated downstream because the drain is where this project
-    decides what an event MEANS, and what this one means is now "something already reported".
+    It is dropped rather than deduplicated downstream because the licence is where this project
+    decides what an event MEANS (BL-131; the drain until then), and what this one means is now
+    "something already reported": the hook writes no kind for it.
     """
-    _spool(tmp_path, event="Notification", reason="permission_prompt")
+    _spool(tmp_path, event="Notification", reason="permission_prompt", kind=None)
 
     assert drain_activity(tmp_path) == ()
 
@@ -733,18 +746,31 @@ def test_a_claude_needs_input_notification_still_becomes_a_needs_answer(tmp_path
     `"_measured": false`. A reversal that admitted new words elsewhere is not a licence to start
     claiming things about an event nobody has seen.
     """
-    _spool(tmp_path, event="Notification", reason="agent_needs_input", detail="Waiting on you")
+    # Led by where it came from (owner, 2026-11-18; BL-132), by the hook since BL-131.
+    _spool(
+        tmp_path,
+        event="Notification",
+        reason="agent_needs_input",
+        detail="from the agents view: Waiting on you",
+        kind="needs_answer",
+    )
 
     (activity,) = drain_activity(tmp_path)
     assert activity.kind is ActivityKind.NEEDS_ANSWER
-    # It keeps its message, led by where it came from (owner, 2026-11-18; BL-132).
     assert activity.detail == "from the agents view: Waiting on you"
 
 
 def test_a_needs_input_notice_with_no_message_still_says_where_it_came_from(
     tmp_path: Path,
 ) -> None:
-    _spool(tmp_path, event="Notification", reason="agent_needs_input", detail=None)
+    # The hook leads even an empty detail (BL-131); the drain delivers it unchanged.
+    _spool(
+        tmp_path,
+        event="Notification",
+        reason="agent_needs_input",
+        detail="from the agents view",
+        kind="needs_answer",
+    )
 
     (activity,) = drain_activity(tmp_path)
     assert activity.detail == "from the agents view"
@@ -759,3 +785,46 @@ def test_a_cursor_stop_is_a_completion_the_agent_reported(tmp_path: Path) -> Non
     assert activity.kind is ActivityKind.COMPLETED
     assert activity.confidence is ActivityConfidence.REPORTED
     assert activity.detail is None
+
+
+# --- the drain reads the meaning the hook wrote, never an event name (BL-131) ---------------
+
+
+def test_a_record_means_what_its_kind_token_says_whatever_its_event(tmp_path: Path) -> None:
+    _spool(tmp_path, event="SomethingNoProviderSpells", kind="needs_answer")
+
+    (activity,) = drain_activity(tmp_path)
+
+    assert activity.kind is ActivityKind.NEEDS_ANSWER
+    assert activity.confidence is ActivityConfidence.REPORTED
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"event": "Stop", "kind": None},
+        {"event": "Stop", "kind": "finished-ish"},
+        {"event": "Stop", "kind": 3},
+        {"event": "Stop", "kind": "completed", "confidence": "certain"},
+    ],
+)
+def test_a_record_with_no_known_kind_is_dropped_counted_and_the_batch_still_delivered(
+    tmp_path: Path, fields: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    _spool(tmp_path, session_id="dropped", **fields)
+    _spool(tmp_path, session_id="kept", event="Stop", kind="completed")
+
+    with caplog.at_level("INFO", logger=activity_module.__name__):
+        delivered = drain_activity(tmp_path)
+
+    assert [activity.session_id for activity in delivered] == ["kept"]
+    assert list(tmp_path.glob("*.json")) == []
+    assert any("1 activity record" in message for message in caplog.messages), caplog.messages
+
+
+def test_an_inferred_confidence_token_is_kept(tmp_path: Path) -> None:
+    _spool(tmp_path, kind="needs_answer", confidence="inferred")
+
+    (activity,) = drain_activity(tmp_path)
+
+    assert activity.confidence is ActivityConfidence.INFERRED

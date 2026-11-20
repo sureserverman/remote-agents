@@ -56,6 +56,8 @@ def _spool(directory, detail: str) -> None:
                 "reason": "rate_limit",
                 "observed_at": "2026-09-24T07:35:46+00:00",
                 "detail": detail,
+                "kind": "limit_reached",
+                "confidence": "reported",
             }
         ),
         encoding="utf-8",

@@ -44,6 +44,7 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Iterator
 from contextlib import suppress
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from uuid import uuid4
 
@@ -93,56 +94,6 @@ _TITLE_TIMEOUT_SECONDS = 15.0
 # case it safely yields no inferred activity.
 _CODEX_ACTION_REQUIRED = re.compile(r"^\[ \S \] Action Required \| ")
 
-# Only the reasons that answer "why did it stop". Every other value these fields can take --
-# authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
-# absent on purpose, and an event carrying one is dropped by the lookup below.
-_STOP_FAILURES = {
-    "rate_limit": ActivityKind.LIMIT_REACHED,
-    # Not the same news, and not the same next move: a rate limit is waited out, an output
-    # ceiling is continued from. One sentence for both told the owner the alarming one.
-    "max_output_tokens": ActivityKind.OUTPUT_LIMIT,
-}
-# Both of these are the agent saying it is stuck, which is why both are REPORTED. Upstream's
-# third one -- a sixty-second idle timer -- is absent for a different reason than the values
-# above: it answers "why did it stop" and answers it wrongly often enough to have a recorded
-# history of doing so, on an agent that had merely gone quiet while thinking. It was carried
-# for a while as an inferred `needs_answer` on the argument that a hedged sentence makes a
-# weak signal safe to send, which it does not: a hedge changes how a message reads, never
-# whether it was worth sending. When the timer is right, one of these two says the same thing.
-_NOTIFICATIONS = {
-    "agent_needs_input": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
-}
-"""Which `Notification` types mean something this service will say out loud.
-
-**`permission_prompt` left on 2026-09-19 (DEC-098), and it left on a measurement.** Every one
-of them shares a `prompt_id` with a `PermissionRequest` for the same ask -- 3 of 3 observed,
-unmatched set empty (`docs/acceptance-2026-09-19-ask-payloads.md`). Now that
-`PermissionRequest` is installed for Claude, keeping this mapped would send a wordless twin of
-an ask the owner is already being told about, in the same drain pass. Its whole payload was the
-constant `Claude needs your permission`, which is what the ask class says better.
-
-It is dropped here rather than deduplicated downstream because this is where the project
-decides what an event MEANS, and what this one now means is "something already reported".
-
-`agent_needs_input` stays, and since 2026-10-10 it is measured (BL-048). It does not come from an
-idle session: the 2026-09-19 drill idled 90 s for it and got `idle_prompt`, which `_kind` drops.
-It comes from the `claude agents` view, which fires it when a background session it lists
-changes to blocked, and it carries `message`, `"<label> needs your input: <needs>"`, which
-becomes the record's detail (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`, pinned in
-`tests/provider_contract/per_provider/test_claude_quirks.py`). By the spool's code, though not yet
-observed end to end, it arrives only when the view runs in a managed pane and is recorded as that
-pane's session, not the blocked agent's. So its detail is led by `_AGENTS_VIEW` (DEC-037 and
-DEC-098 as amended 2026-11-18): without it the line reads as the hosting session asking.
-"""
-
-_AGENTS_VIEW = "from the agents view"
-"""Where an `agent_needs_input` notice came from, at the front of its detail on both surfaces.
-
-At the front because the console cuts a detail at its own width (`feed._elide`), and the label
-before it can be the opening words of a long prompt. Stored in the detail, the field both
-surfaces already render, so nothing new is stored (owner, 2026-11-18).
-"""
-
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 """The same shape `activity_spool._plain_token` writes, asserted again on the way back in.
 
@@ -175,7 +126,12 @@ def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
         # launch, and one that cannot be listed is a problem for the operator, not for the
         # poll that found it. Either way there is nothing to deliver this pass.
         return ()
-    drained = list(_drained(paths))
+    meaningless: list[Path] = []
+    drained = list(_drained(paths, meaningless))
+    if meaningless:
+        # Counted, not named: the hook writes a meaning for every record it keeps (BL-131), so a
+        # record without one is from a foreign writer or a build that predates the token.
+        _LOG.info("dropped %d activity record(s) with no kind this service knows", len(meaningless))
     try:
         return tuple(sorted(drained, key=lambda activity: activity.observed_at))
     except TypeError:
@@ -236,14 +192,23 @@ def _written_at(path: Path) -> tuple[str, str]:
     return (found.group(0) if found else "", path.name)
 
 
-def _drained(paths: list[Path]) -> Iterator[AgentActivity]:
+def _drained(paths: list[Path], meaningless: list[Path]) -> Iterator[AgentActivity]:
     for path in paths:
         activity = _read_one(path)
-        if activity is not None:
+        if activity is _NO_MEANING:
+            meaningless.append(path)
+        elif isinstance(activity, AgentActivity):
             yield activity
 
 
-def _read_one(path: Path) -> AgentActivity | None:
+class _NoMeaning:
+    """A record that parsed and carried no kind this service knows (BL-131)."""
+
+
+_NO_MEANING = _NoMeaning()
+
+
+def _read_one(path: Path) -> AgentActivity | _NoMeaning | None:
     """Turn one file into activity, or into nothing, but never into an exception.
 
     Every step is guarded, deliberately. An earlier version wrapped only the read and the
@@ -328,21 +293,23 @@ def _read_one(path: Path) -> AgentActivity | None:
         return None
 
 
-def _activity(record: dict) -> AgentActivity | None:
-    """Map one spooled record onto the vocabulary, or onto nothing."""
+def _activity(record: dict) -> AgentActivity | _NoMeaning | None:
+    """Map one spooled record onto the vocabulary, or onto nothing.
+
+    What the record means is the `kind` and `confidence` the hook wrote from its provider's
+    licence (BL-131), re-narrowed against the closed enums on this side of the spool, as
+    `detail` and `ask` are. The event's name is never read: shared code holds no provider's
+    vocabulary (DEC-070).
+    """
     session_id = safe_session_id(record.get("session_id"))
     observed_at = _moment(record.get("observed_at"))
     if session_id is None or observed_at is None:
         return None
-    resolved = _kind(record.get("event"), record.get("reason"))
-    if resolved is None:
-        return None
-    kind, confidence = resolved
+    kind = _member(ActivityKind, record.get("kind"))
+    confidence = _member(ActivityConfidence, record.get("confidence"))
+    if kind is None or confidence is None:
+        return _NO_MEANING
     detail = bounded_detail_line(record.get("detail"))
-    # The one `_NOTIFICATIONS` entry the agents view raises; a second mapped type needs its own
-    # answer to where it came from, not this one by default.
-    if record.get("event") == "Notification" and record.get("reason") == "agent_needs_input":
-        detail = _from_the_agents_view(detail)
     return AgentActivity(
         session_id=session_id,
         kind=kind,
@@ -359,49 +326,19 @@ def _activity(record: dict) -> AgentActivity | None:
     )
 
 
-def _from_the_agents_view(detail: str | None) -> str:
-    """`detail` led by `_AGENTS_VIEW`, cut again so the whole still fits the shared bound."""
-    if detail is None:
-        return _AGENTS_VIEW
-    return bounded_detail_line(f"{_AGENTS_VIEW}: {detail}") or _AGENTS_VIEW
-
-
 def _ask_token(value: object) -> str | None:
     """Accept an ask token only in the shape the spool is allowed to have written."""
     return value if isinstance(value, str) and _ASK_TOKEN.fullmatch(value) else None
 
 
-def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfidence] | None:
-    if event == "Stop":
-        return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
-    if event == "PermissionRequest":
-        return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
-    # OpenCode's own names for the same two facts, kept as the provider spells them rather than
-    # translated to Claude's in the plugin. A translation would have made the spool file lie
-    # about which agent wrote it, and this mapping is where the vocabularies are meant to meet.
-    # `REPORTED` on both: the plugin runs inside OpenCode and forwards an event OpenCode emitted,
-    # which is the same standing Claude's hooks have and not the pane-title inference's.
-    #
-    # A Tier-1 review asked whether a *plugin* deserves that standing, since it is code loaded
-    # into the agent's event loop rather than a fixed lifecycle-hook contract. Considered and
-    # judged immaterial: `ActivityConfidence` records whether *anything actually said this*, and
-    # OpenCode's own runtime emitted the event -- the plugin only carried it. The distinction the
-    # enum is drawing is against the pane-title watcher, which reads a marker nobody sent it and
-    # infers an agent behind it. Nothing here is inferred.
-    if event == "session.idle":
-        return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
-    # Cursor's own lowercase name, from its user-level `stop` hook; the spool admits it only
-    # when Cursor said the turn `completed`.
-    if event == "stop":
-        return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
-    if event == "permission.asked":
-        return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
-    if event == "StopFailure":
-        kind = _STOP_FAILURES.get(reason) if isinstance(reason, str) else None
-        return None if kind is None else (kind, ActivityConfidence.REPORTED)
-    if event == "Notification" and isinstance(reason, str):
-        return _NOTIFICATIONS.get(reason)
-    return None
+def _member[E: Enum](enum: type[E], value: object) -> E | None:
+    """The member a token names, or None for anything else the far end of the spool wrote."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return enum(value)
+    except ValueError:
+        return None
 
 
 def _moment(value: object) -> datetime | None:

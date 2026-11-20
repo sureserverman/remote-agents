@@ -214,10 +214,9 @@ def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk
 #
 # Named for what these cases actually check, which is the SPOOL's parsing, not the drain's
 # routing. Since DEC-098 (2026-09-19) only `agent_needs_input` still becomes a `needs_answer`:
-# `permission_prompt` left `_NOTIFICATIONS` because the `PermissionRequest` event now reports
-# the same ask with words. The spool still reads both, and these cases still pin that -- a
-# record this end parses correctly on the way to being dropped is the behaviour
-# Claude's `_RECORD` comment argues for.
+# `permission_prompt` left the Notification table (now in `claude/hooks.py`) because the
+# `PermissionRequest` event now reports the same ask with words. Since BL-131 the spool writes
+# no record for a type the table does not map, so these cases pin the mapped one.
 
 
 def test_a_permission_prompt_carries_the_message_claude_sends_with_it() -> None:

@@ -14,6 +14,8 @@ def test_codex_permission_request_needs_an_answer_without_payload_detail() -> No
             "reason": None,
             "detail": None,
             "observed_at": datetime.now(UTC).isoformat(),
+            "kind": "needs_answer",
+            "confidence": "reported",
         }
     )
     assert activity is not None

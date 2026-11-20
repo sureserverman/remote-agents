@@ -1547,6 +1547,15 @@ def _spool(
     # record carrying a reason the event does not use is not one the hook would ever write.
     if reason is not None:
         record["reason"] = reason
+    # What Claude's hook writes for it since BL-131: the meaning its licence declares.
+    from remote_agents.adapters.agents.claude.hooks import HOOK_LICENCE
+
+    licensed = HOOK_LICENCE.events.get(event)
+    kind = None if licensed is None else licensed.kind
+    if kind is None and licensed is not None and reason is not None:
+        kind = licensed.kinds_by_reason.get(reason)
+    record["kind"] = None if kind is None else kind.value
+    record["confidence"] = "reported"
     (directory / f"{session_id}-20260811T140500{stamp}Z.json").write_text(
         json.dumps(record), encoding="utf-8"
     )

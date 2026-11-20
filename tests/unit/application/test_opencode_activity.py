@@ -10,17 +10,23 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from remote_agents.adapters.agents.opencode.hooks import HOOK_LICENCE
 from remote_agents.application.activity import _activity
-from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
+from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 
 
 def _record(event: str, **overrides: object) -> dict:
+    """A record as OpenCode's hook writes it: the meaning its licence declares (BL-131)."""
+    licensed = HOOK_LICENCE.events.get(event)
+    kind = None if licensed is None or licensed.kind is None else licensed.kind.value
     return {
         "session_id": "opencode-session",
         "event": event,
         "reason": None,
         "detail": None,
         "observed_at": datetime.now(UTC).isoformat(),
+        "kind": kind,
+        "confidence": "reported",
         **overrides,
     }
 
@@ -61,5 +67,7 @@ def test_a_completion_carrying_a_detail_from_somewhere_else_still_renders_it() -
 
 
 def test_permission_replied_is_not_a_kind_this_project_has() -> None:
-    """It fired and was captured; nothing here needs to know how the owner answered."""
-    assert _activity(_record("permission.replied")) is None
+    """It fired and was captured; nothing here needs to know how the owner answered. The licence
+    does not list it, so the hook writes nothing, and a record of it carries no meaning."""
+    assert "permission.replied" not in HOOK_LICENCE.events
+    assert not isinstance(_activity(_record("permission.replied")), AgentActivity)

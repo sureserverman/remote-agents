@@ -7,20 +7,25 @@ the owner's own prompt. So the line must say it came from the agents view, or it
 hosting session asking. The owner chose to keep the label and say so (2026-11-18; DEC-037 and
 DEC-098, as amended).
 
-Driven from the spool through the drain, then into each surface's own renderer, so a change
-at either end that drops the words turns this red.
+Driven from Claude's real hook through the spool and the drain, then into each surface's own
+renderer, so a change anywhere on that path that drops the words turns this red. The hook puts
+them on the detail since BL-131, from Claude's licence; the drain did until then.
 """
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
+from remote_agents.adapters.agents.activity_spool import spool_agent_event
+from remote_agents.adapters.agents.claude.hooks import HOOK_LICENCE
 from remote_agents.adapters.telegram.notifications import render_activity
 from remote_agents.adapters.tui.screens.feed import feed_rows
 from remote_agents.application.activity import drain_activity
 from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS, AgentActivity
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _SESSION = "01234567-89ab-cdef-0123-456789abcdef"
 _WORDS = "from the agents view"
@@ -28,16 +33,21 @@ _NEEDS = "fix the build needs your input: which branch?"
 
 
 def _drained(directory: Path, **fields: object) -> AgentActivity:
-    directory.mkdir(parents=True, exist_ok=True)
-    record = {
-        "session_id": _SESSION,
-        "event": "Notification",
-        "reason": "agent_needs_input",
-        "detail": _NEEDS,
-        "observed_at": "2026-11-19T07:00:00+00:00",
+    """What Claude's hook spools for this payload, as the drain reads it back."""
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {
+        "hook_event_name": "Notification",
+        "notification_type": "agent_needs_input",
+        "message": _NEEDS,
         **fields,
     }
-    (directory / f"{_SESSION}-1.json").write_text(json.dumps(record), encoding="utf-8")
+    spool_agent_event(
+        io.BytesIO(json.dumps(payload).encode("utf-8")),
+        activity_directory=directory,
+        licence=lambda: HOOK_LICENCE,
+        hook_name="claude",
+        environment={SESSION_ID_VARIABLE: _SESSION},
+    )
     (activity,) = drain_activity(directory)
     return activity
 
@@ -67,7 +77,7 @@ def test_a_needs_input_notice_says_it_came_from_the_agents_view_on_both_surfaces
 def test_a_long_label_still_says_where_it_came_from(tmp_path: Path) -> None:
     """The console cuts a detail at its own width, so the words lead the line."""
     long_label = "refactor " * 60 + "needs your input: which branch?"
-    activity = _drained(tmp_path, detail=long_label)
+    activity = _drained(tmp_path, message=long_label)
 
     assert activity.detail is not None
     assert len(activity.detail) <= MAXIMUM_DETAIL_CHARACTERS
@@ -77,9 +87,12 @@ def test_a_long_label_still_says_where_it_came_from(tmp_path: Path) -> None:
 
 def test_a_permission_request_line_is_unchanged(tmp_path: Path) -> None:
     activity = _drained(
-        tmp_path, event="PermissionRequest", reason=None, detail="rm -rf build", ask="Bash"
+        tmp_path,
+        hook_event_name="PermissionRequest",
+        tool_name="Bash",
+        tool_input={"command": "rm -rf build"},
     )
 
-    assert activity.detail == "rm -rf build"
+    assert activity.detail == "$ rm -rf build"
     assert "agents view" not in _bot(activity)
     assert "agents view" not in _console(activity)
