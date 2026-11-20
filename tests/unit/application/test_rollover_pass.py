@@ -39,7 +39,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.rollover import RolloverState
 from remote_agents.ports.handoff_envelopes import HandoffEnvelope, HandoffEvent
-from remote_agents.ports.rollover_store import Rollover, RolloverEvent
+from remote_agents.ports.rollover_store import OWNER_HOLD, Rollover, RolloverEvent
 from remote_agents.ports.terminal import (
     GRACEFUL_TIMEOUT,
     NOT_IDLE,
@@ -150,6 +150,10 @@ class Rig:
     idle_raises: bool = False
     reports: list = field(default_factory=list)
     locks: SessionLocks | None = None
+    owner_dialogs: dict[SessionId, str] = field(default_factory=dict)
+    """Panes up on a dialog only the owner may answer, by its name (BL-146)."""
+    launched_owner_dialog: str | None = None
+    """The dialog a launched successor comes up on, if any."""
     _pass: RolloverPass | None = None
     """Each action taken before the state licensing it was persisted; must stay empty."""
 
@@ -192,7 +196,12 @@ class Rig:
             return object()
         record = _record(SessionId.new(), self.launched_state, profile=command.profile_id)
         self.sessions[record.session_id] = record
+        if self.launched_owner_dialog is not None:
+            self.owner_dialogs[record.session_id] = self.launched_owner_dialog
         return _Launched(record)
+
+    async def owner_dialog(self, session_id: SessionId) -> str | None:
+        return self.owner_dialogs.get(session_id)
 
     async def send(self, session_id: SessionId, text: str) -> PromptDelivery:
         self.sends.append((session_id, text))
@@ -249,6 +258,7 @@ class Rig:
             notify=self.told,
             now=lambda: self.clock[0],
             sleep=self.sleep,
+            owner_dialog=self.owner_dialog,
             **({} if self.locks is None else {"operation": self.locks.operation}),
         )
 
@@ -1643,3 +1653,125 @@ async def test_a_predecessor_gone_during_the_hold_fails_the_rollover_untyped(rig
     rollover = await rig.rollover()
     assert (rollover.state, rollover.failure_code) == (RolloverState.FAILED, "predecessor-gone")
     assert rig.sends == [] and rig.stops == []
+
+
+# -- Sub-plan 5 Task 3.2: a successor held on a dialog only the owner may answer (BL-146) ----
+
+
+async def test_a_successor_on_a_hook_review_is_held_untyped_and_named(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_owner_dialog = "a hook review"
+
+    await rig.run(passes=3)
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    details = [e.detail for e in await rig.store.events(rollover.id)]
+    assert TRUST_HOLD in details
+    assert details.count(OWNER_HOLD + "a hook review") == 1, details
+    assert rig.sends == [] and rig.stops == [] and rig.reports == []
+    assert len(rig.launches) == 1
+
+
+async def test_a_hook_review_answered_in_the_pane_goes_on_and_types_once(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_owner_dialog = "a hook review"
+    await rig.run(passes=2)
+    assert rig.sends == []
+
+    rig.owner_dialogs.pop(rig.successor)  # the owner answers it in the pane
+    await rig.run(passes=3)
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+    assert rig.send_states == [RolloverState.ADOPTING]
+    rig.accepted_by(rig.successor)
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.COMPLETED
+    assert len(rig.sends) == 1
+
+
+async def test_a_hook_review_left_unanswered_fails_after_the_trust_patience(rig: Rig) -> None:
+    rig.ready()
+    rig.launched_owner_dialog = "a hook review"
+    await rig.run()
+
+    rig.later(TRUST_PATIENCE - timedelta(seconds=1))
+    await rig.run()
+    assert (await rig.rollover()).state is RolloverState.SUCCESSOR_STARTING
+
+    rig.later(timedelta(seconds=1))
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert (rollover.state, rollover.failure_code, rollover.failure_detail) == (
+        RolloverState.FAILED,
+        "successor-untrusted",
+        "a hook review",
+    )
+    assert [report.rollover.failure_detail for report in rig.reports] == ["a hook review"]
+    assert rig.sends == [] and rig.stops == []
+    assert rig.sessions[rig.predecessor].state is SessionState.RUNNING
+
+
+async def test_a_hook_review_drawn_after_the_launch_look_still_holds(rig: Rig) -> None:
+    """The dialog arrives behind the binding's wait: looked at again just before the keys."""
+    rig.ready()
+    looks: list[SessionId] = []
+
+    async def late(session_id: SessionId) -> str | None:
+        looks.append(session_id)
+        return "a hook review" if len(looks) > 1 else None
+
+    rig.owner_dialog = late  # type: ignore[method-assign]
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    details = [e.detail for e in await rig.store.events(rollover.id)]
+    assert TRUST_HOLD in details and OWNER_HOLD + "a hook review" in details
+    assert rig.sends == []
+
+
+async def test_a_folder_trust_successor_that_then_shows_a_hook_review_stays_held(
+    rig: Rig,
+) -> None:
+    """BL-146's own order: folder trust answered, then the hook review, the record still
+    UNTRUSTED. Held, named, and typed nothing either way."""
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+
+    rig.owner_dialogs[rig.successor] = "a hook review"
+    _trust(rig)
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    assert OWNER_HOLD + "a hook review" in [e.detail for e in await rig.store.events(rollover.id)]
+    assert rig.sends == []
+
+
+async def test_a_hook_review_drawn_after_the_held_look_holds_instead_of_failing(rig: Rig) -> None:
+    """Review finding: folder trust answered, the pass's first look sees no dialog, then the
+    hook review is drawn before the keys. Held, nothing typed, ADOPTING never persisted."""
+    rig.ready()
+    rig.launched_state = SessionState.UNTRUSTED
+    await rig.run()
+    _trust(rig)
+    looks: list[SessionId] = []
+
+    async def late(session_id: SessionId) -> str | None:
+        looks.append(session_id)
+        return "a hook review" if len(looks) > 1 else None
+
+    rig._pass._owner_dialog = late  # type: ignore[union-attr]
+    await rig.run()
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING
+    assert OWNER_HOLD + "a hook review" in [e.detail for e in await rig.store.events(rollover.id)]
+    assert rig.sends == []
+
+    rig._pass._owner_dialog = rig.owner_dialog  # type: ignore[union-attr]
+    await rig.run(passes=2)
+    assert rig.sends == [(rig.successor, TEMPLATE)]

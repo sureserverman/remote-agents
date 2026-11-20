@@ -1895,3 +1895,86 @@ def _owner_dialog_record() -> SessionRecord:
         SessionState.RUNNING,
         datetime.now(UTC),
     )
+
+
+# --- Sub-plan 5 Task 3.2: a rollover held on a hook review (BL-146) --------------------------
+
+
+@pytest.mark.parametrize(
+    ("successor_state", "answered", "line"),
+    [
+        (SessionState.RUNNING, False, "rollover held - successor waits on a hook review"),
+        # BL-146's order: folder trust answered first, the record still UNTRUSTED.
+        (SessionState.UNTRUSTED, False, "rollover held - successor waits on a hook review"),
+        # Answered, and the pass found this session working: the hold is no longer said.
+        (
+            SessionState.RUNNING,
+            True,
+            "starting successor · waiting for this session to be idle",
+        ),
+    ],
+)
+async def test_a_successor_held_on_a_hook_review_says_so_on_the_predecessors_row(
+    rollover_store: SQLiteRolloverStore,
+    successor_state: SessionState,
+    answered: bool,
+    line: str,
+) -> None:
+    from remote_agents.ports.rollover_store import OWNER_HOLD
+
+    predecessor, successor = _numbered(1), _numbered(2, successor_state)
+    opened = await rollover_store.open_for_ready(
+        predecessor.session_id,
+        "h-0123456789abcdef0123",
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+        plan=None,
+        at=_ROLL_AT,
+    )
+    assert opened is not None
+    await rollover_store.advance(
+        opened.id,
+        RolloverState.SUCCESSOR_STARTING,
+        at=_ROLL_AT,
+        successor_session_id=successor.session_id,
+    )
+    await rollover_store.note(opened.id, TRUST_HOLD, at=_ROLL_AT)
+    await rollover_store.note(opened.id, OWNER_HOLD + "a hook review", at=_ROLL_AT)
+    if answered:
+        await rollover_store.note(opened.id, TRUSTED_WAITING, at=_ROLL_AT)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
+
+    assert _notes((predecessor,), marks) == {1: line}
+
+
+async def test_a_rollover_that_timed_out_on_a_hook_review_says_which_on_the_row(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    predecessor, successor = _numbered(1), _numbered(2)
+    opened = await rollover_store.open_for_ready(
+        predecessor.session_id,
+        "h-0123456789abcdef0123",
+        project_id=predecessor.project_id,
+        profile_id=predecessor.profile_id,
+        plan=None,
+        at=_ROLL_AT,
+    )
+    assert opened is not None
+    await rollover_store.advance(
+        opened.id,
+        RolloverState.SUCCESSOR_STARTING,
+        at=_ROLL_AT,
+        successor_session_id=successor.session_id,
+    )
+    await rollover_store.advance(
+        opened.id,
+        RolloverState.FAILED,
+        at=_ROLL_AT,
+        failure_code="successor-untrusted",
+        failure_detail="a hook review",
+    )
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
+
+    assert "waiting on a hook review timed out" in _notes((predecessor,), marks)[1]

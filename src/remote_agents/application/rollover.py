@@ -22,7 +22,10 @@ executor writes envelopes -- take part:
   until the owner trusts it, within `TRUST_PATIENCE`, and its predecessor is still running and
   idle, within `NOT_IDLE_PATIENCE` of the trust (DEC-125): then ADOPTING is persisted first and
   the template typed once. The owner is asked by the trust notice every UNTRUSTED session
-  already gets;
+  already gets. A successor up on a dialog only the owner may answer (Codex's hook review,
+  BL-146) is held the same way, under the same patience, with its own history detail
+  (`OWNER_HOLD`) naming the dialog; nothing is pressed on it, and the hold goes on by itself
+  once the owner has answered it in the pane;
 - an `accepted` envelope from that successor moves to SUCCESSOR_ACCEPTED, and only then is the
   predecessor stopped -- gracefully, against an idle pane, never by force (DEC-007).
 
@@ -35,7 +38,8 @@ code it is recorded under:
 - `FAILED: predecessor-gone` -- the predecessor stopped running before its successor was up
 - `FAILED: launch-failed` -- the launch raised, or answered with no session
 - `FAILED: successor-unknown` -- a launch may have happened with no successor recorded
-- `FAILED: successor-untrusted` -- the successor was not trusted within `TRUST_PATIENCE`
+- `FAILED: successor-untrusted` -- the successor was not trusted within `TRUST_PATIENCE`, or
+  still waited on a dialog only the owner may answer (its name is the failure detail)
 - `FAILED: successor-failed` -- the successor failed to start, or its pane went away
 - `FAILED: not-typed` -- the template could not be typed, or its send was not confirmed
 - `FAILED: adoption-timeout` -- no `accepted` within `ADOPTION_PATIENCE`
@@ -118,6 +122,7 @@ from remote_agents.ports.handoff_notes import HandoffNotes, NoteReading
 from remote_agents.ports.rollover_store import (
     NOTE_ASKED,
     NOTE_FIRST_TYPED,
+    OWNER_HOLD,
     REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
@@ -313,7 +318,11 @@ class RolloverPass:
         note_rollable: frozenset[ProfileId] = frozenset(),
         notes: HandoffNotes | None = None,
         finished_turn: Callable[[SessionId, datetime], Awaitable[bool]] | None = None,
+        owner_dialog: Callable[[SessionId], Awaitable[str | None]] | None = None,
     ) -> None:
+        #: The name of a dialog only the owner may answer on a pane, or None (BL-146): a look,
+        #: never an act. None here reads no pane, and holds only for folder trust.
+        self._owner_dialog = owner_dialog
         self._resolve_legacy_destination = resolve_legacy_destination
         self._handoff_versions = handoff_versions
         self._resolve_destination = resolve_destination
@@ -1044,10 +1053,15 @@ class RolloverPass:
             # dialog is recorded with its hold, in one transaction: typing would answer the
             # dialog (DEC-099), so it is held until the owner trusts it, and no restart can
             # find it recorded but not held (DEC-125).
-            held = record.state is SessionState.UNTRUSTED
+            # Or up on a dialog only the owner may answer (BL-146): held the same way, typed
+            # nothing, and its dialog named in its own detail.
+            waits = await self._waits_on(record.session_id) if record.state in _UP else None
+            held = record.state is SessionState.UNTRUSTED or waits is not None
             starting = await self._store.record_successor(
                 rollover.id, record.session_id, at=self._now(), held=held
             )
+            if waits is not None:
+                await self._store.note(rollover.id, OWNER_HOLD + waits, at=self._now())
         if held:
             # `_found_starting` takes it from here.
             return
@@ -1064,6 +1078,13 @@ class RolloverPass:
         # plan. Every provider, so a turn begun since the check before the launch is not raced.
         if not await self._looks_idle(rollover.predecessor_session_id):
             await self._fail(starting, seen, PREDECESSOR_NOT_IDLE)
+            return
+        # Looked at again just before the keys: a dialog drawn after the launch's look, behind
+        # the binding's wait, holds rather than taking the template as its answer (BL-146).
+        waits = await self._waits_on(record.session_id)
+        if waits is not None:
+            await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
+            await self._store.note(rollover.id, OWNER_HOLD + waits, at=self._now())
             return
         reason = await self._type_into_successor(rollover, record.session_id)
         if reason is not None:
@@ -1206,9 +1227,21 @@ class RolloverPass:
             else:
                 await self._fail(rollover, seen, SUCCESSOR_FAILED)
             return
-        if seen.untrusted(rollover.successor_session_id):
+        # A dialog only the owner may answer holds like the folder question, under the same
+        # patience (BL-146). Read on a pane that is there, and named once in the history.
+        successor = rollover.successor_session_id
+        waits = (
+            await self._waits_on(successor)
+            if seen.up(successor) or seen.untrusted(successor)
+            else None
+        )
+        if waits is not None and not any(
+            (detail or "").startswith(OWNER_HOLD) for detail in details
+        ):
+            await self._store.note(rollover.id, OWNER_HOLD + waits, at=self._now())
+        if seen.untrusted(successor) or waits is not None:
             if self._now() - held_at >= TRUST_PATIENCE:
-                await self._fail(rollover, seen, SUCCESSOR_UNTRUSTED)
+                await self._fail(rollover, seen, SUCCESSOR_UNTRUSTED, waits)
             return
         if not seen.up(rollover.successor_session_id):
             # Declined ("No, exit"), stopped, or failed while it was asking.
@@ -1235,12 +1268,32 @@ class RolloverPass:
             elif self._now() - waiting_since >= NOT_IDLE_PATIENCE:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
+        # Looked at again before ADOPTING, which a restart reads as "typed": a hook review drawn
+        # after the look above -- behind the binding's wait, or just after the folder answer --
+        # holds rather than failing the rollover as not typed (BL-146, Task 3.2 review).
+        late = await self._waits_on(successor)
+        if late is not None:
+            if not any((detail or "").startswith(OWNER_HOLD) for detail in details):
+                await self._store.note(rollover.id, OWNER_HOLD + late, at=self._now())
+            return
         adopting = await self._store.advance(
             rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING
         )
         reason = await self._type_into_successor(adopting, rollover.successor_session_id)
         if reason is not None:
             await self._fail(adopting, seen, NOT_TYPED, reason)
+
+    async def _waits_on(self, session_id: SessionId) -> str | None:
+        """The dialog only the owner may answer on this pane, by name, or None. A look; total:
+        a read that fails is no dialog, and the guarded send still refuses any dialog."""
+        if self._owner_dialog is None:
+            return None
+        try:
+            names = await self._owner_dialog(session_id)
+        except Exception:
+            _LOG.debug("reading %s for an owner dialog failed", session_id, exc_info=True)
+            return None
+        return names if isinstance(names, str) and names.strip() else None
 
     async def _trust_hold(self, rollover: Rollover) -> datetime | None:
         """When this rollover's successor was held on its trust dialog, or None if it never was."""

@@ -32,6 +32,13 @@ presence is the durable fact that nothing was typed at the launch, the one case 
 still type; a row reads it to say the rollover is waiting for trust. Written by
 `record_successor` in the transaction that records the successor, so neither exists alone."""
 
+OWNER_HOLD = "owner-hold: successor waits on "
+"""The prefix of the history detail a pass writes, once, on finding a held successor on a dialog
+only the owner may answer (BL-146): `OWNER_HOLD + <the dialog's name>`, the name its vertical
+declares (`ComposerScreen.owner_dialogs`). The rollover holds as for `TRUST_HOLD`, which is
+written with it and is still the fact that nothing was typed; a row reads this one to say what
+the successor waits on."""
+
 TRUSTED_WAITING = "trusted: waiting for an idle predecessor"
 """The history detail a pass writes, once, on finding a trust-held successor trusted but its
 predecessor working (DEC-125). Its time starts the wait for idle; a row reads it to say so."""

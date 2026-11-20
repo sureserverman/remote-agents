@@ -36,7 +36,7 @@ def _roots(connection: sqlite3.Connection, project: Path, folders=None):
         sessions=types.SimpleNamespace(
             list_sessions=None, launch=None, graceful_stop=None, continuation_permissions=None
         ),
-        terminal=types.SimpleNamespace(pane_idle=None, send_prompt=None),
+        terminal=types.SimpleNamespace(pane_idle=None, send_prompt=None, owner_dialog=None),
         enabled=None,
         project_paths={_PROJECT: project},
         adopt_templates={ProfileId("claude"): adopt_templates()[ProfileId("claude")]},

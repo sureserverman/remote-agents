@@ -112,7 +112,14 @@ def _profile(marker: bool = True) -> LaunchProfile:
     )
 
 
-async def _launch(tmp_path: Path, screens: list[str], *, marker: bool = True, handshake=5.0):
+async def _launch(
+    tmp_path: Path,
+    screens: list[str],
+    *,
+    marker: bool = True,
+    handshake=5.0,
+    composers=None,
+):
     session_id = SessionId.new()
     project = tmp_path / "opaque-editor"
     project.mkdir(exist_ok=True)
@@ -124,6 +131,7 @@ async def _launch(tmp_path: Path, screens: list[str], *, marker: bool = True, ha
         startup_timeout=2.0,
         trust_dialogs=profile_trust_dialogs(),
         waits=TerminalWaits(trust_answer=0.0, decline=0.05, handshake=handshake),
+        **({} if composers is None else {"composers": composers}),
     )
     observation = await terminal._launch_profile(
         session_id, ProjectId("opaque-editor"), _CODEX, _profile(marker)
@@ -200,3 +208,32 @@ async def test_text_above_the_footer_does_not_end_the_wait(tmp_path: Path) -> No
     )
     assert observation.live
     assert gateway.seen[-1] == READY, "a path quoted in the conversation ended the wait"
+
+
+# --- Sub-plan 5 Task 3.2: the hook review answers the launch (BL-146) ------------------------
+
+#: The real 0.171.0 screen (`dialog_hooks_review_0171.txt`): no readiness marker, no footer.
+HOOKS = (_FIXTURES / "dialog_hooks_review_0171.txt").read_text(encoding="utf-8")
+
+
+async def test_a_hook_review_drawn_during_the_handshake_ends_the_wait_live(
+    tmp_path: Path,
+) -> None:
+    """Up on the banner, then the hook review: no footer will come until the owner answers,
+    so the wait ends at once rather than spending its whole bound."""
+    started = time.monotonic()
+    observation, gateway = await _launch(
+        tmp_path, [STARTING, STARTING, HOOKS], handshake=3.0, composers=profile_composers()
+    )
+    assert observation.live and not observation.awaiting_trust
+    assert gateway.seen[-1] == HOOKS
+    assert time.monotonic() - started < 1.5, "the handshake bound was waited out"
+
+
+async def test_a_launch_straight_onto_a_hook_review_settles_live(tmp_path: Path) -> None:
+    """No readiness marker on that screen: without the owner-dialog answer the settle would
+    time out and the launch be recorded failed."""
+    observation, _gateway = await _launch(
+        tmp_path, [HOOKS], handshake=3.0, composers=profile_composers()
+    )
+    assert observation.live and not observation.awaiting_trust

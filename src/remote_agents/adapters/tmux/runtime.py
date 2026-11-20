@@ -592,6 +592,10 @@ class TmuxTerminal:
                 return observation or gone
             if self._is_awaiting_trust(profile, profile_id, capture):
                 return replace(observation, awaiting_trust=True)
+            if self._shows_owner_dialog(profile_id, capture):
+                # Up, and stopped on a dialog only the owner may answer: its footer follows
+                # their answer, not this wait (BL-146).
+                return ready
             await asyncio.sleep(_HANDSHAKE_POLL_SECONDS)
         # Not a failure, but not silent either: a footer this never matches costs every launch
         # the whole bound, with the daemon guard held (a narrow pane, a changed footer).
@@ -647,6 +651,11 @@ class TmuxTerminal:
                 ready = None
             elif self._is_awaiting_trust(profile, profile_id, capture):
                 return replace(observation, awaiting_trust=True)
+            elif self._shows_owner_dialog(profile_id, capture):
+                # A blocker too, and an answer for the same reason (BL-146): Codex's hook review
+                # draws none of its readiness marker, and the agent has finished starting. Live
+                # and untouched; the readers name it, and nothing presses on it.
+                return observation
             elif self._has_readiness_evidence(session_id, profile, capture):
                 if profile.trust_settle_seconds <= 0.0:
                     return observation
@@ -681,6 +690,12 @@ class TmuxTerminal:
             self._conversation_marks is not None
             and self._conversation_marks.latest(session) is not None
         )
+
+    def _shows_owner_dialog(self, profile_id: ProfileId, capture: str) -> bool:
+        """Whether this capture shows a dialog only the owner may answer, by the agent's own
+        declarations (BL-146). False for an agent that declares none."""
+        descriptor = self._composers.get(str(profile_id))
+        return descriptor is not None and owner_dialog(capture, descriptor) is not None
 
     def _is_awaiting_trust(
         self, profile: LaunchProfile, profile_id: ProfileId, capture: str

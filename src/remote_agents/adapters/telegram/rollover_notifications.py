@@ -163,6 +163,12 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
     why = words or _WHY.get(code, escape(code) or "it did not complete")
     if (code in ("not-typed", "permissions-failed") or words) and rollover.failure_detail:
         why = f"{why} ({escape(rollover.failure_detail)})"
+    if code == "successor-untrusted" and rollover.failure_detail:
+        # Held on a dialog only the owner may answer, which the detail names (BL-146).
+        why = (
+            f"the successor still waited on {escape(rollover.failure_detail)} after "
+            f"{_HOURS_TRUST} hours; answer it in its pane"
+        )
     text = f"Rollover failed: {session} — {why}"
     if code not in _PREDECESSOR_NOT_KEPT:
         text = f"{text}; predecessor preserved"

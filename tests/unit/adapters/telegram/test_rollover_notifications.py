@@ -257,3 +257,30 @@ def test_a_note_rollover_whose_successor_was_not_typed_to_names_the_successor() 
 
     assert "successor" in text and "handoff note was not confirmed" not in text
     assert "#4" in text and "still open" in text
+
+
+def test_a_successor_held_on_a_hook_review_is_named_in_its_notice() -> None:
+    """Sub-plan 5 Task 3.2 (BL-146): the patience ran out on a dialog only the owner answers."""
+    text = rollover_message(
+        _report(
+            RolloverState.FAILED,
+            "successor-untrusted",
+            detail="a hook review",
+            successor=_record(4),
+        ),
+        project_name="opaque-editor",
+    )
+
+    assert "a hook review" in text, text
+    assert "answer it in its pane" in text, text
+    assert "predecessor preserved" in text, text
+
+
+def test_a_successor_never_trusted_keeps_the_folder_trust_words() -> None:
+    text = rollover_message(
+        _report(RolloverState.FAILED, "successor-untrusted", successor=_record(4)),
+        project_name="opaque-editor",
+    )
+
+    assert "was not trusted within 2 hours" in text, text
+    assert "hook review" not in text

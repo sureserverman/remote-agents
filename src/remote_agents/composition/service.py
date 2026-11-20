@@ -1320,6 +1320,8 @@ def build_rollover_pass(
         ),
         enabled=enabled,
         idle=terminal.pane_idle,
+        # A successor up on a dialog only the owner may answer is held, not typed (BL-146).
+        owner_dialog=terminal.owner_dialog,
         launch=sessions.launch,
         send=terminal.send_prompt,
         ready=ready if ready is not None else _binding_alone(binder),

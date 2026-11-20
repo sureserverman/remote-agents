@@ -535,6 +535,9 @@ import json, os, sys, time, tty
 from pathlib import Path
 
 HANDOFF, MODE, FAIL_CODE, EXITS = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
+# Sub-plan 5 Task 3.2: told to, it opens on the captured hook review (BL-146) instead.
+HOOKS = len(sys.argv) > 5 and Path(sys.argv[5]).read_text() == "hooks"
+SCREEN = Path(sys.argv[6]).read_text().rstrip() if HOOKS else ""
 me = os.environ["REMOTE_AGENTS_SESSION_ID"]
 handoffs = Path.cwd() / ".claude" / "handoffs"
 log = ["READY"]
@@ -568,6 +571,20 @@ def draw(draft):
 
 tty.setraw(0)
 draft = ""
+if HOOKS:
+    # The real 0.171.0 screen, until the owner's Esc ("esc skip") dismisses it. Every other
+    # key that arrives meanwhile is logged, so a key typed onto the dialog shows on screen.
+    os.write(1, ("\\033[2J\\033[H" + SCREEN.replace("\\n", "\\r\\n")).encode())
+    while True:
+        data = os.read(0, 1024).decode(errors="replace")
+        if not data:
+            sys.exit(0)
+        if data == "\\x1b":
+            log.append("HOOKS: skipped")
+            break
+        log.append("ON DIALOG: " + repr(data))
+        os.write(1, ("\\033[2J\\033[H" + SCREEN.replace("\\n", "\\r\\n")).encode())
+        os.write(1, ("\\r\\n" + log[-1]).encode())
 draw(draft)
 while True:
     data = os.read(0, 1024).decode(errors="replace")
@@ -861,3 +878,148 @@ async def test_a_ready_under_an_unreported_root_opens_nothing(tmp_path: Path) ->
     assert run["states"][run["predecessor"]] is SessionState.RUNNING
     # It was there to be ignored, not missing: the fake wrote it.
     assert (run["elsewhere"] / ".claude" / "handoffs" / f"{HANDOFF}.ready.json").is_file()
+
+
+# -- Sub-plan 5 Task 3.2: a Codex successor on the hook review (BL-146) -----------------------
+
+_HOOKS_SCREEN = (
+    Path(__file__).resolve().parents[1] / "fixtures/panes/codex/dialog_hooks_review_0171.txt"
+)
+
+
+async def test_a_codex_successor_on_a_hook_review_is_held_and_typed_once_after_it(
+    tmp_path: Path,
+) -> None:
+    """The successor opens on "Hooks need review": nothing is typed, the predecessor's row says
+    the rollover is held for it, and once the owner's Esc dismisses it in the pane the `$`
+    template goes in once and the rollover completes. Codex's own composer and owner-dialog
+    declarations, read by the production classifier, launch settle and pass."""
+    from remote_agents.application.rollover_book import RolloverBook
+    from remote_agents.application.session_views import rollover_marks, rollover_note
+
+    project = tmp_path / "opaque-editor"
+    _git_fixture(project)
+    agent, mode_file, exits = tmp_path / "fake_codex.py", tmp_path / "mode", tmp_path / "exits"
+    hooks = tmp_path / "hooks"
+    agent.write_text(_CODEX_AGENT, encoding="utf-8")
+    mode_file.write_text("accept", encoding="utf-8")
+    hooks.write_text("no", encoding="utf-8")
+    exits.mkdir()
+    (codex_profile,) = (p for p in closed_profiles() if p.profile_id == CODEX)
+    socket = f"remote-agents-test-{uuid4().hex}"
+    gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "i")
+    terminal = TmuxTerminal(
+        gateway,
+        {PROJECT: project},
+        {},
+        startup_timeout=10.0,
+        profile_factories={
+            CODEX: lambda session_id, _remote_control: LaunchProfile(
+                sys.executable,
+                (
+                    sys.executable,
+                    str(agent),
+                    HANDOFF,
+                    str(mode_file),
+                    "accept",
+                    str(exits),
+                    str(hooks),
+                    str(_HOOKS_SCREEN),
+                ),
+                {"PATH": os.environ["PATH"], SESSION_ID_VARIABLE: str(session_id)},
+                "READY",
+                codex_profile.graceful_keys,
+            )
+        },
+        composers={
+            "codex": ProviderDescriptor(CODEX, "C", "Codex", composer=codex_descriptor().composer)
+        },
+    )
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    sessions = SessionService(SQLiteSessionStore(connection), terminal)
+
+    async def on() -> bool:
+        return True
+
+    rollover_pass = build_rollover_pass(
+        connection=connection,
+        sessions=sessions,
+        terminal=terminal,
+        enabled=on,
+        project_paths={PROJECT: project},
+        adopt_templates=adopt_templates(),
+    )
+    rollovers = SQLiteRolloverStore(connection)
+    launched: list[SessionId] = []
+
+    async def walk(until: RolloverState, *, passes: int = 60) -> object:
+        row = None
+        for _ in range(passes):
+            await rollover_pass.run_once()
+            launched.extend(
+                record.session_id
+                for record in await sessions.list_sessions()
+                if record.session_id not in launched
+            )
+            rows = rollovers._select("1 = 1", ())
+            row = rows[0] if rows else None
+            if row is not None and row.state is until and row.successor_session_id is not None:
+                return row
+            await asyncio.sleep(0.2)
+        raise AssertionError(
+            None if row is None else (row.state, row.failure_code, row.failure_detail)
+        )
+
+    try:
+        predecessor = (await sessions.launch(LaunchCommand(PROJECT, CODEX, "pred"))).record
+        launched.append(predecessor.session_id)
+        hooks.write_text("hooks", encoding="utf-8")  # only the successor opens on it
+        await _type(terminal, predecessor.session_id, "handoff")
+
+        held = await walk(RolloverState.SUCCESSOR_STARTING)
+        successor = held.successor_session_id
+        for _ in range(5):  # the hold stands, pass after pass
+            await rollover_pass.run_once()
+            await asyncio.sleep(0.2)
+        (row,) = rollovers._select("1 = 1", ())
+        assert row.state is RolloverState.SUCCESSOR_STARTING, (row.state, row.failure_code)
+        listed = tuple(await sessions.list_sessions())
+        states = {record.session_id: record.state for record in listed}
+        assert states[predecessor.session_id] is SessionState.RUNNING, "untouched while held"
+        assert states[successor] in (SessionState.RUNNING, SessionState.STARTING)
+        marks = await rollover_marks(RolloverBook(rollovers), listed)
+        note = rollover_note(marks[str(predecessor.session_id)])
+        # Its first piece; the route (`<project> → <project>`) follows, as on every rollover row.
+        assert note is not None and note.split(" · ")[0] == (
+            "rollover held - successor waits on a hook review"
+        ), note
+        assert await terminal.owner_dialog(successor) == "a hook review"
+        screen = await terminal.capture(successor)
+        assert "Hooks need review" in screen
+        assert "ON DIALOG" not in screen and "GOT:" not in screen, "nothing typed onto it"
+        assert len(launched) == 2, "exactly one successor"
+
+        # The owner answers in the pane: its Esc, "esc skip".
+        await gateway.send_keys(successor, ("Escape",))
+
+        done = await walk(RolloverState.COMPLETED)
+        assert done.successor_session_id == successor
+        screen = await terminal.capture(successor)
+        assert "HOOKS: skipped" in screen
+        assert "ON DIALOG" not in screen, "the template was never typed into the dialog"
+        assert screen.count(f"GOT: {CODEX_TEMPLATE}") == 1
+        states = {record.session_id: record.state for record in await sessions.list_sessions()}
+        assert states[predecessor.session_id] is SessionState.ENDED
+        assert await rollovers.continued_as(predecessor.session_id) == successor
+        assert len(launched) == 2, "still exactly one successor"
+    finally:
+        for session_id in launched:
+            try:
+                await gateway.destroy(session_id)
+            except RuntimeError:
+                pass
+        killing = await asyncio.create_subprocess_exec(
+            "tmux", "-L", socket, "kill-server", stderr=asyncio.subprocess.DEVNULL
+        )
+        await killing.wait()
+        connection.close()

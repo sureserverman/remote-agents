@@ -52,6 +52,7 @@ from remote_agents.ports.git_checkout import GitSummary
 from remote_agents.ports.rollover_store import (
     NOTE_ASKED,
     NOTE_FIRST_TYPED,
+    OWNER_HOLD,
     REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
@@ -293,7 +294,10 @@ def rollover_note(mark: RolloverMark) -> str | None:
     return " · ".join(pieces) or None
 
 
-def _rollover_failure_reason(code: str) -> str:
+def _rollover_failure_reason(code: str, detail: str | None = None) -> str:
+    if code == "successor-untrusted" and detail:
+        # It waited on a dialog only the owner may answer, which `detail` names (BL-146).
+        return f"waiting on {detail} timed out"
     return {
         "successor-untrusted": "folder trust timed out",
         "successor-failed": "successor exited before acceptance",
@@ -395,7 +399,7 @@ async def rollover_marks(
             if any(d.startswith("waiting: legacy-destination-unbound") for d in details):
                 holds[key] = "rollover held · original destination needs owner resolution"
             if state in {RolloverState.FAILED, RolloverState.STOP_FAILED} and latest.failure_code:
-                failures[key] = _rollover_failure_reason(latest.failure_code)
+                failures[key] = _rollover_failure_reason(latest.failure_code, latest.failure_detail)
         if (
             state is RolloverState.REQUESTED
             and latest is not None
@@ -416,8 +420,13 @@ async def rollover_marks(
                 waiting.add(str(record.session_id))
         if state is RolloverState.SUCCESSOR_STARTING and latest is not None:
             details = {event.detail for event in history(latest.id)}
+            owner = sorted(d for d in details if d and d.startswith(OWNER_HOLD))
             if TRUSTED_WAITING in details:
                 idle_waits.add(str(record.session_id))
+            elif owner:
+                # Held on a dialog only the owner may answer (BL-146), said by its name until
+                # the pass moves on: once answered, the next pass types or waits for idle.
+                holds[key] = f"rollover held - successor waits on {owner[0][len(OWNER_HOLD) :]}"
             elif TRUST_HOLD in details:
                 held[str(record.session_id)] = latest.successor_session_id
         before = readings.continued_from.get(record.session_id)
