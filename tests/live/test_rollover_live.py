@@ -701,6 +701,7 @@ def _compose(
     *,
     apply_presets_in: Path | None = None,
     applier_tries: list[str] | None = None,
+    note_rollable: frozenset[ProfileId] = frozenset(),
 ) -> _Harness:
     """`_private_boundary`'s wiring of everything the rollover needs, with no bot boundary.
 
@@ -789,6 +790,7 @@ def _compose(
         enabled=backend.auto_rollover.read,
         project_paths=projects.paths,
         adopt_templates=adopt_templates(),
+        note_rollable=note_rollable,
         notify=notify,
         worktrees=worktrees.store,
         folders=worktrees.folders,

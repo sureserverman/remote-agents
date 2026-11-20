@@ -208,3 +208,40 @@ qualification remains an independent final gate.
   the use case, the bot and the console action, each proven by breaking it. Native turns
   under a changed mode are Stage 4's drill.
 
+
+## WF-CONT-007 — Roll over a session that runs no plan
+
+- **Entry:** Telegram session screen → `🔁 Rollover with a note` (`session.rollover.note`, a
+  claimed mutation); terminal session detail → `Rollover with a note` row. Both call
+  `RolloverBook.press(NOTE_ROLLOVER, …)`; the pass in `serve` (`RolloverPass`) does the rest.
+- **Preconditions:** A RUNNING session of a profile whose descriptor declares `note_rollover`
+  (Claude, Codex), with no rollover open. The auto-rollover switch is **not** read: the press
+  is the owner's consent for this one rollover (OD-2). The session has a handoff root (a git
+  checkout, or a root its writer reported) whose path can be typed safely.
+- **Steps:**
+  1. The press writes one REQUESTED `rollovers` row of kind `note`, id `n-<20 hex>`. A second
+     press, of either rollover, writes none.
+  2. Once the session's pane is IDLE, the pass makes `<root>/.claude/handoffs/` (with its
+     `.gitignore` holding `*`), records `note requested` in the store's own conditional
+     statement, then types `NOTE_REQUEST` holding the note's path through the guarded send.
+  3. When `<id>.note.md` is a regular file of this user's, reached without a link, of 1 byte to
+     32 KiB, and the pane is IDLE again, the row moves to HANDOFF_READY.
+  4. A successor starts where the session works (same project, profile and folder), through the
+     trust hold, the thread binding and the permission wait. It is typed
+     `NOTE_FIRST_MESSAGE` holding the note's path, once; `first message typed` is recorded
+     before the keys.
+  5. A finished turn the successor reports at or after that record is its adoption:
+     SUCCESSOR_ACCEPTED, then the graceful, idle-only stop of the old session.
+- **Postconditions:** COMPLETED; the rows show the lineage (`continued as #N`); the note file is
+  gone. Short of it: `predecessor-not-idle` (not idle within 10 minutes of the press, or a note
+  written by a session that never went idle again), `note-unwritten` (no note within
+  10 minutes of the asking), `note-refused` (something at the note's name that is not a note),
+  `not-typed`, `adoption-timeout` (no finished turn within 30 minutes). Each failure sends one
+  notice and keeps the old session running.
+- **Side effects:** One `rollovers` row and its history; the note file, removed at every
+  terminal state; one successor session on success. Never `request.json`.
+- **Invariants:** The service types only its two fixed sentences, and no byte of either comes
+  from the session or the agent — the note's words are never typed. Nothing is typed into a
+  pane that is not idle. Each sentence is typed at most once, across restarts. "Cancel
+  rollover" before the request is typed means nothing is typed. The old session is never
+  stopped before its successor's finished turn.

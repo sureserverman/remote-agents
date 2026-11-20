@@ -798,6 +798,40 @@ handoff's envelopes, so its id cannot be adopted by hand afterwards. A failure a
 can leave the successor open; the message says so (*Its successor #N is still open*). Stop it
 if it is not needed.
 
+### Rollover with a note
+
+A session that runs no plan has no workflow to hand off, so **Rollover now** would only wait
+and end `request-unanswered`. **Rollover with a note** moves it instead (BL-119, WF-CONT-007):
+the button on the bot's session screen, or the row of the same name in the terminal's session
+detail. It is offered on a running `claude` or `codex` session with no rollover open, **whatever
+the auto-rollover switch says**: your press is the consent for this one rollover. OpenCode and
+Cursor sessions do not offer it.
+
+1. Once the session is idle, the service types one fixed request into it: *Write a handoff note
+   for a fresh session to `<root>/.claude/handoffs/<id>.note.md` … Write only that file, then
+   stop.* The row reads *rollover with a note · waiting for this session to be idle*, then
+   *… waiting for the session's note*.
+2. Once the note is there and the session is idle again, a fresh session of the same agent
+   starts in the same folder (through the usual trust and permission steps) and is typed one
+   fixed message: *Read `<path>` and continue the work it describes.*
+3. When that fresh session finishes its first turn, the old one is stopped gracefully, only onto
+   an idle composer. The row reads *continued as #N*; the note file is removed.
+
+The service types only those two sentences. Neither holds a word the agent wrote, and each is
+typed at most once. **Cancel rollover** before the request is typed means nothing is typed.
+
+Its own failure codes (the old session is kept running in every one, and one notice says so):
+
+- **`predecessor-not-idle`** — the session was not idle within 10 minutes of the press, or it
+  wrote its note and then never went idle again. Let it finish, then press again.
+- **`note-unwritten`** — the session wrote no note within 10 minutes of being asked. Look at its
+  pane: it may have refused, or be asking you something. Press again when it is idle.
+- **`note-refused`** — what the session left at the note's name is not a note (a link, a
+  directory, an empty file, over 32 KiB, another user's). Remove it and press again.
+- **`not-typed`** — the request, or the fresh session's first message, was not confirmed typed.
+- **`adoption-timeout`** — the fresh session did not finish a turn within 30 minutes. It is left
+  open: look at its pane, and stop whichever session you do not want.
+
 ### Failure codes and what to do next
 
 Each is recorded on the rollover as `FAILED: <code>`. None of them touches the old session.

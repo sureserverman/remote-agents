@@ -1101,6 +1101,12 @@ An interrupted launch with an unknown result holds for inspection; it never star
 pane to guess what happened. A verified workflow-finished signal clears only its matching
 outstanding request and starts or stops no session.
 
+A session that runs no plan can still move to a fresh one: **Rollover with a note**, on a
+running Claude or Codex session, asks the idle agent to write a short handoff note, starts a
+fresh session of the same agent in the same folder, types it the note's path, and stops the old
+session once the new one has finished its first turn. It needs no switch: the press is the
+consent. The service types only its two fixed sentences, never the note's words.
+
 Both hosts need a compatible staged-planning writer. Cross-project destinations require a
 reader advertising protocol v2; existing sessions keep the capability advertised at launch.
 The reader still supports v1 and rejects the retired protocol identity. OpenCode and Cursor
