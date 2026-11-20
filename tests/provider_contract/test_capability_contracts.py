@@ -185,6 +185,19 @@ def test_daemon_contract(descriptor) -> None:
     assert daemon.stop_hint.strip(), f"{descriptor.profile_id}'s daemon has no stop hint"
 
 
+def test_a_title_watch_and_an_approval_title_come_together(descriptor) -> None:
+    """A `HYBRID` provider's hooks miss some asks, which only its approval title shows; one that
+    forgot the title would be watched for nothing and lose those asks in silence. And a title
+    on a provider whose hooks see every ask would never be read (BL-131)."""
+    from remote_agents.ports.agent_activity import ActivitySource
+
+    hybrid = descriptor.activity is not None and descriptor.activity.source is ActivitySource.HYBRID
+    assert hybrid == (descriptor.action_required_title is not None), (
+        f"{descriptor.profile_id}: HYBRID={hybrid} but action_required_title is "
+        f"{descriptor.action_required_title!r}"
+    )
+
+
 def test_action_required_title_contract(descriptor) -> None:
     """A provider declaring `action_required_title` gives an anchored pattern that matches no
     title an agent draws when nothing is asked: an empty one, or a bare project name."""

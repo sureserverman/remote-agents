@@ -141,7 +141,8 @@ def _reviewer_of(line: bytes) -> str | None:
 #: inside `tool_input` rather than at the top level `detail_fields` are read from.
 #:
 #: **Not because nothing would render it.** That was the first reason given and it was wrong --
-#: it holds for `reason`, which only ever feeds `_kind`, and not for `detail`, which is
+#: it holds for `reason`, which only selects a kind by reason (no Codex event has one), and not
+#: for `detail`, which is
 #: provider-agnostic and renders on both surfaces with no renderer change. The Stage 2 gate
 #: evaluator checked rather than believed it.
 #:

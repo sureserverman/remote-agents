@@ -516,20 +516,30 @@ def profiles_with_finished_events(
     return frozenset(finishing)
 
 
+def _profile_descriptors(
+    descriptors: tuple[ProviderDescriptor, ...] | None,
+) -> dict[str, ProviderDescriptor]:
+    """Every curated profile's descriptor, found by its id or else by its executable's."""
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    found = {}
+    for profile in closed_profiles():
+        name = str(profile.profile_id)
+        descriptor = by_provider.get(name) or by_provider.get(profile.executable or "")
+        if descriptor is not None:
+            found[name] = descriptor
+    return found
+
+
 def _profile_licences(
     descriptors: tuple[ProviderDescriptor, ...] | None,
 ) -> dict[str, HookLicence]:
     """Every curated profile whose vertical declares a hook licence, folded like the others."""
-    built = provider_descriptors() if descriptors is None else descriptors
-    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
-    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
-    licences = {}
-    for profile in closed_profiles():
-        name = str(profile.profile_id)
-        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
-        if descriptor is not None and descriptor.activity is not None:
-            licences[name] = descriptor.activity
-    return licences
+    return {
+        name: descriptor.activity
+        for name, descriptor in _profile_descriptors(descriptors).items()
+        if descriptor.activity is not None
+    }
 
 
 def activity_source_of(
@@ -607,16 +617,15 @@ def profiles_watched_by_title(
     costs no tmux round trip, because its title can never carry the marker. A `HYBRID` profile
     that declares no title is left out, since there would be nothing to match.
     """
-    built = provider_descriptors() if descriptors is None else descriptors
-    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
-    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
-    watched: dict[str, Pattern[str]] = {}
-    for name, licence in _profile_licences(built).items():
-        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
-        title = None if descriptor is None else descriptor.action_required_title
-        if licence.source is ActivitySource.HYBRID and title is not None:
-            watched[name] = title
-    return MappingProxyType(watched)
+    return MappingProxyType(
+        {
+            name: descriptor.action_required_title
+            for name, descriptor in _profile_descriptors(descriptors).items()
+            if descriptor.activity is not None
+            and descriptor.activity.source is ActivitySource.HYBRID
+            and descriptor.action_required_title is not None
+        }
+    )
 
 
 def profile_reported_kinds(
@@ -794,13 +803,13 @@ an auditing one — and ``--remove`` then deleted it outright. Mentioning a comm
 running it have to be different things here, because the cost of confusing them is somebody
 else's hook, and this module has no way to give that back.
 
-*The hooks are installed without matchers.* ``StopFailure``, ``Notification`` and
-``SessionEnd`` each discriminate on a field of their own — ``error``, ``notification_type``,
-``reason``, as the installed bundle spells them — and a matcher here would have to enumerate
-the values each can take. The spool on the other end already reads whichever of those fields
-an event happens to carry, so filtering in the settings file would only add a second place to
-keep in step with upstream, and a value added there would go silently unreported. Every
-instance is received and the application layer decides. Two of those three names were wrong
+*The hooks are installed without matchers.* ``StopFailure`` and ``Notification`` each
+discriminate on a field of their own — ``error`` and ``notification_type``, as the installed
+bundle spells them — and a matcher here would have to enumerate the values each can take. The
+spool on the other end reads that field and keeps only the reasons Claude's licence maps, so
+filtering in the settings file would only add a second place to keep in step with upstream,
+and a value added there would go silently unreported. Every instance is received and the
+licence decides (BL-131). Two of those three names were wrong
 here until the Stage 3 gate compared them with the agent rather than with our own fixtures;
 see the comment on Claude's licence (``claude/hooks.py`` ``_RECORD``) for what that cost.
 """

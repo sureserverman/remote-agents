@@ -85,10 +85,10 @@ PROVIDER = _HookProvider(
 #: The field each event discriminates on, as the installed agent actually spells them.
 #:
 #: Measured against `~/.local/share/claude/versions/2.1.227`, not assumed:
-#: `StopFailure` carries `error`, `Notification` carries `notification_type`, `SessionEnd`
-#: carries `reason`. Two of these were previously `error_type` and `end_reason`, which made
-#: `limit_reached` an unreachable kind: a managed session stopping on a rate limit spooled a
-#: record whose reason was `None`, and the drain dropped it as an event it could not
+#: `StopFailure` carries `error`, `Notification` carries `notification_type`, and the retired
+#: `SessionEnd` carried `reason`. Two of these were previously `error_type` and `end_reason`,
+#: which made `limit_reached` an unreachable kind: a managed session stopping on a rate limit
+#: spooled a record whose reason was `None`, and the drain dropped it as an event it could not
 #: interpret. Silently, and for the one thing a phone notification is most wanted for.
 #:
 #: `end_reason` appears nowhere in that bundle. `error_type` appears 58 times and **never in a
@@ -149,14 +149,25 @@ _STOP_FAILURES = MappingProxyType(
 )
 
 #: Which `Notification` types mean something this service will say out loud. (Moved here from
-#: `application.activity._NOTIFICATIONS`, BL-131; the history of each type is kept there.)
+#: `application.activity._NOTIFICATIONS` with its history, BL-131.)
 #:
-#: `permission_prompt` left on 2026-09-19 (DEC-098): every one shares a `prompt_id` with a
-#: `PermissionRequest` for the same ask, so mapping it sent a wordless twin. `idle_prompt` was
-#: never mapped: a sixty-second idle timer answers "why did it stop" wrongly too often.
-#: `agent_needs_input` comes from the `claude agents` view, when a background session it lists
-#: changes to blocked (measured, BL-048), and is filed under the pane that runs the view -- hence
-#: its lead.
+#: **`permission_prompt` left on 2026-09-19 (DEC-098), on a measurement.** Every one of them
+#: shares a `prompt_id` with a `PermissionRequest` for the same ask -- 3 of 3 observed, unmatched
+#: set empty (`docs/acceptance-2026-09-19-ask-payloads.md`). With `PermissionRequest` installed,
+#: mapping it would send a wordless twin of an ask the owner is already being told about. Its
+#: whole payload was the constant `Claude needs your permission`, which the ask class says better.
+#:
+#: **`idle_prompt` was retired.** A sixty-second idle timer, it was carried for a while as an
+#: inferred `needs_answer`; it answers "why did it stop" wrongly often enough on an agent merely
+#: thinking, and when it is right one of the reported notices says the same thing.
+#:
+#: **`agent_needs_input` stays, measured since 2026-10-10 (BL-048).** It does not come from an
+#: idle session: the 2026-09-19 drill idled 90 s for it and got `idle_prompt`. It comes from the
+#: `claude agents` view, which fires it when a background session it lists changes to blocked,
+#: carrying `message`, `"<label> needs your input: <needs>"`
+#: (`docs/acceptance-2026-10-09-claude-agent-needs-input.md`). It is recorded under the pane that
+#: runs the view, not the blocked agent, hence its lead, `AGENTS_VIEW` (DEC-037 and DEC-098 as
+#: amended 2026-11-18): without it the line reads as the hosting session asking.
 _NOTIFICATIONS = MappingProxyType({"agent_needs_input": ActivityKind.NEEDS_ANSWER})
 
 AGENTS_VIEW = "from the agents view"

@@ -23,14 +23,14 @@ import pathlib
 
 _SOURCE = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 
-#: The shared modules: the application and its ports and domain, and the spool, which is the one
-#: adapter every provider's hook runs through.
-_SHARED = (
-    _SOURCE / "application",
-    _SOURCE / "ports",
-    _SOURCE / "domain",
-    _SOURCE / "adapters" / "agents" / "activity_spool.py",
-)
+
+#: Every module outside the provider packages is shared: the application, its ports and
+#: domain, the spool and the other `adapters/agents` modules every vertical runs through, and
+#: composition. The packages are the ones the provider-package rule already names.
+def _vertical_packages() -> set[pathlib.Path]:
+    from test_a_provider_lives_in_one_package import PROVIDERS
+
+    return {_SOURCE / "adapters" / "agents" / name for name in PROVIDERS}
 
 
 def _event_names() -> set[str]:
@@ -67,8 +67,16 @@ def _docstrings(tree: ast.AST) -> set[ast.AST]:
 
 
 def _deciding_constants(tree: ast.AST) -> set[ast.Constant]:
-    """String constants that code decides by: compared, tested, looked up or used as a key."""
+    """String constants that code decides by: compared, tested, looked up or used as a key --
+    directly, or through a name the same module binds to the constant and then decides by."""
     deciding: set[ast.Constant] = set()
+    bound: dict[str, list[ast.Constant]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign | ast.AnnAssign) and isinstance(node.value, ast.Constant):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and isinstance(node.value.value, str):
+                    bound.setdefault(target.id, []).append(node.value)
 
     def strings(node: ast.AST) -> list[ast.Constant]:
         return [
@@ -95,6 +103,17 @@ def _deciding_constants(tree: ast.AST) -> set[ast.Constant]:
         elif isinstance(node, ast.Set):
             # A set literal exists to be tested against: `TURN_ENDED = frozenset({"Stop", ...})`.
             deciding.update(strings(node))
+    # `_STOP = "Stop"` and then `event == _STOP`: the name decides, so its constant does.
+    for node in ast.walk(tree):
+        sides: list[ast.AST] = []
+        if isinstance(node, ast.Compare):
+            sides = [node.left, *node.comparators]
+        elif isinstance(node, ast.Subscript):
+            sides = [node.slice]
+        for side in sides:
+            for child in ast.walk(side):
+                if isinstance(child, ast.Name) and child.id in bound:
+                    deciding.update(bound[child.id])
     return deciding
 
 
@@ -116,10 +135,12 @@ def offenders_in(source: str, names: set[str], where: str) -> list[str]:
 
 
 def _shared_files() -> list[pathlib.Path]:
-    files: list[pathlib.Path] = []
-    for root in _SHARED:
-        files.extend([root] if root.is_file() else sorted(root.rglob("*.py")))
-    return files
+    verticals = _vertical_packages()
+    return [
+        path
+        for path in sorted(_SOURCE.rglob("*.py"))
+        if not any(path.is_relative_to(package) for package in verticals)
+    ]
 
 
 def test_no_shared_module_spells_a_providers_event_name() -> None:
@@ -149,6 +170,14 @@ def test_the_rule_sees_a_name_put_back_into_the_drain() -> None:
     assert offenders_in('kind = {"Stop": 1}.get(event)\n', names, "x")
     assert offenders_in('if event in ("stop", "other"):\n    pass\n', names, "x")
     assert offenders_in('ENDED = frozenset({"Stop"})\n', names, "x")
+    assert offenders_in('_STOP = "Stop"\nif event == _STOP:\n    pass\n', names, "x")
+
+
+def test_the_four_verticals_are_the_only_exempt_packages() -> None:
+    names = {package.name for package in _vertical_packages()}
+
+    assert names == {"claude", "codex", "cursor", "opencode"}
+    assert any(path.name == "activity_spool.py" for path in _shared_files())
 
 
 def test_an_ordinary_word_that_decides_nothing_is_not_an_event_name() -> None:

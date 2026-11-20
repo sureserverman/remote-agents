@@ -150,9 +150,11 @@ def spool_agent_event(
     `licence` is a lookup, not a value, and required. It is called only past the session gate,
     because finding a licence imports a whole vertical: done earlier, every turn of every
     session on the machine paid for it -- 144 modules became 214-232 on the "not mine" path --
-    and a broken vertical raised into the agent before this frame could swallow it. It is also
-    never called before a finished turn ends its marker, which needs no licence. Required, so a
-    caller cannot forget it and get silence by default.
+    and a broken vertical raised into the agent before this frame could swallow it. Past the
+    gate it is the first thing called, because the licence names which event starts a turn and
+    which ends one (BL-131): a vertical that cannot load therefore leaves a started marker for
+    the screen read to end (DEC-104, DEC-143). Required, so a caller cannot forget it and get
+    silence by default.
 
     **Whose event it is.** When the service has written a roster for `hook_name`, the payload
     names the session and the environment is not read at all (DEC-126): a provider that runs its

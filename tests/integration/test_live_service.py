@@ -1725,8 +1725,9 @@ async def test_only_an_actionable_report_about_a_live_session_reaches_the_owner(
 ) -> None:
     """The whole of the value filter, driven through the real drain and the real notifier.
 
-    Each half is already pinned on its own -- the mapping drops `SessionEnd` and the idle
-    timer in `tests/unit/application/test_activity.py`, and `_display_for` declines a finished
+    Each half is already pinned on its own -- Claude's licence gives `SessionEnd` and the idle
+    timer no meaning, so the hook writes nothing for them
+    (`tests/unit/adapters/agents/test_activity_spool.py`), and `_display_for` declines a finished
     session above. Neither of those runs the two together, and the two together are what the
     owner actually experiences: one pass, four spooled records, one message.
 

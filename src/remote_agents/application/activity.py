@@ -3,9 +3,11 @@
 The spool is the boundary between a hook running inside somebody else's process and this
 service. Everything on the far side is untrusted in the ordinary sense -- it may be absent,
 truncated, or shaped differently by a newer agent release -- so every step here drops what it
-cannot read rather than raising, and a record that reaches no mapping is dropped rather than
-guessed at. Reporting the wrong reason an agent stopped is worse than reporting nothing: the
-owner acts on these.
+cannot read rather than raising, and a record whose meaning this service does not know is
+dropped rather than guessed at. What an event means is declared in its provider's licence and
+written into the record by the hook as a `kind` token (BL-131, DEC-143); this module reads the
+token and never an event name. Reporting the wrong reason an agent stopped is worse than
+reporting nothing: the owner acts on these.
 
 Two events are dropped for a second reason, which is not that they cannot be read but that the
 owner has nothing to do about either. Both were mapped once, and they fail that bar
@@ -16,7 +18,7 @@ it announces an ending it cannot characterise. The sixty-second idle notificatio
 the opposite reason: it is unreliable in both directions, and on the occasions it is right,
 `permission_prompt` or `agent_needs_input` has usually already said the same thing as a fact
 rather than a guess. Everything built from these records arrives unprompted, so an observation
-that is true and carries nothing to do is a cost with no return -- and the mapping is the right
+that is true and carries nothing to do is a cost with no return -- and the licence is the right
 place to decide that, because a kind that is never produced cannot then be rendered,
 rate-limited, or delivered by mistake somewhere further down.
 
