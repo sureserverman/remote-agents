@@ -112,7 +112,7 @@ def test_the_opencode_field_allow_lists_are_exactly_what_the_measurement_license
     measurement licensed, and a decision nothing asserts is one the next edit makes silently.
     """
     events = HOOK_LICENCE.events
-    assert HOOK_LICENCE.unlisted_events is None
+    assert set(events) == {"session.idle", "permission.asked"}
     assert all(f.detail_fields == () and not f.detail_from_tool_input for f in events.values())
     assert all(f.discriminating_fields == () for f in events.values())
     assert {event: f.ask_fields for event, f in events.items() if f.ask_fields} == {

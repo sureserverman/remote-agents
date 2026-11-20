@@ -5,13 +5,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
-from remote_agents.ports.provider_descriptor import EventLicence, HookIdentity, HookLicence
+from remote_agents.ports.provider_descriptor import (
+    EventLicence,
+    HookIdentity,
+    HookLicence,
+    TurnEdge,
+)
 
 #: `UserPromptSubmit` joined 2026-09-24 (BL-108, DEC-104) to start the turn marker. Codex 0.155.1
 #: was measured firing it by that name, beside `SessionStart`, in a hook-event log that day. Two
@@ -180,21 +186,33 @@ def _reviewer_of(line: bytes) -> str | None:
 #: reader is what keeps an unverified space from becoming a rendering surface: a value carrying
 #: a space, a slash or a quote is not a tool class this project recognises, and it is dropped
 #: rather than drawn under the owner's session name.
+#: The pane title Codex draws while a native local approval is open, which its hooks never see
+#: (BL-034, DEC-063). This is terminal metadata, not an upstream hook contract: a later Codex
+#: release may drop it, and then the title watcher safely infers nothing.
+ACTION_REQUIRED_TITLE = re.compile(r"^\[ \S \] Action Required \| ")
+
 HOOK_LICENCE = HookLicence(
     events=MappingProxyType(
         {
             # Measured, never assumed: `docs/acceptance-2026-08-29-codex-activity-detail.md`.
             # `message` was never observed on a Codex payload, so only the finished turn's last
             # words are read -- a field this project has not seen is not a field it reads.
-            "Stop": EventLicence(detail_fields=("last_assistant_message",)),
+            "Stop": EventLicence(
+                kind=ActivityKind.COMPLETED,
+                turn=TurnEdge.ENDS,
+                detail_fields=("last_assistant_message",),
+            ),
             # `tool_name` as the ask (DEC-074), and the ask's own words from `tool_input`
             # (DEC-098). No `reason`: nothing here discriminates a Codex event into a kind.
             "PermissionRequest": EventLicence(
-                ask_fields=("tool_name",), detail_from_tool_input=True
+                kind=ActivityKind.NEEDS_ANSWER,
+                ask_fields=("tool_name",),
+                detail_from_tool_input=True,
             ),
+            # Starts the marker, as Claude's does (DEC-104); the prompt is never read.
+            "UserPromptSubmit": EventLicence(turn=TurnEdge.STARTS),
         }
     ),
-    starts_turn_marker=True,
     # Hooks plus a pane-title watch: Codex escalates natively past its hook (DEC-063).
     source=ActivitySource.HYBRID,
     # Stop and PermissionRequest only. Codex has no StopFailure equivalent, so neither limit kind

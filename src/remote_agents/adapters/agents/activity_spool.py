@@ -338,9 +338,8 @@ def _observed(
     The event name is matched exactly against the licence's own list, not through
     `_plain_token`: OpenCode's names carry a dot, and widening the token reader to admit one
     would loosen the guard on `reason` and on every `ask` at the same time to make one
-    provider's vocabulary fit. An exact list is narrower than the reader rather than wider.
-    Only an event the licence does not list is read as a token, and only for a licence that
-    admits unlisted events at all.
+    provider's vocabulary fit. An exact list is narrower than the reader rather than wider. An
+    event the licence does not list writes nothing (BL-131: its meaning is undeclared).
 
     Every field below is read through the licence's tuples and nothing else, so a field no
     vertical declared never reaches disk (DEC-013, DEC-037); what crosses is bounded by
@@ -353,10 +352,8 @@ def _observed(
     if not isinstance(event, str):
         return None
     fields = licence.events.get(event)
-    if fields is None:
-        if licence.unlisted_events is None or _plain_token(event) is None:
-            return None
-        fields = licence.unlisted_events
+    if fields is None or (fields.kind is None and not fields.kinds_by_reason):
+        return None
     if licence.admits is not None and not licence.admits(document):
         return None
     return ObservedAgentEvent(

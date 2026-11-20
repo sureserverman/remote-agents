@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from remote_agents.adapters.agents.codex.account_limits import CodexAccountLimitsReader
-from remote_agents.adapters.agents.codex.hooks import HOOK_LICENCE
+from remote_agents.adapters.agents.codex.hooks import ACTION_REQUIRED_TITLE, HOOK_LICENCE
 from remote_agents.adapters.agents.codex.limit_screen import LIMIT_SCREEN
 from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
 from remote_agents.adapters.agents.codex.sessions import (
@@ -64,6 +64,12 @@ def descriptor() -> ProviderDescriptor:
             pid=daemon_pid,
             stop_hint="stop Codex's app-server daemon (`codex app-server daemon stop`)",
         ),
+        # Observed in the managed Codex TUI while a native local approval is open (BL-034,
+        # DEC-063): Codex animates the bracket (`[ ! ]` and `[ . ]` alternate), so one
+        # non-space glyph is admitted there, and the project name after the separator varies.
+        # Anchored at the start, so a title that merely contains the marker does not match.
+        # Moved here from `application.activity` (BL-131).
+        action_required_title=ACTION_REQUIRED_TITLE,
         # Measured 2026-09-28 on codex-cli 0.158.0, which redrew the dialog (acceptance
         # 2026-09-09 § 9): "Trust this folder?" under a `Folder access` heading, the cursor
         # still on the **affirmative** -- the opposite of claude's, which is the whole reason

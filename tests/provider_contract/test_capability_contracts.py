@@ -21,6 +21,7 @@ from pathlib import Path
 from kit import drive_or_skip
 
 from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
+from remote_agents.ports.provider_descriptor import TurnEdge
 
 
 def test_sessions_contract(descriptor, tmp_path: Path) -> None:
@@ -90,15 +91,14 @@ def test_hooks_contract(descriptor, tmp_path: Path) -> None:
 def test_activity_contract(descriptor) -> None:
     """The hook licence admits exactly the events the installer subscribes the hook to.
 
-    The installed events a licence does not list are the turn-start event of a provider whose
-    hook marks turns and the event that means its agent came up: the spool answers each with a
-    mark and returns before reading a record (DEC-104, DEC-135), so listing one would license a
-    record no path writes. A licence listing an event
+    The one installed event a licence does not list is the event that means its agent came up:
+    the spool answers it with a mark and returns before reading a record (DEC-135). The
+    turn-start event is listed, since its licence's `turn` is what starts the marker (BL-131).
+    A licence listing an event
     nobody installs admits what never fires; one missing an installed event drops every record
     that event carries, silently, on both surfaces (BL-050).
     """
     licence = drive_or_skip(descriptor, "activity")
-    from remote_agents.adapters.agents.activity_spool import TURN_STARTED
     from remote_agents.adapters.agents.registry import _provider
     from remote_agents.ports.provider_descriptor import HookLicence
 
@@ -107,9 +107,7 @@ def test_activity_contract(descriptor) -> None:
         f"{descriptor.profile_id} licenses a hook it never installs"
     )
     installed = set(_provider(descriptor.hooks).installed_events)
-    marker = {TURN_STARTED} if licence.starts_turn_marker else set()
-    if licence.started_event is not None:
-        marker.add(licence.started_event)
+    marker = set() if licence.started_event is None else {licence.started_event}
     assert set(licence.events) == installed - marker, (
         f"{descriptor.profile_id}'s licence admits {sorted(licence.events)} but its hook is "
         f"installed for {sorted(installed)}"
@@ -119,6 +117,42 @@ def test_activity_contract(descriptor) -> None:
     assert licence.conversation_event is None or licence.conversation_event in licence.events, (
         f"{descriptor.profile_id} names its conversation on {licence.conversation_event!r}, "
         "which its licence does not admit"
+    )
+
+
+def test_every_installed_event_declares_what_it_means(descriptor) -> None:
+    """Each event a licence admits says what it means, so shared code never has to (BL-131).
+
+    A kind, a table by reason, a turn edge, or the declared answer "nothing". An entry with none
+    of these is a licence that forgot to say: the hook would write no record for it, silently.
+    """
+    licence = drive_or_skip(descriptor, "activity")
+    for name, event in licence.events.items():
+        assert (
+            event.kind is not None
+            or event.kinds_by_reason
+            or event.turn is not None
+            or event.means_nothing
+        ), f"{descriptor.profile_id}'s {name!r} declares no meaning"
+        assert not (event.kind is not None and event.kinds_by_reason), (
+            f"{descriptor.profile_id}'s {name!r} declares a kind and a table by reason"
+        )
+        assert set(event.detail_lead_by_reason) <= set(event.kinds_by_reason), (
+            f"{descriptor.profile_id}'s {name!r} leads a detail for a reason that means nothing"
+        )
+        assert not (event.means_nothing and (event.kind or event.kinds_by_reason or event.turn))
+    # A turn that starts must be able to end, or the marker never clears (DEC-104).
+    edges = {event.turn for event in licence.events.values()} - {None}
+    assert edges in (set(), {TurnEdge.STARTS, TurnEdge.ENDS}), (
+        f"{descriptor.profile_id} marks only {sorted(e.value for e in edges)} of a turn"
+    )
+    # Every kind it can write is one it says it reports.
+    written = {event.kind for event in licence.events.values()} - {None}
+    for event in licence.events.values():
+        written |= set(event.kinds_by_reason.values())
+    assert written <= licence.reports, (
+        f"{descriptor.profile_id} writes {sorted(k.value for k in written - licence.reports)} "
+        "without reporting it"
     )
 
 
@@ -149,6 +183,18 @@ def test_daemon_contract(descriptor) -> None:
     pid = daemon.pid()
     assert pid is None or (isinstance(pid, int) and pid > 0)
     assert daemon.stop_hint.strip(), f"{descriptor.profile_id}'s daemon has no stop hint"
+
+
+def test_action_required_title_contract(descriptor) -> None:
+    """A provider declaring `action_required_title` gives an anchored pattern that matches no
+    title an agent draws when nothing is asked: an empty one, or a bare project name."""
+    import re
+
+    pattern = drive_or_skip(descriptor, "action_required_title")
+    assert isinstance(pattern, re.Pattern)
+    assert pattern.pattern.startswith("^"), "a title that merely contains the marker must not ask"
+    assert pattern.match("") is None
+    assert pattern.match("remote-agents") is None
 
 
 def test_remote_control_contract(descriptor) -> None:

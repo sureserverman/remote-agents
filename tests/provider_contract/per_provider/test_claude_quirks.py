@@ -118,7 +118,6 @@ def test_background_work_pauses_only_the_stop() -> None:
             "permission_prompt",
             "Claude needs your permission to use Bash",
         ),
-        ("session_end.json", "SessionEnd", "logout", None),
     ],
 )
 def test_each_claude_event_discriminates_on_its_own_field(
@@ -126,9 +125,7 @@ def test_each_claude_event_discriminates_on_its_own_field(
 ) -> None:
     """The corrected vocabulary: `error`, `notification_type`, `reason` -- never `error_type`
     or `end_reason`, the two assumed names that once made `limit_reached` unreachable in
-    silence (the comment on Claude's `_RECORD` carries the full account). `SessionEnd`
-    is retired (DEC-051) but its `reason` must still parse correctly on the way to being
-    dropped, for hosts that have not re-run `install-agent-hooks`.
+    silence (the comment on Claude's `_RECORD` carries the full account).
     """
     observed = _claude(_fixture(name))
 
@@ -169,15 +166,13 @@ def test_a_punctuated_reason_degrades_to_none_rather_than_reaching_disk() -> Non
     assert observed.reason is None
 
 
-def test_claude_admits_events_by_shape_not_by_allow_list() -> None:
-    """The claude branch has no event allow-list -- deliberately, unlike Codex's: reading
-    the discriminating fields as a group keeps an event added upstream from silently
-    losing its record, and the drain decides what to interpret.
-    """
-    observed = _claude({**_fixture("stop.json"), "hook_event_name": "SomeFutureEvent"})
-
-    assert observed is not None
-    assert observed.event == "SomeFutureEvent"
+def test_an_event_claude_s_licence_does_not_list_writes_nothing() -> None:
+    """Since BL-131 the licence says what an event means, so an event it does not list -- one
+    added upstream, or the retired `SessionEnd` from a host that has not re-run
+    `install-agent-hooks` (DEC-051) -- has no meaning and writes no record. Until then the
+    drain read such records and dropped every one it had no mapping for."""
+    assert _claude({**_fixture("stop.json"), "hook_event_name": "SomeFutureEvent"}) is None
+    assert _claude(_fixture("session_end.json")) is None
 
 
 def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk() -> None:
@@ -199,7 +194,6 @@ def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk
         "stop_failure.json",
         "notification.json",
         "notification_agent_needs_input.json",
-        "session_end.json",
     ):
         payload = _fixture(name)
         observed = _claude(payload)

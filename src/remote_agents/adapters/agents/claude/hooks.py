@@ -9,7 +9,7 @@ from types import MappingProxyType
 
 from remote_agents.adapters.agents.hook_settings import _HookProvider
 from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
-from remote_agents.ports.provider_descriptor import EventLicence, HookLicence
+from remote_agents.ports.provider_descriptor import EventLicence, HookLicence, TurnEdge
 
 INSTALLED_EVENTS = (
     "Stop",
@@ -103,13 +103,10 @@ PROVIDER = _HookProvider(
 #: the two halves agreed with each other and neither was ever compared with the agent.
 #: `tests/live/test_agent_activity_hooks.py` is where that comparison now lives. (Moved here
 #: from `activity_spool._DISCRIMINATING_FIELDS` with the values, BL-050.)
-#: `reason` is `SessionEnd`'s, and `SessionEnd` is retired (DEC-051). It stays because a host
-#: that has not re-run `install-agent-hooks` yet is still firing that hook at this spool, and a
-#: reader that stopped recognising the field would mis-parse those records rather than ignore
-#: them. The mapping drops the event either way; what this keeps is the ability to read it
-#: correctly on the way to being dropped.
+#: `reason` was `SessionEnd`'s, and `SessionEnd` is retired (DEC-051); since BL-131 an event
+#: the licence does not list writes no record at all, so a host still firing it spools nothing.
 _RECORD = EventLicence(
-    discriminating_fields=("error", "notification_type", "reason"),
+    discriminating_fields=("error", "notification_type"),
     detail_fields=("message", "last_assistant_message"),
 )
 
@@ -139,22 +136,70 @@ def _paused_on_background_work(document: Mapping[str, object]) -> bool:
     return isinstance(pending, list) and bool(pending)
 
 
+#: Only the reasons that answer "why did it stop". Every other value -- authentication_failed,
+#: and whatever upstream adds next -- is absent on purpose, and a `StopFailure` carrying one
+#: writes no record. (Moved here from `application.activity._STOP_FAILURES`, BL-131.)
+_STOP_FAILURES = MappingProxyType(
+    {
+        "rate_limit": ActivityKind.LIMIT_REACHED,
+        # Not the same news, and not the same next move: a rate limit is waited out, an output
+        # ceiling is continued from. One sentence for both told the owner the alarming one.
+        "max_output_tokens": ActivityKind.OUTPUT_LIMIT,
+    }
+)
+
+#: Which `Notification` types mean something this service will say out loud. (Moved here from
+#: `application.activity._NOTIFICATIONS`, BL-131; the history of each type is kept there.)
+#:
+#: `permission_prompt` left on 2026-09-19 (DEC-098): every one shares a `prompt_id` with a
+#: `PermissionRequest` for the same ask, so mapping it sent a wordless twin. `idle_prompt` was
+#: never mapped: a sixty-second idle timer answers "why did it stop" wrongly too often.
+#: `agent_needs_input` comes from the `claude agents` view, when a background session it lists
+#: changes to blocked (measured, BL-048), and is filed under the pane that runs the view -- hence
+#: its lead.
+_NOTIFICATIONS = MappingProxyType({"agent_needs_input": ActivityKind.NEEDS_ANSWER})
+
+AGENTS_VIEW = "from the agents view"
+"""Where an `agent_needs_input` notice came from, at the front of its detail on both surfaces.
+
+At the front because the console cuts a detail at its own width (`feed._elide`), and the label
+before it can be the opening words of a long prompt. Stored in the detail, the field both
+surfaces already render, so nothing new is stored (owner, 2026-11-18)."""
+
 HOOK_LICENCE = HookLicence(
     events=MappingProxyType(
         {
-            "Stop": _RECORD,
-            "StopFailure": _RECORD,
-            "Notification": _RECORD,
+            "Stop": EventLicence(
+                kind=ActivityKind.COMPLETED,
+                turn=TurnEdge.ENDS,
+                discriminating_fields=_RECORD.discriminating_fields,
+                detail_fields=_RECORD.detail_fields,
+            ),
+            "StopFailure": EventLicence(
+                kinds_by_reason=_STOP_FAILURES,
+                turn=TurnEdge.ENDS,
+                discriminating_fields=_RECORD.discriminating_fields,
+                detail_fields=_RECORD.detail_fields,
+            ),
+            "Notification": EventLicence(
+                kinds_by_reason=_NOTIFICATIONS,
+                detail_lead_by_reason=MappingProxyType({"agent_needs_input": AGENTS_VIEW}),
+                discriminating_fields=_RECORD.discriminating_fields,
+                detail_fields=_RECORD.detail_fields,
+            ),
             # DEC-098: the tool class as the ask, and the ask's own words from `tool_input`.
             # `_RECORD`'s fields are not consulted -- an ask carries no `message` and no
             # `last_assistant_message`, and reading fields that cannot be present would only
             # obscure which one was expected.
             "PermissionRequest": EventLicence(
-                ask_fields=("tool_name",), detail_from_tool_input=True
+                kind=ActivityKind.NEEDS_ANSWER,
+                ask_fields=("tool_name",),
+                detail_from_tool_input=True,
             ),
+            # Starts the marker; the hook reads the event name and never the prompt (DEC-104).
+            "UserPromptSubmit": EventLicence(turn=TurnEdge.STARTS),
         }
     ),
-    starts_turn_marker=True,
     source=ActivitySource.HOOK_EXCLUSIVE,
     reports=frozenset(
         {
@@ -164,9 +209,6 @@ HOOK_LICENCE = HookLicence(
             ActivityKind.NEEDS_ANSWER,
         }
     ),
-    # Any other plain event keeps its record, so an event added upstream is not silently lost
-    # and the drain decides what to interpret; the retired `SessionEnd` (DEC-051) is read here.
-    unlisted_events=_RECORD,
     paused=_paused_on_background_work,
     started_event="SessionStart",
 )

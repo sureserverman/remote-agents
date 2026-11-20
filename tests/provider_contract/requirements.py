@@ -63,6 +63,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "adopt_template": (SUPPORTED, "the `/` command of the planning plugin (staged-planning)"),
         "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
         "daemon": (UNSUPPORTED, "turns run in the pane; the registry declares None"),
+        "action_required_title": (UNSUPPORTED, "its hooks see every ask; draws no approval title"),
     },
     "codex": {
         "permission_presets": (SUPPORTED, "four closed permission presets, applied after launch"),
@@ -83,6 +84,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
         "thread_permissions": (SUPPORTED, "thread/settings/update on the shared daemon"),
         "daemon": (SUPPORTED, "the shared app-server daemon, named by its pid file"),
+        "action_required_title": (SUPPORTED, "the approval title its watcher infers asks from"),
     },
     "opencode": {
         "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
@@ -109,6 +111,7 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
         "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
         "daemon": (UNSUPPORTED, "turns run in the pane; the registry declares None"),
+        "action_required_title": (UNSUPPORTED, "its hooks see every ask; draws no approval title"),
     },
     "cursor-agent": {
         "permission_presets": (UNSUPPORTED, "no curated permission preset mapping"),
@@ -132,5 +135,6 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         ),
         "thread_permissions": (UNSUPPORTED, "no permission presets; the registry declares None"),
         "daemon": (UNSUPPORTED, "turns run in the pane; the registry declares None"),
+        "action_required_title": (UNSUPPORTED, "its hooks see every ask; draws no approval title"),
     },
 }

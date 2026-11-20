@@ -29,8 +29,10 @@ a declared set whose *empty* value is an answer rather than an absence. Its own 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
+from re import Pattern
+from types import MappingProxyType
 
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import PermissionPreset
@@ -182,12 +184,39 @@ class ComposerScreen:
 
 @dataclass(frozen=True, slots=True)
 class EventLicence:
-    """What one admitted hook event may contribute to the record the spool writes.
+    """What one admitted hook event means, and what it may contribute to the spooled record.
 
-    Each tuple is a group of payload fields read in order, the first one present winning, and
-    every name in it is a field a measurement licensed (DEC-013, DEC-037). An empty tuple is the
-    declared answer "nothing from this event", not a gap.
+    **What it means** (BL-131) is declared here, in the provider's vertical, so shared code holds
+    no provider's event names: `kind` for an event that always means one thing, `kinds_by_reason`
+    for one whose meaning turns on its `reason`, `turn` for one that starts or ends the session's
+    turn marker. The hook writes the meaning into the record as a neutral token and the drain
+    reads only that token. An event with none of the three, and not declared `means_nothing`, is
+    a licence that forgot to say -- `tests/provider_contract` refuses it.
+
+    Each tuple below is a group of payload fields read in order, the first one present winning,
+    and every name in it is a field a measurement licensed (DEC-013, DEC-037). An empty tuple is
+    the declared answer "nothing from this event", not a gap.
     """
+
+    kind: ActivityKind | None = None
+    """What the event always means, or None when its meaning turns on its reason, or on nothing."""
+
+    kinds_by_reason: Mapping[str, ActivityKind] = field(default_factory=lambda: _NO_REASONS)
+    """What the event means for each `reason` that means something; any other reason, or none,
+    means nothing and writes no record. Claude's `StopFailure` and `Notification`."""
+
+    turn: TurnEdge | None = None
+    """Whether the event starts or ends the session's turn marker (DEC-104), or neither."""
+
+    detail_lead_by_reason: Mapping[str, str] = field(default_factory=lambda: _NO_LEADS)
+    """Words put in front of the detail for one reason: where that notice came from, when the
+    session it is filed under is not the one asking. Claude's `agent_needs_input`, which the
+    `claude agents` view raises for a background session it lists (DEC-037, DEC-098 as amended
+    2026-11-18). At the front, because a surface cuts a detail at its own width."""
+
+    means_nothing: bool = False
+    """The declared answer "this installed event means nothing", which no event declares today.
+    Kept so a licence can say it rather than leave the meaning out."""
 
     discriminating_fields: tuple[str, ...] = ()
     """Where the event's `reason` comes from, read as a plain token."""
@@ -205,6 +234,17 @@ class EventLicence:
     reason and a command into one line; the spool owns it, shared by every provider that asks
     this way, and a licence only says that this event is read by it.
     """
+
+
+class TurnEdge(Enum):
+    """Which edge of the session's turn an event marks (DEC-104)."""
+
+    STARTS = "starts"
+    ENDS = "ends"
+
+
+_NO_REASONS: Mapping[str, ActivityKind] = MappingProxyType({})
+_NO_LEADS: Mapping[str, str] = MappingProxyType({})
 
 
 class HookIdentity(Enum):
@@ -233,14 +273,11 @@ class HookLicence:
     """
 
     events: Mapping[str, EventLicence]
-    """Each event the spool may record, and what it may keep from it.
+    """Each event the hook is installed for, what it means and what it may keep (BL-131).
 
-    Not the turn-start event of a provider whose hook marks turns: the spool answers that one
-    with the marker and records nothing.
+    Every installed event but `started_event` is listed, the turn-start one included: its
+    licence's `turn` is what starts the marker, and having no `kind` it writes no record.
     """
-
-    starts_turn_marker: bool
-    """Whether `UserPromptSubmit` starts this session's turn marker (DEC-104)."""
 
     source: ActivitySource
     """How this provider's activity is observed: by its hook alone, or by its hook plus a pane
@@ -253,14 +290,6 @@ class HookLicence:
     Kept apart from `events` so a provider does not inherit another's claim merely because both
     hooks share the spool -- Codex fires nothing on a failed turn, so it claims no limit kind,
     and a limit stop is read off its pane instead (`application.limit_stops`).
-    """
-
-    unlisted_events: EventLicence | None = None
-    """What any other event spelled as a plain token may keep, or None to admit no other.
-
-    Claude's alone: an event its agent adds upstream keeps its record and the drain decides
-    what to interpret, which is how the retired `SessionEnd` still reads correctly from a host
-    that has not re-run the installer (DEC-051).
     """
 
     conversation_event: str | None = None
@@ -304,6 +333,11 @@ class HookLicence:
     the shell names its session by this thread id and the roster, as a hook names it by its
     payload's.
     """
+
+    @property
+    def starts_turn_marker(self) -> bool:
+        """Whether an event of this provider starts the session's turn marker (DEC-104)."""
+        return any(event.turn is TurnEdge.STARTS for event in self.events.values())
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +487,13 @@ class ProviderDescriptor:
 
     Codex's alone (2026-11-18): its shared app-server daemon runs every turn (v0.158 onwards)
     and is the process whose label decides whether Codex can start its sandbox."""
+
+    action_required_title: Pattern[str] | None = None
+    """The pane title the agent draws while an approval waits, or None for one that draws none.
+
+    Codex's alone (BL-034, DEC-063): its hooks see no native local approval, so the title watcher
+    infers the ask from this title. Matched from the start of the title. Terminal metadata, not
+    an upstream contract: a later release that drops it yields no inferred activity (BL-131)."""
 
     reserved_keys: frozenset[str] = frozenset()
     """The tmux key names this provider's own agent binds, which a console must pass through.

@@ -59,7 +59,9 @@ def test_the_skip_count_is_fully_accounted_for() -> None:
     # declarations, for the same opencode reason.
     # 13 -> 16 on 2026-11-18: `daemon` joined the capability set, declared unsupported for
     # claude, opencode and cursor-agent, whose turns run in the pane (BL-147, DEC-140).
-    assert expected_skips() == 16, (
+    # 16 -> 19 on 2026-11-20: `action_required_title` joined the capability set, declared
+    # unsupported for claude, opencode and cursor-agent, whose hooks see every ask (BL-131).
+    assert expected_skips() == 19, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

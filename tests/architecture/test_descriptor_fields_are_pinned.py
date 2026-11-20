@@ -83,6 +83,7 @@ _CAPABILITY_FIELDS = (
     "adopt_template",
     "thread_permissions",
     "daemon",
+    "action_required_title",
 )
 _RESERVATION_FIELDS = ("reserved_keys",)
 

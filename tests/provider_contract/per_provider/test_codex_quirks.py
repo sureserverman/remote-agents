@@ -175,8 +175,9 @@ def test_the_codex_field_allow_lists_are_exactly_what_the_measurement_licensed()
     by the widening: the thing they pin did not move.
     """
     events = HOOK_LICENCE.events
-    assert set(events) == {"Stop", "PermissionRequest"}
-    assert HOOK_LICENCE.unlisted_events is None
+    # `UserPromptSubmit` is listed since BL-131 to start the turn marker; it means nothing else
+    # and reads no field, so it widens nothing these allow-lists control.
+    assert set(events) == {"Stop", "PermissionRequest", "UserPromptSubmit"}
     assert {event: f.detail_fields for event, f in events.items() if f.detail_fields} == {
         "Stop": ("last_assistant_message",)
     }

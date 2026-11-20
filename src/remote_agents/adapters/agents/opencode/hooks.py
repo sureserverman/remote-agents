@@ -93,13 +93,14 @@ PROVIDER = _HookProvider(
 HOOK_LICENCE = HookLicence(
     events=MappingProxyType(
         {
-            "session.idle": EventLicence(),
-            "permission.asked": EventLicence(ask_fields=("permission",)),
+            "session.idle": EventLicence(kind=ActivityKind.COMPLETED),
+            "permission.asked": EventLicence(
+                kind=ActivityKind.NEEDS_ANSWER, ask_fields=("permission",)
+            ),
         }
     ),
-    # Its plugin forwards only these two events, and "finished" is `session.idle`, which ends
-    # no marker: a marker started here would never end (DEC-104).
-    starts_turn_marker=False,
+    # No event carries a `turn`: its plugin forwards only these two, and "finished" is
+    # `session.idle`, which ends no marker, so a marker started here would never end (DEC-104).
     # Its `session.idle` names OpenCode's own session, the conversation a restart resumes; the
     # plugin sends nothing for a sub-agent's session (`plugin.py`).
     conversation_event="session.idle",

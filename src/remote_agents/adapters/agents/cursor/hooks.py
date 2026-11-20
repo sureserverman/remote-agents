@@ -32,8 +32,7 @@ HOOK_LICENCE = HookLicence(
     # The event, the session and the time, and no field of the payload: Cursor's `stop` carries
     # `user_email`, `transcript_path` and `workspace_roots`, and none of them is read (DEC-013,
     # DEC-037; `docs/acceptance-2026-10-08-cursor-user-stop-hook.md`).
-    events=MappingProxyType({"stop": EventLicence()}),
-    starts_turn_marker=False,
+    events=MappingProxyType({"stop": EventLicence(kind=ActivityKind.COMPLETED)}),
     source=ActivitySource.HOOK_EXCLUSIVE,
     # Its approvals and its limit screen fire no hook this project installs, so neither kind is
     # claimed; a limit stop is read off its pane by the limit-screen watch, as Codex's is.
