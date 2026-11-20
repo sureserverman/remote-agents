@@ -55,6 +55,9 @@ jobs:
   suites:
     name: suites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A healthy run takes under 10 minutes on either OS. Without this a hung job held a macOS
+    # runner for GitHub's 6-hour default (main, 2026-11-19); `--timeout` below names the test.
+    timeout-minutes: 30
     strategy:
       # Both jobs run to completion. The whole point is the comparison, and a matrix that
       # cancels the Mac when Linux fails answers the question this workflow was created to ask
@@ -150,8 +153,13 @@ jobs:
         # split is "everything here in parallel, `tests/e2e` serial" -- which is why this is
         # two commands locally and one here. Recorded as a measurement so that nobody
         # 'fixes' the inconsistency by adding `-n auto` to the e2e run.
+        #
+        # `--timeout 300` (pytest-timeout) fails any one test that runs past 5 minutes, with its
+        # name and stack. On 2026-11-19 the macOS job hung at 97% for 6 hours and was cancelled;
+        # `-q` prints only dots, so the log could not say which test it was. The same commit
+        # passed in 9 minutes on its tag. No test here needs more than a fraction of this.
         run: >
           uv run --locked pytest
           tests/unit tests/integration tests/contract tests/architecture tests/security
           tests/provider_contract tests/frontend_contract
-          -m 'not requires_session' -q -n auto
+          -m 'not requires_session' -q -n auto --timeout 300

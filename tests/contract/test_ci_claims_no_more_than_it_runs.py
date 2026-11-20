@@ -53,6 +53,7 @@ The three are a path omission (`tests/live`, `tests/e2e`), `requires_session`, a
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -112,6 +113,19 @@ def test_ci_runs_the_expected_portable_suites() -> None:
 
     for suite in EXPECTED_SUITES:
         assert suite in step, f"CI does not run {suite}: {step}"
+
+
+def test_ci_bounds_each_test_and_the_job_in_time() -> None:
+    """A hung test fails within minutes, by name, instead of holding a runner for six hours.
+
+    On 2026-11-19 the macOS job hung at 97% and GitHub cancelled it at its 6-hour default; the
+    `-q` log was all dots, so nothing said which test it was.
+    """
+    step = _pytest_step()
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["suites"]
+
+    assert re.search(r"--timeout[ =]\d+", step), f"CI runs its tests with no per-test bound: {step}"
+    assert 0 < job.get("timeout-minutes", 0) <= 60, "the suites job keeps GitHub's 6-hour default"
 
 
 def test_ci_carries_the_standing_exclusion_for_the_session_dependent_set() -> None:

@@ -7,16 +7,19 @@ clause). The unit tests pin the guard against captured screens; this drives the 
 reached it -- the dialog is still up and the command it asked about never ran. Then the drill
 declines the dialog itself, and at the idle composer the same `graceful_stop` exits the agent.
 
-**Not opt-in**, like `test_prompt_relay.py` and for its reason: it is a stage gate's command. It
-skips only for what the host lacks -- `claude`, `tmux`, or Claude's credentials. It spends one
-short Sonnet turn. Claude runs in **manual** permission mode here (the owner's panes run auto,
-which never asks), with the owner's HOME, because a fresh config directory demands a login.
+**Opt-in** with `REMOTE_AGENTS_LIVE_ACCEPTANCE=1` for the drill that spends a turn, like
+`test_prompt_relay.py` and for its reason (since v0.70.5). Otherwise it skips only for what the host
+lacks -- `claude`, `tmux`, or Claude's credentials. It spends one short Sonnet turn; the
+cursor-agent drill runs no turn and is not gated. Claude runs in **manual** permission mode here
+(the owner's panes run auto, which never asks), with the owner's HOME, because a fresh config
+directory demands a login.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -51,6 +54,8 @@ def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _requirements() -> None:
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled (spends agent turns)")
     for needed in ("claude", "tmux"):
         if shutil.which(needed) is None:
             pytest.skip(f"BLOCKED: executable_missing: {needed}")

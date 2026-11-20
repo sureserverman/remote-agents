@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "remote-agents"
-version = "0.70.3"
+version = "0.70.5"
 description = "Private Telegram control plane for curated local agent sessions"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
@@ -40,6 +40,7 @@ remote-agents = "remote_agents.__main__:main"
 dev = [
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
+  "pytest-timeout==2.4.0",
   "pytest-xdist>=3.8.0",
   "ruff==0.15.22",
   "textual-dev==1.8.0",

@@ -507,10 +507,11 @@ async def test_activity_watching_gives_up_on_a_capture_that_never_returns(
 ) -> None:
     """A hang is the one capture failure the existing guard cannot catch.
 
-    `except Exception` only fires on something raised. The tmux runner awaits `communicate()`
-    with no timeout, so a wedged server leaves the capture awaiting forever: the watch loop
-    stops for the life of the process, every watched session frozen, and nothing logged. The
-    bound turns a permanent silent stall into one skipped pass.
+    `except Exception` only fires on something raised. Before v0.70.5 the tmux runner awaited
+    `communicate()` with no timeout, so a wedged server left the capture awaiting forever: the
+    watch loop stopped for the life of the process, every watched session frozen, and nothing
+    logged. The runner now gives up after 30 s; this bound still turns a long silent stall into
+    one quickly skipped pass.
     """
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)

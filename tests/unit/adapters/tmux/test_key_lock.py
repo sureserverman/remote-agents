@@ -166,3 +166,25 @@ def test_every_key_sending_argv_in_the_gateway_is_built_under_the_session_lock()
     outside = [constant.lineno for constant in constants if id(constant) not in inside]
 
     assert not outside, f"gateway.py builds a key-sending argv outside the lock at lines {outside}"
+
+
+def test_every_locked_send_leaves_any_tmux_mode_first() -> None:
+    """A pane in copy-mode or view-mode hands keys to the mode, and `/` there hangs `send-keys`
+    while a client is attached (`tests/e2e/test_keys_into_a_mode.py`). So every hold that types
+    also carries `copy-mode -q`, and before its first typing argv."""
+    tree = ast.parse(_GATEWAY.read_text(encoding="utf-8"))
+    typing = [region for region in _locked_regions(tree) if _typing_constants(region)]
+    assert typing, "no locked region types, so this check would be vacuous"
+    for region in typing:
+        # `copy-mode` without `-q` would enter the mode, not leave it: the argv is matched whole.
+        leaves = [
+            node.lineno
+            for node in ast.walk(region)
+            if isinstance(node, ast.Call)
+            and [arg.value for arg in node.args if isinstance(arg, ast.Constant)][:2]
+            == ["copy-mode", "-q"]
+        ]
+        first_key = min(constant.lineno for constant in _typing_constants(region))
+        assert leaves and min(leaves) < first_key, (
+            f"the hold at gateway.py:{region.lineno} types without leaving a tmux mode first"
+        )

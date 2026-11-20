@@ -526,11 +526,11 @@ class CodexApprovalWatcher:
         for record in watched:
             key = str(record.session_id)
             try:
-                # Bounded, because the failure it prevents is silent and permanent. The tmux
-                # runner awaits `communicate()` with no timeout of its own, so a wedged server
-                # hangs this coroutine forever -- and the guard below never fires, because
-                # nothing is ever raised. The loop simply stops, for the life of the process,
-                # with every watched session frozen at whatever it last looked like.
+                # Bounded, because the failure it prevents is silent. Before v0.70.5 the tmux
+                # runner had no timeout, so a wedged server hung this coroutine forever -- and
+                # the guard below never fired, because nothing was ever raised. The loop simply
+                # stopped, with every watched session frozen at whatever it last looked like.
+                # The runner's own 30 s bound is still far longer than one pass should take.
                 title = await asyncio.wait_for(
                     self._title(record.session_id), timeout=self._title_timeout
                 )

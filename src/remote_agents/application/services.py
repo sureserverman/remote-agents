@@ -84,8 +84,9 @@ _LOG = logging.getLogger(__name__)
 #: Abandoning is not killing: `wait_for` cancels the await, and the tmux subprocess underneath
 #: is left to finish on its own — so a swap begun before the timeout may still land after the
 #: destructive call. Accepted on DEC-030's precedent, which makes the same trade for the same
-#: unbounded-`communicate` hazard; the console is presentation, and a late exchange leaves a
-#: misplaced pane the next sync clears rather than anything a session depends on.
+#: slow-`communicate` hazard (bounded at 30 s per call only since v0.70.5); the console is
+#: presentation, and a late exchange leaves a misplaced pane the next sync clears rather than
+#: anything a session depends on.
 _CONSOLE_HIDE_TIMEOUT_SECONDS = 2.0
 
 #: What each non-preserving graceful stop is recorded as in the durable history (DEC-022).
@@ -1182,11 +1183,11 @@ class SessionService:
         one does.
 
         **And the wait is bounded, which is the half that swallowing exceptions does not
-        cover.** `AsyncTmuxRunner.run` awaits `process.communicate()` with no timeout — the
-        hazard DEC-030 already names in this codebase — so a wedged tmux server makes a
-        console round trip block rather than fail. An unbounded await here sits between
-        `VERIFIED_FORCE_STOP` and the kill: the force stop on a runaway agent would never
-        reach it, the per-session lock would stay held, and every other composer operation
+        cover.** `AsyncTmuxRunner.run` bounds each call only at 30 s (since v0.70.5; with no
+        timeout before, the hazard DEC-030 names), so a wedged tmux server makes a console
+        round trip block for that long rather than fail. A long await here sits between
+        `VERIFIED_FORCE_STOP` and the kill: the force stop on a runaway agent would be held
+        up, the per-session lock would stay held, and every other composer operation
         would queue behind the same `_links` lock. "Degrades to nothing" has to mean *within
         a bounded time*, or a display that merely stops answering takes a stop with it.
         """

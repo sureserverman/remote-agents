@@ -180,3 +180,37 @@ def test_a_screen_that_changes_partway_stops_the_rest_of_the_sequence() -> None:
 
     assert changing.keys == ["/exit"]
     assert (interrupted.value.sent, interrupted.value.capture) == (1, "a dialog")
+
+
+def test_a_refused_screen_leaves_the_panes_mode_alone() -> None:
+    """Out of a mode only to type: a look that refuses keeps the owner's scroll-back."""
+    pane = _Pane()
+
+    asyncio.run(_gateway(pane).send_keys_when(pane.session_id, ("/exit",), lambda _: False))
+
+    assert not any("copy-mode" in call for call in pane.calls), pane.calls
+
+
+def test_the_mode_is_left_after_the_look_and_before_the_first_key() -> None:
+    pane = _Pane()
+
+    asyncio.run(_gateway(pane).send_keys_when(pane.session_id, ("/exit", "Enter"), lambda _: True))
+
+    order = [
+        call[3] for call in pane.calls if {"capture-pane", "copy-mode", "send-keys"} & set(call)
+    ]
+    assert order[:3] == ["capture-pane", "copy-mode", "send-keys"], order
+    assert ("copy-mode", "-q") == pane.calls[[c[3] for c in pane.calls].index("copy-mode")][3:5]
+
+
+@pytest.mark.parametrize("send", ["send_keys", "send_keys_when"])
+def test_a_pane_gone_when_its_mode_is_left_is_a_missing_target(send: str) -> None:
+    pane = _Pane(fail_on="copy-mode")
+    gateway = _gateway(pane)
+
+    with pytest.raises(TerminalTargetMissing):
+        if send == "send_keys":
+            asyncio.run(gateway.send_keys(pane.session_id, ("/exit",)))
+        else:
+            asyncio.run(gateway.send_keys_when(pane.session_id, ("/exit",), lambda _: True))
+    assert pane.keys == []

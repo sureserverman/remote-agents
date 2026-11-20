@@ -13,8 +13,9 @@ says so, and whatever is typed drawn into its composer. So it spends no quota. T
 is injected at the composition seam, reading the 5-hour window full until a reset a few seconds
 after the stop. The lift then waits out the real grace minute, so the drill takes about 80 s.
 
-**Not opt-in**, for `test_prompt_relay.py`'s reason: it is a gate's command. It skips only when
-tmux is missing. Boundaries: a `remote-agents-test-*` socket that is killed, and a scratch
+**Not opt-in**: it is a gate's command, and it spends no quota, so a plain run costs nothing
+(`test_prompt_relay.py` is opt-in since v0.70.5 because it does). It skips only when tmux is
+missing. Boundaries: a `remote-agents-test-*` socket that is killed, and a scratch
 directory for everything else.
 """
 

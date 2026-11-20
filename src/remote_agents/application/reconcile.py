@@ -171,7 +171,7 @@ class ReconciliationService:
         through and reaches this method, where an unbounded `async with` would wait on
         whatever holds it. `force_stop`, `cleanup`, `answer_trust`, `set_remote_control` and
         `refresh_readiness` all hold `for_session` across a terminal call, and
-        `adapters/tmux/gateway.py` awaits `process.communicate()` with no timeout of its own,
+        the tmux runner bounds a call only at 30 s (since v0.70.5; with no timeout before),
         so "whatever holds it" can be a hung tmux invocation. Blocking here would stall the
         *whole pass* -- including records for other sessions later in the loop -- and
         `bootstrap._reconcile_quietly` catches exceptions, not hangs, so there would be no
