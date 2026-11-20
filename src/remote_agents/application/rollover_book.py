@@ -15,13 +15,15 @@ from datetime import UTC, datetime
 
 from remote_agents.application.session_actions import (
     CANCEL_ROLLOVER,
+    NOTE_ROLLOVER,
+    NOTE_ROLLOVER_UNAVAILABLE,
     ROLLOVER,
     ROLLOVER_UNAVAILABLE,
     rollover_actions,
     rollover_outcome,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord
-from remote_agents.domain.rollover import RolloverState
+from remote_agents.domain.rollover import RolloverKind, RolloverState
 from remote_agents.ports.rollover_setting import RolloverSettingPort
 from remote_agents.ports.rollover_store import (
     IllegalRolloverMove,
@@ -54,9 +56,14 @@ class RolloverBook:
         store: RolloverStore,
         *,
         rollable: frozenset[ProfileId] = frozenset(),
+        note_rollable: frozenset[ProfileId] = frozenset(),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
+        #: Which profiles may roll over with a note (`profiles_that_roll_over_with_a_note`,
+        #: the verticals' `note_rollover`), handed in for `rollable`'s reason. Empty offers
+        #: Rollover with a note on nothing.
+        self._note_rollable = note_rollable
         #: Which profiles roll over (`adapters.agents.registry.profiles_that_roll_over`),
         #: handed in by the composition because neither this layer nor a surface may name a
         #: provider. Empty offers Rollover now on nothing.
@@ -80,6 +87,7 @@ class RolloverBook:
             self._rollable,
             switch_on=await _switch_on(switch),
             open_state=None if rollover is None else rollover.state,
+            note_rollable=self._note_rollable,
         )
 
     async def press(
@@ -105,6 +113,22 @@ class RolloverBook:
                 record.session_id, project_id=record.project_id, profile_id=record.profile_id
             )
             return rollover_outcome(ROLLOVER, done=asked is not None)
+        if action == NOTE_ROLLOVER:
+            # The switch is read only to hand the policy its argument: the note rollover is
+            # offered whatever it says (OD-2), so its position never refuses this press.
+            if NOTE_ROLLOVER not in rollover_actions(
+                record.state,
+                record.profile_id,
+                self._rollable,
+                switch_on=await _switch_on(switch),
+                open_state=None,
+                note_rollable=self._note_rollable,
+            ):
+                return NOTE_ROLLOVER_UNAVAILABLE
+            asked = await self.request_note(
+                record.session_id, project_id=record.project_id, profile_id=record.profile_id
+            )
+            return rollover_outcome(NOTE_ROLLOVER, done=asked is not None)
         if action == CANCEL_ROLLOVER:
             return rollover_outcome(CANCEL_ROLLOVER, done=await self.cancel(record.session_id))
         raise ValueError(f"not a rollover action: {action!r}")
@@ -116,6 +140,19 @@ class RolloverBook:
         already has an open rollover: one at a time per session, whoever opened it."""
         return await self._store.request(
             session_id, project_id=project_id, profile_id=profile_id, at=self._now()
+        )
+
+    async def request_note(
+        self, session_id: SessionId, *, project_id: ProjectId, profile_id: ProfileId
+    ) -> Rollover | None:
+        """Ask for `session_id` to be rolled over with a note: a REQUESTED row of kind `note`,
+        and nothing else. None when it already has an open rollover of either kind."""
+        return await self._store.request(
+            session_id,
+            project_id=project_id,
+            profile_id=profile_id,
+            at=self._now(),
+            kind=RolloverKind.NOTE,
         )
 
     async def cancel(self, session_id: SessionId) -> bool:

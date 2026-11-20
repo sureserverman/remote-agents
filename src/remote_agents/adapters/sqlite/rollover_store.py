@@ -10,6 +10,7 @@ import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from secrets import token_hex
 from uuid import uuid4
 
 from remote_agents.adapters.sqlite.rollover_targets import decode, encode
@@ -71,7 +72,12 @@ class SQLiteRolloverStore:
                 (current,) = open_rows
                 if current.handoff_id == handoff_id:
                     return current
-                if current.state is not RolloverState.REQUESTED:
+                # A note rollover is answered by the agent's note, never by a workflow's
+                # `ready`: taking it here would hand the owner's plan-less press to a plan.
+                if (
+                    current.state is not RolloverState.REQUESTED
+                    or current.kind is not RolloverKind.WORKFLOW
+                ):
                     return None
                 with self._connection:
                     self._connection.execute(
@@ -184,6 +190,7 @@ class SQLiteRolloverStore:
         project_id: ProjectId,
         profile_id: ProfileId,
         at: datetime,
+        kind: RolloverKind = RolloverKind.WORKFLOW,
     ) -> Rollover | None:
         return self._insert(
             predecessor,
@@ -194,6 +201,7 @@ class SQLiteRolloverStore:
             plan=None,
             state=RolloverState.REQUESTED,
             at=at,
+            kind=kind,
         )
 
     async def advance(
@@ -423,7 +431,9 @@ class SQLiteRolloverStore:
         target: RolloverTarget | None = None,
         kind: RolloverKind = RolloverKind.WORKFLOW,
     ) -> Rollover | None:
-        rollover_id = uuid4().hex
+        # A note rollover's id names its note file (`<root>/.claude/handoffs/<id>.note.md`),
+        # so it is short, fixed-shape and path-safe; a workflow's keeps its historical shape.
+        rollover_id = f"n-{token_hex(10)}" if kind is RolloverKind.NOTE else uuid4().hex
         stamp = _stored(at)
         try:
             with self._connection:

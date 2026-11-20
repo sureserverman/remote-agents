@@ -26,6 +26,7 @@ from remote_agents.application.session_actions import (
     CLEANUP,
     FORCE,
     GRACEFUL,
+    NOTE_ROLLOVER,
     ROLLOVER,
     available_actions,
     rollover_actions,
@@ -151,11 +152,12 @@ def test_the_resume_identity_index_releases_exactly_the_domain_s_terminal_states
 _SWITCH = (True, False)
 _OPEN: tuple[RolloverState | None, ...] = (None, *RolloverState)
 _ROLLABLE = frozenset({ProfileId("claude")})
+_NOTE_ROLLABLE = frozenset({ProfileId("claude"), ProfileId("codex")})
 
 
 def _rollover_situations():
     for state in SessionState:
-        for profile in ("claude", "codex"):
+        for profile in ("claude", "codex", "opencode"):
             for switch_on in _SWITCH:
                 for open_state in _OPEN:
                     yield state, ProfileId(profile), switch_on, open_state
@@ -164,7 +166,12 @@ def _rollover_situations():
 def test_every_offered_cancel_is_a_legal_rollover_move_the_book_performs() -> None:
     for state, profile, switch_on, open_state in _rollover_situations():
         offered = rollover_actions(
-            state, profile, _ROLLABLE, switch_on=switch_on, open_state=open_state
+            state,
+            profile,
+            _ROLLABLE,
+            switch_on=switch_on,
+            open_state=open_state,
+            note_rollable=_NOTE_ROLLABLE,
         )
         if CANCEL_ROLLOVER in offered:
             assert open_state is not None
@@ -177,11 +184,36 @@ def test_every_offered_cancel_is_a_legal_rollover_move_the_book_performs() -> No
 def test_rollover_now_is_never_offered_beside_an_open_rollover() -> None:
     for state, profile, switch_on, open_state in _rollover_situations():
         offered = rollover_actions(
-            state, profile, _ROLLABLE, switch_on=switch_on, open_state=open_state
+            state,
+            profile,
+            _ROLLABLE,
+            switch_on=switch_on,
+            open_state=open_state,
+            note_rollable=_NOTE_ROLLABLE,
         )
         if ROLLOVER in offered:
             assert open_state is None, f"a second rollover offered beside {open_state}"
             assert state is SessionState.RUNNING and profile in _ROLLABLE and switch_on
+
+
+def test_rollover_with_a_note_is_never_offered_beside_an_open_rollover() -> None:
+    """A note request opens a new row too, so the store's one-open-rollover refusal binds it;
+    and it needs no switch (OD-2)."""
+    seen = False
+    for state, profile, switch_on, open_state in _rollover_situations():
+        offered = rollover_actions(
+            state,
+            profile,
+            _ROLLABLE,
+            switch_on=switch_on,
+            open_state=open_state,
+            note_rollable=_NOTE_ROLLABLE,
+        )
+        if NOTE_ROLLOVER in offered:
+            seen = True
+            assert open_state is None, f"a second rollover offered beside {open_state}"
+            assert state is SessionState.RUNNING and profile in _NOTE_ROLLABLE
+    assert seen, "the check above is vacuous: nothing offered a note rollover"
 
 
 def test_the_cancel_is_narrower_than_the_rollover_matrix() -> None:

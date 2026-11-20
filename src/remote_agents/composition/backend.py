@@ -23,6 +23,7 @@ from remote_agents.adapters.agents.registry import (
     profiles_bound_by_thread,
     profiles_named_by_payload,
     profiles_that_roll_over,
+    profiles_that_roll_over_with_a_note,
     provider_descriptors,
     usage_readers,
 )
@@ -683,7 +684,9 @@ def compose_backend(
             lambda: backend_store.list(LIVE_STATES),
         ),
         rollovers=RolloverBook(
-            SQLiteRolloverStore(connection), rollable=profiles_that_roll_over(descriptors)
+            SQLiteRolloverStore(connection),
+            rollable=profiles_that_roll_over(descriptors),
+            note_rollable=profiles_that_roll_over_with_a_note(descriptors),
         ),
         max_label_length=config.max_label_length,
     )

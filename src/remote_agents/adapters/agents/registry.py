@@ -680,6 +680,19 @@ def profiles_that_roll_over(
     return frozenset(adopt_templates(descriptors))
 
 
+def profiles_that_roll_over_with_a_note(
+    descriptors: tuple[ProviderDescriptor, ...] | None = None,
+) -> frozenset[ProfileId]:
+    """The profiles whose sessions may roll over with a note (BL-119): those whose vertical
+    declares `note_rollover`. A profile declaring `False` is absent, and neither surface offers
+    the action on its sessions."""
+    return frozenset(
+        descriptor.profile_id
+        for descriptor in (provider_descriptors() if descriptors is None else descriptors)
+        if descriptor.note_rollover
+    )
+
+
 def profile_glyphs(descriptors: tuple[ProviderDescriptor, ...] | None = None) -> dict[str, str]:
     """Every curated profile's mark, as one mapping a composition can hand to a surface.
 

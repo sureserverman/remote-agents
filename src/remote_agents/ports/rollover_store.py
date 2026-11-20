@@ -182,8 +182,11 @@ class RolloverStore(Protocol):
         project_id: ProjectId,
         profile_id: ProfileId,
         at: datetime,
+        kind: RolloverKind = RolloverKind.WORKFLOW,
     ) -> Rollover | None:
-        """Open a REQUESTED rollover for the owner's "Rollover now"; None when one is open."""
+        """Open a REQUESTED rollover for the owner's "Rollover now" (kind `workflow`) or
+        "Rollover with a note" (kind `note`, id `n-<20 hex>`); None when one is open, of either
+        kind. A `note` row is never advanced by `open_for_ready`."""
         ...
 
     async def advance(

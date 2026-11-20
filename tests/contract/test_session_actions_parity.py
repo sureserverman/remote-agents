@@ -63,6 +63,7 @@ from remote_agents.application.rollover_book import RolloverBook
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     CANCEL_ROLLOVER,
+    NOTE_ROLLOVER,
     ROLLOVER,
     ROLLOVER_ACTION_LABELS,
     ROLLOVER_UNAVAILABLE,
@@ -450,6 +451,7 @@ async def test_both_surfaces_offer_pairing_under_the_same_predicate(
 # it actually drew -- the bot's detail keyboard, the terminal's detail rows.
 
 _ROLLABLE = frozenset({ProfileId("claude")})
+_NOTE_ROLLABLE = frozenset({ProfileId("claude"), ProfileId("codex")})
 _ROLLOVER_WORDS = {label: action for action, label in ROLLOVER_ACTION_LABELS.items()}
 _HANDOFF = "h-0123456789abcdef0042"
 
@@ -508,7 +510,7 @@ async def _book_with(
 ) -> tuple[RolloverBook, object]:
     connection = open_database(tmp_path / "sessions.sqlite3")
     store = SQLiteRolloverStore(connection)
-    book = RolloverBook(store, rollable=_ROLLABLE)
+    book = RolloverBook(store, rollable=_ROLLABLE, note_rollable=_NOTE_ROLLABLE)
     if open_state is RolloverState.REQUESTED:
         assert await book.request(
             record.session_id, project_id=record.project_id, profile_id=record.profile_id
@@ -574,6 +576,9 @@ ROLLOVER_SITUATIONS: list[tuple[SessionState, str, bool, RolloverState | None]] 
     (SessionState.RUNNING, "claude", False, RolloverState.REQUESTED),
     (SessionState.RUNNING, "claude", True, RolloverState.HANDOFF_READY),
     (SessionState.RUNNING, "codex", True, None),
+    (SessionState.RUNNING, "codex", False, None),
+    (SessionState.RUNNING, "opencode", True, None),
+    (SessionState.RUNNING, "opencode", False, None),
     *((state, "claude", True, None) for state in SessionState if state is not SessionState.RUNNING),
     (SessionState.PRESERVED, "claude", True, RolloverState.REQUESTED),
 ]
@@ -592,7 +597,12 @@ async def test_both_surfaces_offer_exactly_the_policy_s_rollover_actions(
         connection.close()
 
     expected = rollover_actions(
-        state, ProfileId(profile), _ROLLABLE, switch_on=switch_on, open_state=open_state
+        state,
+        ProfileId(profile),
+        _ROLLABLE,
+        switch_on=switch_on,
+        open_state=open_state,
+        note_rollable=_NOTE_ROLLABLE,
     )
     assert rendered == set(expected), (
         f"{surface_name} diverged from the rollover policy at {state.value}/{profile}, "
@@ -607,7 +617,8 @@ async def test_the_rollover_parity_is_not_vacuous(tmp_path, surface_name, render
     record = _rollover_record(SessionState.RUNNING, "claude")
     book, connection = await _book_with(tmp_path, record, None)
     try:
-        assert await render(record, book, True) == {ROLLOVER}, surface_name
+        assert await render(record, book, True) == {ROLLOVER, NOTE_ROLLOVER}, surface_name
+        assert await render(record, book, False) == {NOTE_ROLLOVER}, surface_name
         await book.request(
             record.session_id, project_id=record.project_id, profile_id=record.profile_id
         )
@@ -632,7 +643,11 @@ async def _telegram_press(record, book, switch_on, action: str) -> tuple[str, li
         for button in row
         if unmarked(button.text) == label
     ]
-    callback = "session.rollover" if action == ROLLOVER else "session.rollover.cancel"
+    callback = {
+        ROLLOVER: "session.rollover",
+        NOTE_ROLLOVER: "session.rollover.note",
+        CANCEL_ROLLOVER: "session.rollover.cancel",
+    }[action]
     token = (
         tokens[0] if tokens else boundary._callback(callback, str(record.session_id), mutation=True)
     )
@@ -712,5 +727,28 @@ async def test_a_stale_rollover_now_with_the_switch_off_writes_nothing(
         assert _rollover_rows(connection) == [], surface_name
         assert acted == [], surface_name
         assert ROLLOVER_UNAVAILABLE in said, (surface_name, said)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("surface_name,press", PRESS_SURFACES)
+@pytest.mark.parametrize("switch_on", [True, False])
+async def test_rollover_with_a_note_writes_one_requested_note_row_and_stops_nothing(
+    tmp_path, surface_name, press, switch_on
+) -> None:
+    record = _rollover_record(SessionState.RUNNING, "claude")
+    book, connection = await _book_with(tmp_path, record, None)
+    try:
+        said, acted = await press(record, book, switch_on, NOTE_ROLLOVER)
+        rows = connection.execute("SELECT state, kind FROM rollovers").fetchall()
+        assert rows == [("requested", "note")], surface_name
+        assert acted == [], f"{surface_name} acted on the session: {acted}"
+        assert rollover_outcome(NOTE_ROLLOVER, done=True) in said, (surface_name, said)
+
+        said, acted = await press(record, book, switch_on, NOTE_ROLLOVER)
+        rows = connection.execute("SELECT state, kind FROM rollovers").fetchall()
+        assert rows == [("requested", "note")], surface_name
+        assert acted == [], f"{surface_name} acted on the session: {acted}"
+        assert rollover_outcome(NOTE_ROLLOVER, done=False) in said, (surface_name, said)
     finally:
         connection.close()

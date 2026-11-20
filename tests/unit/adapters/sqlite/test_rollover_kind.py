@@ -6,6 +6,7 @@ Migration 27 adds the column with a default, so every row a v0.70.x store holds 
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import UTC, datetime
 
@@ -107,4 +108,60 @@ async def test_a_new_request_is_a_workflow_rollover_and_a_note_row_reads_back_as
     assert (await store.latest_for_each([requested.predecessor_session_id]))[
         requested.predecessor_session_id
     ].kind is RolloverKind.NOTE
+    connection.close()
+
+
+async def test_a_note_request_is_a_note_row_with_a_path_safe_id(tmp_path) -> None:
+    connection = open_database(tmp_path / "new.sqlite3")
+    store = SQLiteRolloverStore(connection)
+    predecessor = SessionId.new()
+    asked = await store.request(
+        predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("claude"),
+        at=datetime.now(UTC),
+        kind=RolloverKind.NOTE,
+    )
+    assert asked is not None and asked.kind is RolloverKind.NOTE
+    assert asked.state is RolloverState.REQUESTED and asked.reason == "owner"
+    assert re.fullmatch(r"n-[0-9a-f]{20}", asked.id), asked.id
+    again = await store.request(
+        predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("claude"),
+        at=datetime.now(UTC),
+        kind=RolloverKind.NOTE,
+    )
+    assert again is None, "one open rollover per session, whatever its kind"
+    connection.close()
+
+
+async def test_a_ready_envelope_never_turns_a_note_request_into_a_workflow_handoff(
+    tmp_path,
+) -> None:
+    """A stray `ready` for a session the owner asked a note rollover of is refused: the note
+    row stays REQUESTED with no handoff, and no second row opens."""
+    connection = open_database(tmp_path / "new.sqlite3")
+    store = SQLiteRolloverStore(connection)
+    predecessor = SessionId.new()
+    asked = await store.request(
+        predecessor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("claude"),
+        at=datetime.now(UTC),
+        kind=RolloverKind.NOTE,
+    )
+    assert asked is not None
+    opened = await store.open_for_ready(
+        predecessor,
+        "h-" + "a" * 20,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("claude"),
+        plan="/abs/plan.md",
+        at=datetime.now(UTC),
+    )
+    assert opened is None
+    row = await store.get(asked.id)
+    assert row is not None and row.state is RolloverState.REQUESTED and row.handoff_id is None
+    assert connection.execute("SELECT COUNT(*) FROM rollovers").fetchone()[0] == 1
     connection.close()

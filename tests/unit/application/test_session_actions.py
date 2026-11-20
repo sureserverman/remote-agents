@@ -14,6 +14,7 @@ from remote_agents.application.session_actions import (
     ACTION_LABELS,
     CANCEL_ROLLOVER,
     GRACEFUL_TIMEOUT,
+    NOTE_ROLLOVER,
     OWNERSHIP_LOST,
     ROLLOVER,
     ROLLOVER_ACTION_LABELS,
@@ -554,8 +555,9 @@ def test_nothing_open_offers_no_cancel() -> None:
 
 
 def test_each_rollover_action_has_one_label_and_the_two_never_coincide() -> None:
-    assert set(ROLLOVER_ACTION_LABELS) == {ROLLOVER, CANCEL_ROLLOVER}
+    assert set(ROLLOVER_ACTION_LABELS) == {ROLLOVER, NOTE_ROLLOVER, CANCEL_ROLLOVER}
     assert ROLLOVER_ACTION_LABELS[ROLLOVER] == "Rollover now"
+    assert ROLLOVER_ACTION_LABELS[NOTE_ROLLOVER] == "Rollover with a note"
     assert ROLLOVER_ACTION_LABELS[CANCEL_ROLLOVER] == "Cancel rollover"
     # Disjoint from the stop labels, so the parity contract's stop decoder can never read a
     # rollover row as a stop or the other way round.
@@ -572,3 +574,75 @@ def test_the_four_outcomes_are_four_different_sentences() -> None:
     }
     assert len(words) == 4
     assert all(words)
+
+
+# `NOTE_ROLLOVER` — Rollover with a note (BL-119, OD-2) ------------------------------------
+#
+# Offered on a RUNNING session of a profile that declares `note_rollover`, with no rollover
+# open, whatever the auto-rollover switch: the press is the owner's consent for this one.
+
+_NOTE_ROLLABLE = frozenset({ProfileId("claude"), ProfileId("codex")})
+
+
+def _with_note(
+    state: SessionState = SessionState.RUNNING,
+    profile: str = "claude",
+    *,
+    switch_on: bool = True,
+    open_state: RolloverState | None = None,
+) -> tuple[str, ...]:
+    return rollover_actions(
+        state,
+        ProfileId(profile),
+        _ROLLABLE,
+        switch_on=switch_on,
+        open_state=open_state,
+        note_rollable=_NOTE_ROLLABLE,
+    )
+
+
+@pytest.mark.parametrize("switch_on", [True, False])
+def test_rollover_with_a_note_is_offered_whatever_the_switch(switch_on: bool) -> None:
+    offered = _with_note(switch_on=switch_on)
+    assert NOTE_ROLLOVER in offered
+    assert (ROLLOVER in offered) is switch_on
+
+
+def test_rollover_with_a_note_is_offered_on_codex_beside_no_rollover_now() -> None:
+    assert _with_note(profile="codex") == (NOTE_ROLLOVER,)
+
+
+@pytest.mark.parametrize("profile", ["opencode", "cursor-agent"])
+def test_rollover_with_a_note_is_absent_on_a_profile_that_declares_none(profile: str) -> None:
+    assert _with_note(profile=profile) == ()
+
+
+@pytest.mark.parametrize(
+    "state", [state for state in SessionState if state is not SessionState.RUNNING]
+)
+def test_rollover_with_a_note_is_absent_on_a_session_that_is_not_running(
+    state: SessionState,
+) -> None:
+    assert _with_note(state) == ()
+
+
+@pytest.mark.parametrize("open_state", list(RolloverState))
+def test_rollover_with_a_note_is_absent_while_a_rollover_is_open(
+    open_state: RolloverState,
+) -> None:
+    assert NOTE_ROLLOVER not in _with_note(open_state=open_state)
+
+
+def test_no_note_rollable_profiles_offers_no_note_rollover() -> None:
+    """The default: a caller that hands in no set offers it on nothing."""
+    assert NOTE_ROLLOVER not in _rollover()
+
+
+def test_the_note_outcomes_are_their_own_sentences() -> None:
+    words = {
+        rollover_outcome(action, done=done)
+        for action in (ROLLOVER, NOTE_ROLLOVER, CANCEL_ROLLOVER)
+        for done in (True, False)
+    }
+    assert len(words) == 5, "the two 'already open' sentences may coincide; nothing else may"
+    assert "note" in rollover_outcome(NOTE_ROLLOVER, done=True)

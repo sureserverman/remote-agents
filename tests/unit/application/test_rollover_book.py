@@ -171,3 +171,84 @@ async def test_marks_for_no_sessions_reads_nothing(store: SQLiteRolloverStore) -
         {},
         {},
     )
+
+
+# Rollover with a note (BL-119, OD-2) -------------------------------------------------------
+
+
+def _session(profile: str = "claude", state=None):
+    from dataclasses import replace
+
+    from remote_agents.domain.models import SessionDisplayIdentity, SessionRecord, SessionState
+
+    record = SessionRecord(
+        session_id=SessionId.new(),
+        project_id=PROJECT,
+        profile_id=ProfileId(profile),
+        display=SessionDisplayIdentity("probe", profile, "regular", 1),
+        state=SessionState.RUNNING,
+        created_at=NOW,
+    )
+    return record if state is None else replace(record, state=state)
+
+
+class _Switch:
+    def __init__(self, on: bool) -> None:
+        self._on = on
+
+    async def read(self) -> bool:
+        return self._on
+
+
+def _note_book(store: SQLiteRolloverStore) -> RolloverBook:
+    return RolloverBook(
+        store,
+        rollable=frozenset({CLAUDE}),
+        note_rollable=frozenset({CLAUDE, ProfileId("codex")}),
+        now=lambda: NOW,
+    )
+
+
+@pytest.mark.parametrize("switch_on", [True, False])
+async def test_a_note_press_writes_one_requested_note_row_and_a_second_writes_none(
+    store: SQLiteRolloverStore, switch_on: bool
+) -> None:
+    from remote_agents.application.session_actions import NOTE_ROLLOVER, rollover_outcome
+    from remote_agents.domain.rollover import RolloverKind
+
+    book, record = _note_book(store), _session()
+    assert NOTE_ROLLOVER in await book.offered(record, _Switch(switch_on))
+
+    said = await book.press(NOTE_ROLLOVER, record, _Switch(switch_on))
+    assert said == rollover_outcome(NOTE_ROLLOVER, done=True)
+    opened = await book.open_for(record.session_id)
+    assert opened is not None
+    assert opened.kind is RolloverKind.NOTE and opened.state is RolloverState.REQUESTED
+
+    said = await book.press(NOTE_ROLLOVER, record, _Switch(switch_on))
+    assert said == rollover_outcome(NOTE_ROLLOVER, done=False)
+    assert await book.open_rollovers() == (opened,)
+
+
+async def test_a_stale_note_press_on_a_profile_that_declares_none_asks_for_nothing(
+    store: SQLiteRolloverStore,
+) -> None:
+    from remote_agents.application.session_actions import (
+        NOTE_ROLLOVER,
+        NOTE_ROLLOVER_UNAVAILABLE,
+    )
+
+    book, record = _note_book(store), _session("opencode")
+    assert NOTE_ROLLOVER not in await book.offered(record, _Switch(True))
+    assert await book.press(NOTE_ROLLOVER, record, _Switch(True)) == NOTE_ROLLOVER_UNAVAILABLE
+    assert await book.open_rollovers() == ()
+
+
+async def test_a_note_request_is_cancelled_like_any_request(store: SQLiteRolloverStore) -> None:
+    from remote_agents.application.session_actions import CANCEL_ROLLOVER, NOTE_ROLLOVER
+
+    book, record = _note_book(store), _session()
+    await book.press(NOTE_ROLLOVER, record, None)
+    assert await book.offered(record, None) == (CANCEL_ROLLOVER,)
+    assert await book.cancel(record.session_id) is True
+    assert await book.open_for(record.session_id) is None

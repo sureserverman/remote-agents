@@ -445,21 +445,30 @@ def message_available(
 
 
 ROLLOVER = "rollover"
+NOTE_ROLLOVER = "note-rollover"
 CANCEL_ROLLOVER = "cancel-rollover"
 
 ROLLOVER_ACTION_LABELS: dict[str, str] = {
     ROLLOVER: "Rollover now",
+    NOTE_ROLLOVER: "Rollover with a note",
     CANCEL_ROLLOVER: "Cancel rollover",
 }
-"""What the two rollover actions are called on both surfaces (DEC-046), as `ACTION_LABELS`
+"""What the three rollover actions are called on both surfaces (DEC-046), as `ACTION_LABELS`
 names the stops. Disjoint from those labels, so neither vocabulary can decode as the other."""
 
 ROLLOVER_UNAVAILABLE = "Rollover now is not available for this session."
 """What a press says when the policy, re-read at issue time (DEC-007), no longer offers it."""
 
+NOTE_ROLLOVER_UNAVAILABLE = "Rollover with a note is not available for this session."
+"""`ROLLOVER_UNAVAILABLE` for the note rollover."""
+
 _ROLLOVER_OUTCOMES: dict[tuple[str, bool], str] = {
     (ROLLOVER, True): "Rollover asked for — it happens at the workflow's next handoff.",
     (ROLLOVER, False): "A rollover is already open for this session.",
+    (NOTE_ROLLOVER, True): (
+        "Rollover with a note asked for — the session is asked to write a note once it is idle."
+    ),
+    (NOTE_ROLLOVER, False): "A rollover is already open for this session.",
     (CANCEL_ROLLOVER, True): "Rollover request cancelled.",
     (CANCEL_ROLLOVER, False): "Nothing to cancel — the rollover is already under way or over.",
 }
@@ -472,8 +481,10 @@ def rollover_actions(
     *,
     switch_on: bool,
     open_state: RolloverState | None,
+    note_rollable: Collection[ProfileId] = (),
 ) -> tuple[str, ...]:
-    """The rollover actions a surface offers on one session: Rollover now, Cancel, or none.
+    """The rollover actions a surface offers on one session: Rollover now and Rollover with a
+    note, Cancel, or none.
 
     A sibling of `available_actions` rather than a branch of it, for `message_available`'s
     reason (DEC-007): that function is the *stop* policy, a pure function of the stored record
@@ -486,6 +497,11 @@ def rollover_actions(
     and no rollover open. Pressing it writes a REQUESTED row and nothing else; the pass in
     `serve` acts on it at the workflow's own gate (brief §32).
 
+    **Rollover with a note** on a RUNNING session of a `note_rollable` profile (those whose
+    vertical declares `note_rollover`) with no rollover open, **whatever the switch**: the press
+    is the owner's consent for this one rollover (OD-2, BL-119). It writes a REQUESTED row of
+    kind `note`; the pass asks the idle agent for a note and hands it to a fresh session.
+
     **Cancel rollover** only while the open rollover is REQUESTED, whatever the switch or the
     session's state: withdrawing a request is harmless, and one asked while the switch was on
     must stay withdrawable after it is turned off. Narrower than the rollover matrix, which also
@@ -494,14 +510,14 @@ def rollover_actions(
     """
     if open_state is RolloverState.REQUESTED:
         return (CANCEL_ROLLOVER,)
-    if (
-        open_state is None
-        and switch_on
-        and state is SessionState.RUNNING
-        and profile_id in rollable
-    ):
-        return (ROLLOVER,)
-    return ()
+    if open_state is not None or state is not SessionState.RUNNING:
+        return ()
+    offered: list[str] = []
+    if switch_on and profile_id in rollable:
+        offered.append(ROLLOVER)
+    if profile_id in note_rollable:
+        offered.append(NOTE_ROLLOVER)
+    return tuple(offered)
 
 
 def rollover_outcome(action: str, *, done: bool) -> str:

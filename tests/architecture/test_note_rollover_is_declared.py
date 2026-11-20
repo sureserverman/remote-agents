@@ -27,3 +27,10 @@ def test_the_note_rollover_flag_is_a_plain_bool_defaulting_to_off() -> None:
     assert ProviderDescriptor.__dataclass_fields__["note_rollover"].default is False
     assert "note_rollover" not in capability_fields()
     assert dataclasses.is_dataclass(ProviderDescriptor)
+
+
+def test_the_composition_offers_the_note_rollover_on_the_declared_profiles() -> None:
+    from remote_agents.adapters.agents.registry import profiles_that_roll_over_with_a_note
+    from remote_agents.domain.models import ProfileId
+
+    assert profiles_that_roll_over_with_a_note() == {ProfileId("claude"), ProfileId("codex")}

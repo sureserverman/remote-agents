@@ -164,6 +164,7 @@ from remote_agents.application.session_actions import (
     CLEANUP,
     FORCE,
     GRACEFUL,
+    NOTE_ROLLOVER,
     REMOTE_CONTROL_LABELS,
     ROLLOVER,
     ROLLOVER_ACTION_LABELS,
@@ -576,11 +577,15 @@ _ROLLOVER_EMOJI = "\U0001f501"  # 🔁
 
 _ROLLOVER_CALLBACKS: dict[str, str] = {
     ROLLOVER: "session.rollover",
+    NOTE_ROLLOVER: "session.rollover.note",
     CANCEL_ROLLOVER: "session.rollover.cancel",
 }
 """The press each shared rollover action rides on (DEC-046). Under `session.` so the marker
 stays on the sessions tab, as every other press about one session does."""
 _ROLLOVER_OF_CALLBACK = {callback: action for action, callback in _ROLLOVER_CALLBACKS.items()}
+_ROLLOVER_MUTATIONS = frozenset({ROLLOVER, NOTE_ROLLOVER})
+"""The rollover presses claimed once: each writes a request that later types, launches and
+stops sessions unattended. A cancel is not, for `session.unqueue`'s reason."""
 _BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
 
 _HELD_RELAY_NOTICES = 20
@@ -3086,17 +3091,20 @@ class PrivateBotBoundary:
             )
         if relay_row:
             buttons.append(tuple(relay_row))
-        # Rollover now / Cancel rollover (DEC-046, DEC-115): exactly what the shared policy
+        # Rollover now / Rollover with a note / Cancel rollover (DEC-046, DEC-115, BL-119):
+        # exactly what the shared policy
         # offers over the switch and this session's open rollover, read through
         # `Backend.rollovers`. A row of its own, never the stop row's: asking for a rollover
-        # writes one row and stops nothing. Rollover now is a mutation token, claimed once,
+        # writes one row and stops nothing. Both asks are mutation tokens, claimed once,
         # because the request it writes is what later launches and stops sessions unattended;
         # a cancel is not, for `session.unqueue`'s reason -- a second press finds nothing.
         rollover_row = tuple(
             Button(
                 f"{_ROLLOVER_EMOJI} {ROLLOVER_ACTION_LABELS[action]}",
                 self._callback(
-                    _ROLLOVER_CALLBACKS[action], session_value, mutation=action == ROLLOVER
+                    _ROLLOVER_CALLBACKS[action],
+                    session_value,
+                    mutation=action in _ROLLOVER_MUTATIONS,
                 ),
             )
             for action in await self._rollover_offer(record)
@@ -3325,7 +3333,7 @@ class PrivateBotBoundary:
                     back_label=_BACK_TO_SESSIONS,
                 )
             )
-        if action == ROLLOVER and not self.callbacks.claim_mutation(
+        if action in _ROLLOVER_MUTATIONS and not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
