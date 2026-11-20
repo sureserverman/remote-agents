@@ -4,19 +4,14 @@
 the production socket, and a `remote-agents-test-` name so a live test can have a disposable
 one. That is this module's whole subject.
 
-**What it deliberately does not decide is whether a *surface* is hosted by the console.**
-`hosting_mode` asks a different question with the same words, and answering it from here was a
-real defect rather than a tidy-up. A surface that calls itself console-hosted goes on to build
-a `ConsoleComposer`, and the composition root hardcodes that composer's server to the
-production socket — so a surface running inside a *disposable* console classified itself as
-CONSOLE and then drove the owner's real one: splitting panes into their live console window,
-installing a root binding on their server, and running the start-time repair against it. That
-happened, on the machine this was written on, and it was found by the final gate's evaluator
-reading the artifact rather than by any test.
-
-The rule that follows: **`hosting_mode` stays strict** — CONSOLE means the production socket
-and nothing else — until the composer's server stops being hardcoded. Two questions, two
-answers, and the narrower one is the one attached to a live tmux server.
+**The same rule now decides console hosting** (`hosting_socket`, DEC-144). It once could not:
+the composition root built every surface's `ConsoleComposer` on the production socket, so a
+surface inside a *disposable* console that called itself console-hosted drove the owner's real
+one — splitting panes into their live console window, installing a root binding on their
+server, running the start-time repair against it (BL-041). That happened on the machine this
+was written on, and was found by a final gate's evaluator reading the artifact rather than by
+any test. The composer is built on the socket the surface runs inside now, so "hosted by one
+of ours" and "the server this surface drives" are the same server by construction.
 """
 
 from __future__ import annotations

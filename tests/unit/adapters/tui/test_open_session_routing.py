@@ -65,20 +65,24 @@ def test_hosting_mode_reads_the_tmux_socket_not_just_its_presence() -> None:
     assert hosting_mode(_FOREIGN) is HostingMode.FOREIGN
     # A malformed TMUX value is somebody's tmux, never ours: refuse to nest.
     assert hosting_mode({"TMUX": "garbage"}) is HostingMode.FOREIGN
-    # A disposable server a live test made is **not** console hosting, and this assertion is
-    # the scar. It was briefly the opposite, to let a live test drive a pane surface's keypress
-    # into a composer — and because the composition root hardcodes that composer's server to
-    # the production socket, surfaces inside a *test* console drove the owner's **real** one:
-    # panes split into their live console window, a root binding installed on their server.
-    # `is_our_socket` (the gateway's rule) and console hosting are two questions; only one of
-    # them may be answered by a name a test can choose.
+    # A disposable server a live test made **is** console hosting now (DEC-144), and it is
+    # safe only because of what came first: the composer is built on the socket the surface
+    # runs on (`composition/tui.py::_surface_socket`), so a surface in a test console can reach
+    # that console and nothing else. When the composer was built on the production socket,
+    # this exact classification made a test console drive the owner's real one (BL-041).
     assert (
         hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-test-abc123,42,0"})
-        is HostingMode.FOREIGN
-    ), "a disposable test server must never be treated as the console"
-    assert (
-        hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-lookalike,42,0"}) is HostingMode.FOREIGN
-    ), "only the exact production name is the console"
+        is HostingMode.CONSOLE
+    ), "a disposable test console is one of ours"
+    # What stays foreign: a name that only contains ours, or only starts like it, and a path
+    # with no directory part.
+    for value in (
+        "/tmp/tmux-1000/my-remote-agents,42,0",
+        "/tmp/tmux-1000/remote-agents-lookalike,42,0",
+        "/tmp/tmux-1000/remote-agents-test,42,0",
+        "remote-agents-test-abc123,42,0",
+    ):
+        assert hosting_mode({"TMUX": value}) is HostingMode.FOREIGN, value
 
 
 def test_bare_shell_execs_the_attach_command_unchanged() -> None:

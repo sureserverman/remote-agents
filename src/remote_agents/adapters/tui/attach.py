@@ -20,7 +20,7 @@ from enum import Enum
 
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.tmux_server import SOCKET_NAME
+from remote_agents.ports.tmux_server import hosting_socket
 
 
 class HostingMode(Enum):
@@ -35,29 +35,24 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
     """Classify the hosting from `$TMUX`, by socket rather than by mere presence.
 
     tmux sets `TMUX` to `socket_path,server_pid,session_id`; the socket's basename is the
-    server's `-L` name, and only the **production** name means the console is reachable.
-    Anything set but unreadable is classified as foreign, because the safe answer to "whose
-    client is this?" when the evidence is garbled is "not ours".
+    server's `-L` name. CONSOLE means that server is one of ours (`hosting_socket`): the
+    production console or a disposable `remote-agents-test-` one. Anything set but unreadable,
+    or naming somebody else's server, is FOREIGN, because the safe answer to "whose client is
+    this?" when the evidence is garbled is "not ours".
 
-    **Deliberately stricter than `is_our_socket`, which the gateway uses.** That predicate
-    also accepts a `remote-agents-test-` socket, so a live test can have a disposable server,
-    and reusing it here looked like removing a duplicate. It is not the same question. A
-    surface that calls itself CONSOLE goes on to build a `ConsoleComposer`, and the
-    composition root hardcodes that composer's server to `remote-agents` — so widening this
-    made a surface inside a *disposable* console drive the owner's **real** one: panes split
-    into their live console window, a root binding installed on their server, the start-time
-    repair run against it. That happened here, and the final gate's evaluator found it by
-    reading the running system rather than any test catching it.
-
-    So this stays narrow until the composer's server stops being hardcoded. The cost is a
-    known gap, named in `tests/live/test_three_pane_console.py`: no live test can drive a pane
-    surface's own keypress into a composer, because no pane surface can be given a test one.
+    **Safe only because the composer follows the same socket** (DEC-144, superseding DEC-042).
+    A surface that calls itself CONSOLE goes on to build a `ConsoleComposer`, and when the
+    composition root built that composer on the production socket, accepting a test socket
+    here made a surface inside a *disposable* console drive the owner's **real** one: panes
+    split into their live console window, a root binding installed on their server, the
+    start-time repair run against it (BL-041). The composer is now built on
+    `composition/tui.py::_surface_socket`, the server this process runs inside, so a CONSOLE
+    classification names that server and no other — which is what lets
+    `tests/live/test_three_pane_console.py` press a key inside a pane of a test console.
     """
-    value = environment.get("TMUX")
-    if not value:
+    if not environment.get("TMUX"):
         return HostingMode.BARE
-    socket_path = value.split(",", 1)[0]
-    if os.path.basename(socket_path) == SOCKET_NAME and os.path.sep in socket_path:
+    if hosting_socket(environment) is not None:
         return HostingMode.CONSOLE
     return HostingMode.FOREIGN
 
