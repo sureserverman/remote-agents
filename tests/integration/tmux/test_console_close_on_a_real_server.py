@@ -149,6 +149,16 @@ class _Server:
                 return int(pid)
         raise AssertionError(f"no pane carries the agent's mark: {listed!r}")
 
+    def tmux_value(self) -> str:
+        """`$TMUX` as tmux sets it in this server's panes, refused unless it names this server.
+
+        Refused rather than trusted because the verb falls back to the production socket when
+        `$TMUX` names none of ours: an empty value here would close the owner's real console.
+        """
+        value = self.tmux("display-message", "-p", "#{socket_path},#{pid},0").stdout.strip()
+        assert f"/{self.socket}," in value, f"not this server's TMUX: {value!r}"
+        return value
+
     def console_is_gone(self) -> bool:
         return self.tmux("has-session", "-t", f"{CONSOLE_SESSION_NAME}:", check=False).returncode
 
@@ -187,44 +197,32 @@ class _Server:
         subprocess.run(["tmux", "-L", self.socket, "kill-server"], capture_output=True, check=False)
 
 
-def _closer_script(tmp_path: Path, socket: str, cwd: Path) -> Path:
-    """A standalone process that runs the real `close()` against the disposable server.
+def _closer_script(tmp_path: Path) -> Path:
+    """A standalone process that runs the real `remote-agents console close` verb.
 
-    This is what the production route reaches as `remote-agents console close`; the verb
-    itself cannot be used because it builds its composer from the hardcoded production socket
-    (BL-041). Everything below the socket name is the same code.
+    The verb builds its composer on the server named by `$TMUX` (`_surface_socket`), so run
+    from this server's root binding or from a process holding this server's `$TMUX` it closes
+    this console and can reach no other (DEC-144). `HOME` is a scratch one, so the console lock
+    it takes is not the owner's. What the script adds is only instrumentation: a delay, and
+    the verb's exit status written to a file.
     """
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
     script = tmp_path / "close_console.py"
     script.write_text(
         textwrap.dedent(f"""
-            import asyncio, sys, time
+            import os, subprocess, sys, time
             from pathlib import Path
 
-            sys.path.insert(0, {str(Path("src").resolve())!r})
-            from remote_agents.adapters.tmux.gateway import TmuxGateway
-            from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
-            from remote_agents.application.console import ConsoleComposer
-            from remote_agents.ports.console import ConsolePaneSlot
-
-            IDLE = ("sleep", "600")
-
-            async def main() -> None:
-                # A delay so the caller can be dead before any of this runs -- the property
-                # the second test is about.
-                time.sleep(float(sys.argv[2]))
-                composer = ConsoleComposer(
-                    TmuxGateway({socket!r}, AsyncTmuxRunner()),
-                    IDLE,
-                    Path({str(cwd)!r}),
-                    projects_command=IDLE,
-                    panes_command=IDLE,
-                    pane_commands=dict.fromkeys(ConsolePaneSlot, IDLE),
-                    reserved_keys={{}},
-                )
-                report = await composer.close()
-                Path(sys.argv[1]).write_text(report.outcome.value, encoding="utf-8")
-
-            asyncio.run(main())
+            # A delay so the caller can be dead before any of this runs -- the property the
+            # second test is about.
+            time.sleep(float(sys.argv[2]))
+            completed = subprocess.run(
+                [sys.executable, "-m", "remote_agents", "console", "close"],
+                env=os.environ | {{"HOME": {str(home)!r}}},
+                check=False,
+            )
+            Path(sys.argv[1]).write_text(str(completed.returncode), encoding="utf-8")
         """),
         encoding="utf-8",
     )
@@ -253,7 +251,7 @@ async def test_console_close_by_a_real_f10_leaves_the_displayed_agent_running(
         assert await composer.show(server.session_id) is None, "the agent would not display"
         agent_pid = server.agent_pane_pid()
 
-        script = _closer_script(tmp_path, server.socket, tmp_path)
+        script = _closer_script(tmp_path)
         server.tmux(
             "bind-key",
             "-n",
@@ -272,7 +270,7 @@ async def test_console_close_by_a_real_f10_leaves_the_displayed_agent_running(
             f"{outcome.read_text(encoding='utf-8') if outcome.exists() else '<never written>'}"
         )
         assert _wait_until(outcome.exists), "the closer never wrote its report"
-        assert outcome.read_text(encoding="utf-8") == "closed"
+        assert outcome.read_text(encoding="utf-8") == "0"
         assert (
             server.tmux("has-session", "-t", f"ra-{server.session_id}:", check=False).returncode
             == 0
@@ -310,7 +308,7 @@ async def test_the_closer_outlives_the_process_that_started_it(tmp_path: Path) -
     outcome = tmp_path / "outcome.txt"
     try:
         await server.build()
-        script = _closer_script(tmp_path, server.socket, tmp_path)
+        script = _closer_script(tmp_path)
 
         # The stand-in for the pane: it starts the closer the way `action_quit` does, and
         # nothing else. `start_new_session=True` is the whole of what is under test.
@@ -325,6 +323,8 @@ async def test_the_closer_outlives_the_process_that_started_it(tmp_path: Path) -
                 )
                 time.sleep(600)
             """),
+            # What a pane process holds, and what the closer inherits through the launcher.
+            env=os.environ | {"TMUX": server.tmux_value()},
         )
         await asyncio.sleep(1.0)
         os.kill(parent.pid, signal.SIGKILL)
@@ -342,7 +342,7 @@ async def test_the_closer_outlives_the_process_that_started_it(tmp_path: Path) -
         assert _wait_until(outcome.exists), (
             "the closer did not finish its own report after its parent was killed"
         )
-        assert outcome.read_text(encoding="utf-8") == "closed"
+        assert outcome.read_text(encoding="utf-8") == "0"
     finally:
         server.kill()
 
