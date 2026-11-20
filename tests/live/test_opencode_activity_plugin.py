@@ -9,9 +9,12 @@ throwaway ``XDG_CONFIG_HOME`` and ``XDG_DATA_HOME``; the owner's real configurat
 (`docs/acceptance-2026-09-06-opencode-activity.md`) relocated only ``XDG_CONFIG_HOME``,
 deliberately, so the owner's credentials would work — and the consequence, which the document
 records rather than hides, is that both completing runs persisted as live session rows in the
-owner's real OpenCode database. Symlinking `auth.json` into a disposable data home, the way
-`test_codex_activity_hooks.py` symlinks Codex's, keeps the entitlement and drops the pollution.
-The credential is never opened, copied, logged or modified here; only OpenCode reads it.
+owner's real OpenCode database. A disposable data home that holds the owner's `auth.json` keeps
+the entitlement and drops the pollution. OpenCode runs inside `native_isolation.opencode_command`'s
+confinement, where that login is bound read-only over an empty placeholder, so a token refresh
+cannot replace the owner's file (BL-135; it was a symlink until 2026-11-20). The credential is
+never opened, copied, logged or modified here; only OpenCode reads it, and every run asserts the
+owner's file kept its inode, size and time.
 
 What this drill proves that no other test can: `tests/provider_contract` drives the generated
 file under a bare `node` harness this project wrote, so it proves the *plugin* behaves. Only a
@@ -42,6 +45,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from native_isolation import opencode_command, owner_opencode_login
 
 from remote_agents.adapters.agents.registry import install_agent_hooks, remove_agent_hooks
 from remote_agents.adapters.agents.turn_markers import FileConversationMarks
@@ -89,21 +93,23 @@ _BLOCKED_LOG = {
 _TURN_TIMEOUT_SECONDS = 120
 
 
-def _requirements(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+def _requirements(tmp_path: Path) -> tuple[Path, Path, dict[str, str], tuple[str, ...]]:
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
     if shutil.which("opencode") is None:
         pytest.skip("BLOCKED: executable_missing")
+    if shutil.which("bwrap") is None:
+        pytest.skip("BLOCKED: read-only credential isolation requires Linux bwrap")
 
     config_home = tmp_path / "config"
     data_home = tmp_path / "data"
     (config_home / "opencode").mkdir(parents=True)
     (data_home / "opencode").mkdir(parents=True)
 
-    source_auth = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    if not source_auth.is_file():
+    if not owner_opencode_login().is_file():
         pytest.skip("BLOCKED: OpenCode is not logged in")
-    os.symlink(source_auth, data_home / "opencode" / "auth.json")
+    # `tmp_path` is the one writable root: both XDG homes, the workspace and the spool.
+    command = opencode_command(Path(shutil.which("opencode")), tmp_path, data_home)
 
     settings = config_home / "opencode" / "opencode.json"
     # `bash: ask` makes the approval half deterministic. Without it whether `permission.asked`
@@ -141,7 +147,23 @@ def _requirements(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     # not to the disposable child, so inheritance is an explicit opt-in rather than an accidental
     # second managed session -- the same reasoning `test_codex_activity_hooks.py` records.
     environment.pop(SESSION_ID_VARIABLE, None)
-    return workspace, spool, environment
+    return workspace, spool, environment, command
+
+
+def _stat(path: Path) -> tuple[int, int, int]:
+    """Inode, size and mtime: enough to see a file rewritten in place or replaced."""
+    found = path.stat()
+    return found.st_ino, found.st_size, found.st_mtime_ns
+
+
+def _login_untouched(environment: dict[str, str], before: tuple[int, int, int]) -> None:
+    placeholder = Path(environment["XDG_DATA_HOME"]) / "opencode" / "auth.json"
+    assert not placeholder.is_symlink() and placeholder.stat().st_size == 0, (
+        "credential placeholder was written"
+    )
+    assert _stat(owner_opencode_login()) == before, (
+        "OpenCode rewrote the owner's auth.json, or the owner's own OpenCode refreshed it meanwhile"
+    )
 
 
 def _blocked_reason(environment: dict[str, str], stderr: str = "") -> str | None:
@@ -181,11 +203,14 @@ def _refuse_to_blame_the_environment_for_our_own_file(environment: dict[str, str
 _MODEL_VARIABLE = "REMOTE_AGENTS_OPENCODE_DRILL_MODEL"
 
 
-def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TURN) -> None:
+def _run_opencode(
+    workspace: Path, command: tuple[str, ...], environment: dict[str, str], turn: str = _TURN
+) -> None:
     model = environment.get(_MODEL_VARIABLE)
+    login_before = _stat(owner_opencode_login())
     try:
         completed = subprocess.run(
-            ["opencode", "run", *(("--model", model) if model else ()), turn],
+            [*command, "run", *(("--model", model) if model else ()), turn],
             check=False,
             capture_output=True,
             text=True,
@@ -211,6 +236,9 @@ def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TUR
             else "BLOCKED: `opencode run` did not finish and its log names no cause; the model "
             "path is unavailable, which is upstream of anything this drill tests"
         )
+    finally:
+        # However the run ended, before its skip or failure is reported (BL-135).
+        _login_untouched(environment, login_before)
     if completed.returncode == 0:
         # A completed turn is a completed turn. The log is only consulted when something went
         # wrong, because it accumulates across runs and a *transient* refusal on a turn that
@@ -227,10 +255,10 @@ def _run_opencode(workspace: Path, environment: dict[str, str], turn: str = _TUR
 @pytest.mark.live_profile
 def test_a_managed_opencode_turn_spools_its_own_completion(tmp_path: Path) -> None:
     """The one link no harness of ours can prove: OpenCode loading the file we installed."""
-    workspace, spool, environment = _requirements(tmp_path)
+    workspace, spool, environment, command = _requirements(tmp_path)
     session_id = SessionId.new()
 
-    _run_opencode(workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)})
+    _run_opencode(workspace, command, {**environment, SESSION_ID_VARIABLE: str(session_id)})
 
     activities = drain_activity(spool)
     assert activities, "a managed OpenCode turn spooled nothing; the plugin did not run"
@@ -265,10 +293,10 @@ def test_a_managed_opencode_turn_marks_opencodes_own_conversation(tmp_path: Path
     One short turn (owner, 2026-11-18, OD-4). The mark must hold an id OpenCode itself wrote
     under the disposable data home, and no spooled record may carry it.
     """
-    workspace, spool, environment = _requirements(tmp_path)
+    workspace, spool, environment, command = _requirements(tmp_path)
     session_id = SessionId.new()
 
-    _run_opencode(workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)})
+    _run_opencode(workspace, command, {**environment, SESSION_ID_VARIABLE: str(session_id)})
 
     mark = FileConversationMarks(spool).latest(str(session_id))
     assert mark is not None and mark.startswith("ses_"), mark
@@ -283,9 +311,9 @@ def test_a_managed_opencode_turn_marks_opencodes_own_conversation(tmp_path: Path
 @pytest.mark.live_profile
 def test_an_unmanaged_opencode_turn_spools_nothing(tmp_path: Path) -> None:
     """The plugin loads in every session on the host; only a managed one may write."""
-    workspace, spool, environment = _requirements(tmp_path)
+    workspace, spool, environment, command = _requirements(tmp_path)
 
-    _run_opencode(workspace, environment)
+    _run_opencode(workspace, command, environment)
 
     assert drain_activity(spool) == ()
     assert not spool.exists() or list(spool.iterdir()) == []
@@ -294,11 +322,11 @@ def test_an_unmanaged_opencode_turn_spools_nothing(tmp_path: Path) -> None:
 @pytest.mark.live_profile
 def test_the_drill_leaves_the_configuration_as_it_found_it(tmp_path: Path) -> None:
     """Reversibility asserted against a config a real OpenCode has since loaded and written."""
-    workspace, _spool, environment = _requirements(tmp_path)
+    workspace, _spool, environment, command = _requirements(tmp_path)
     settings = Path(environment["XDG_CONFIG_HOME"]) / "opencode" / "opencode.json"
     plugin = settings.parent / "remote-agents" / "activity-plugin.mjs"
 
-    _run_opencode(workspace, environment)
+    _run_opencode(workspace, command, environment)
     remove_agent_hooks(settings, provider="opencode")
 
     assert json.loads(settings.read_text(encoding="utf-8")) == {
@@ -317,10 +345,12 @@ def test_a_managed_opencode_turn_asking_for_approval_spools_a_named_wait(tmp_pat
     happened to hold. The literal command must not travel with it: `patterns` and
     `metadata.command` both carry `echo measured` on the real payload, and neither is licensed.
     """
-    workspace, spool, environment = _requirements(tmp_path)
+    workspace, spool, environment, command = _requirements(tmp_path)
     session_id = SessionId.new()
 
-    _run_opencode(workspace, {**environment, SESSION_ID_VARIABLE: str(session_id)}, _APPROVAL_TURN)
+    _run_opencode(
+        workspace, command, {**environment, SESSION_ID_VARIABLE: str(session_id)}, _APPROVAL_TURN
+    )
 
     activities = drain_activity(spool)
     waits = [one for one in activities if one.kind is ActivityKind.NEEDS_ANSWER]

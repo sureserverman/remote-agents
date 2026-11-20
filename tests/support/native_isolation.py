@@ -139,6 +139,45 @@ def codex_command(
     )
 
 
+def owner_opencode_login() -> Path:
+    """The login `opencode_command` binds into a drill, which is the file a drill must watch."""
+    return Path.home() / ".local" / "share" / "opencode" / "auth.json"
+
+
+def opencode_command(
+    executable: Path, root: Path, data_home: Path, *writable: Path
+) -> tuple[str, ...]:
+    """OpenCode in a disposable data home that holds the owner's login read-only (BL-135).
+
+    OpenCode reads `$XDG_DATA_HOME/opencode/auth.json`. Inside the confinement that variable
+    names `data_home`, whose `auth.json` is an empty placeholder with the owner's file bound
+    read-only over it, so a token refresh cannot replace or rewrite the owner's login.
+    """
+    source = owner_opencode_login()
+    owner_data, fixture, data = (path.resolve() for path in (source.parent.parent, root, data_home))
+    if (
+        source.resolve().is_relative_to(fixture)
+        or not data.is_relative_to(fixture)
+        or data.is_relative_to(owner_data)
+    ):
+        # Refused before anything is made: the owner's own folders get no fixture directories.
+        raise RuntimeError(
+            "BLOCKED: OpenCode's data home must be inside the fixture root, and not the owner's"
+        )
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    home = root / "native-home"
+    home.mkdir(mode=0o700, exist_ok=True)
+    (data_home / "opencode").mkdir(mode=0o700, parents=True, exist_ok=True)
+    command = confined_command(
+        executable,
+        home=home,
+        writable=(root, *writable),
+        credentials=((source, data_home / "opencode" / "auth.json"),),
+    )
+    *confinement, last, separator, program = command
+    return (*confinement, "--setenv", "XDG_DATA_HOME", str(data_home), last, separator, program)
+
+
 def claude_first_run_approved() -> bool:
     """The owner's approval to pass Claude's first run in a disposable home, never a default."""
     return os.environ.get("REMOTE_AGENTS_LIVE_CLAUDE_FIRST_RUN") == "owner-approved"
