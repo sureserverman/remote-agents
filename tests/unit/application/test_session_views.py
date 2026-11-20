@@ -1729,3 +1729,42 @@ async def test_one_row_and_forty_rows_cost_the_same_reads(
     await rollover_marks(RolloverBook(forty), listed)  # type: ignore[arg-type]
 
     assert len(one.calls) == len(forty.calls) <= 3, (one.calls, forty.calls)
+
+
+# --- Sub-plan 5 Task 1.5: a mark at the owner's threshold (BL-119) ----------------------------
+
+
+def test_context_mark_reads_the_shown_percentage_against_the_threshold() -> None:
+    from remote_agents.application.session_views import context_mark
+
+    at_83 = ContextWindow(830_000, 1_000_000)
+    at_79 = ContextWindow(790_000, 1_000_000)
+    at_80 = ContextWindow(800_000, 1_000_000)
+
+    assert context_mark(at_83, 80) == "context 83% - roll over?"
+    assert context_mark(at_80, 80) == "context 80% - roll over?"
+    assert context_mark(at_79, 80) is None
+    assert context_mark(at_83, None) is None
+    assert context_mark(None, 80) is None
+    # A ceiling nobody knows is never marked: the percentage would be invented (DEC-061).
+    assert context_mark(ContextWindow(830_000), 80) is None
+
+
+def test_the_mark_joins_the_note_of_a_running_row_only() -> None:
+    at_83 = ContextWindow(830_000, 1_000_000)
+    running = _numbered(1)
+    preserved = _numbered(2, SessionState.PRESERVED)
+
+    assert session_row_parts(running, at_83, mark_at=80).note == "context 83% - roll over?"
+    assert session_row_parts(running, at_83, mark_at=None).note is None
+    assert session_row_parts(running, ContextWindow(790_000, 1_000_000), mark_at=80).note is None
+    assert session_row_parts(preserved, at_83, mark_at=80).note is None
+
+
+def test_the_mark_follows_the_rollover_note() -> None:
+    at_83 = ContextWindow(830_000, 1_000_000)
+    mark = RolloverMark(None, Lineage(4), None)
+
+    note = session_row_parts(_numbered(5), at_83, mark, mark_at=80).note
+
+    assert note == "continued from #4 · context 83% - roll over?"

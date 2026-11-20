@@ -194,6 +194,7 @@ from remote_agents.application.session_views import (
     SessionGit,
     StateGroup,
     agent_said,
+    context_mark,
     fire_words,
     git_line,
     group_counts,
@@ -238,7 +239,7 @@ from remote_agents.domain.remote_control import (
 )
 from remote_agents.domain.trust import TrustState
 from remote_agents.domain.trust import answerable as trust_answerable
-from remote_agents.ports.agent_usage import AgentLimits, ContextWindow, LimitsAbsence
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, LimitsAbsence
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
@@ -2741,8 +2742,11 @@ class PrivateBotBoundary:
                 context = await self._context_for(record)
                 rolled = rollovers.get(str(record.session_id))
                 read = gits.get(str(record.session_id))
-                parts = session_row_parts(record, context, rolled, read and read.summary)
-                second = session_state_line(record, context, rolled, parts.git)
+                mark_at = self.backend.mark_at.get(str(record.profile_id))
+                parts = session_row_parts(
+                    record, context, rolled, read and read.summary, mark_at=mark_at
+                )
+                second = session_state_line(record, context, rolled, parts.git, mark_at=mark_at)
                 # The sequence sits *outside* the bold, so the eye lands on the name and
                 # finds the number beside it, and the state line is monospace so the gauges
                 # of neighbouring rows line up.
@@ -2941,7 +2945,7 @@ class PrivateBotBoundary:
 
         Read only for a RUNNING row -- `session_row_parts` draws no gauge for any other state,
         so a read there would be a provider sweep for a figure nobody renders. The broad
-        `except` is `_usage_lines`'s trade: the gauge is a decoration on a list whose real
+        `except` is `_usage`'s trade: the gauge is a decoration on a list whose real
         content is the way into each session, and a provider that changed its file format must
         not cost the owner the list. Reads are not cached here; a page holds at most eight rows
         and the bot drew this screen on a press and never on a timer.
@@ -3185,8 +3189,19 @@ class PrivateBotBoundary:
                 label, applied = "unknown (snapshot unavailable)", None
             fact = f"Launch permissions: {label} (requested at launch)"
             facts.append(("permissions", fact if applied is None else f"{fact}; {applied}"))
-        for value in await self._usage_lines(record):
+        read, usage = await self._usage(record)
+        # No reader, or a read that failed, draws no usage line at all; a read that answered
+        # nothing is `usage_lines`' own sentence.
+        for value in usage_lines(usage) if read else ():
             facts.append(("context", value))
+        # The owner's threshold, said under the context it is about (BL-119), in the row's words.
+        marked = (
+            context_mark(usage.context, self.backend.mark_at.get(str(record.profile_id)))
+            if usage is not None and record.state is SessionState.RUNNING
+            else None
+        )
+        if marked is not None:
+            facts.append(("context", marked))
         facts.extend(git_facts(await self._git_read(record)))
         if remote_control_available(record):
             facts.append(
@@ -3522,7 +3537,7 @@ class PrivateBotBoundary:
 
         **A failed read shows every agent as unreadable, never a vanished block.** A block that
         disappeared read as "no limits to report", which is a different answer. The broad
-        `except` is `_usage_lines`'s trade made again one screen up, and it matters more here:
+        `except` is `_usage`'s trade made again one screen up, and it matters more here:
         this block sits on the screen that is the only way to reach a session at all, so a
         provider that changed its file format under an upgrade must not be able to cost the
         owner the list.
@@ -3543,30 +3558,28 @@ class PrivateBotBoundary:
         block = limits_block(rows)
         return f"\n\n{block}" if block else ""
 
-    async def _usage_lines(self, record: SessionRecord) -> tuple[str, ...]:
+    async def _usage(self, record: SessionRecord) -> tuple[bool, AgentUsage | None]:
         """Ask the provider what this session has spent, and never let the answer cost a screen.
 
-        A host that wired no reader renders no usage line at all — the same absence-is-an-answer
-        arrangement `capture` and `activity_feed` have, rather than a row saying the host is
-        missing something the owner did not ask for.
-
-        The broad `except` is the same trade `ProfileUsageReaders` already makes one layer down,
-        made again at the seam that matters: this line is a decoration on a screen whose real
-        content is a session's state and its stop actions, and a provider that changed its file
-        format under an upgrade must not be able to take those away.
+        `(read, usage)`: `read` is False when there is no reader or the read failed. A host that
+        wired no reader renders no usage line at all — the same absence-is-an-answer
+        arrangement `capture` and `activity_feed` have. The broad `except` is the trade
+        `ProfileUsageReaders` already makes one layer down, made again at the seam that
+        matters: the usage lines are a decoration on a screen whose real content is a session's
+        state and its stop actions.
         """
         if self.backend.usage is None:
-            return ()
+            return False, None
         try:
-            return usage_lines(await self.backend.usage(record.session_id))
+            return True, await self.backend.usage(record.session_id)
         except Exception:
             logging.getLogger(__name__).debug("usage read failed", exc_info=True)
-            return ()
+            return False, None
 
     async def _agent_said(self, records: Sequence[SessionRecord]) -> dict[str, str]:
         """The `agent said:` line of each record that has one, from one read for them all.
 
-        `_usage_lines`'s trade made again: the line is a decoration, and a feed that cannot be
+        `_usage`'s trade made again: the line is a decoration, and a feed that cannot be
         read costs the line, never the screen."""
         try:
             return await agent_said(
@@ -3579,7 +3592,7 @@ class PrivateBotBoundary:
     async def _git_read(self, record: SessionRecord) -> SessionGit | None:
         """One session's git summary, or nothing -- never a screen lost to a git read.
 
-        `_usage_lines`'s trade made again: the line is a decoration on a screen whose real
+        `_usage`'s trade made again: the line is a decoration on a screen whose real
         content is the session's state and its stop actions. The read is bounded at the root
         (two seconds) and answers None itself on any failure; this `except` is the seam's own
         guarantee, so a reader that broke its promise still costs only the line."""
@@ -6502,9 +6515,11 @@ def session_state_line(
     context: ContextWindow | None,
     rollover: RolloverMark | None,
     token: str,
+    *,
+    mark_at: int | None = None,
 ) -> str:
     """A row's monospace second line, `state · age[ · gauge][ · note]`, with the git token after
     it when the whole fits `UNIFORM_ROW_WIDTH`. The identity has a line of its own above, so
     the token can never push it out; at the narrow width the token goes first, whole."""
-    _first, second = session_lines(record, context, rollover)
+    _first, second = session_lines(record, context, rollover, mark_at=mark_at)
     return with_token(second, token, UNIFORM_ROW_WIDTH)

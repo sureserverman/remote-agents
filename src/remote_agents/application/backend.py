@@ -40,7 +40,7 @@ at composition time rather than being a field here.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from remote_agents.application.permission_presets import PermissionChange, PermissionSettings
 from remote_agents.application.profiles import ProfileAvailability
@@ -205,6 +205,12 @@ class Backend:
     The feed's own store answers it in one query for a whole listing (BL-122), and both
     surfaces draw it through `session_views.agent_said` as `agent said: ...`. `None` draws no
     such line anywhere.
+    """
+
+    mark_at: Mapping[str, int] = field(default_factory=dict)
+    """`[rollover] mark_at`: each profile's context percentage at which a running row is marked
+    `context N% - roll over?` (BL-119), as the config states it. Both surfaces read it here, so
+    they mark the same rows; empty marks none.
     """
 
     forget_usage_records: Callable[[], Awaitable[None]] | None = None

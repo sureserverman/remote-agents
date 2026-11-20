@@ -563,8 +563,9 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     # service drops ended sessions' context records after each reconciliation (DEC-146).
     # Twenty-nine since `last_words` joined them (the same plan, Task 1.3): both surfaces draw
     # the agent's last finished-turn words, read once per listing.
-    assert len(fields) == 29, (
-        f"`Backend` now declares {len(fields)} fields, not 29. That is fine — but it widens "
+    # Thirty since `mark_at` joined them (Task 1.5): both surfaces mark the same rows.
+    assert len(fields) == 30, (
+        f"`Backend` now declares {len(fields)} fields, not 30. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

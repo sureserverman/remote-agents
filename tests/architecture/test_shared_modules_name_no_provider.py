@@ -39,8 +39,13 @@ _VERTICALS = ("claude", "codex", "opencode", "cursor")
 #: Module, assigned name: the one place a list of provider names is the point. `HOOK_PROVIDERS`
 #: is the `--provider` choices, spelled in `agent_event.py` so the hook stays importable without
 #: the adapters; `tests/integration/test_agent_hook_install.py` holds it equal to the
-#: descriptors' hook names.
-_ALLOWED = frozenset({("agent_event.py", "HOOK_PROVIDERS")})
+#: descriptors' hook names. `MARK_AT_PROFILES` is the same shape for the same reason: the
+#: profile ids `[rollover] mark_at` may name, spelled in `config.py`, which is a root module and
+#: may not import the domain or the registry, so that `load_config` itself refuses an unknown
+#: profile (BL-119); `tests/unit/test_config.py::test_mark_at_profiles_are_the_closed_profiles`
+#: holds it equal to `closed_profiles()`. It decides nothing by a name: it is the set a key is
+#: checked against.
+_ALLOWED = frozenset({("agent_event.py", "HOOK_PROVIDERS"), ("config.py", "MARK_AT_PROFILES")})
 
 #: Module, function: the four places that ask "is this claude?" for Remote Control, which is a
 #: pane action only Claude has and which DEC-070 did not move into the vertical. The same four
@@ -148,6 +153,8 @@ def test_the_allowed_tuple_is_still_there_to_allow() -> None:
     """An allow-list entry whose assignment is gone allows nothing and should go with it."""
     tree = ast.parse((_SOURCE / "agent_event.py").read_text(encoding="utf-8"))
     assert _allowed_nodes("agent_event.py", tree), "HOOK_PROVIDERS is no longer assigned there"
+    config = ast.parse((_SOURCE / "config.py").read_text(encoding="utf-8"))
+    assert _allowed_nodes("config.py", config), "MARK_AT_PROFILES is no longer assigned there"
 
 
 def test_a_comparison_in_a_shared_module_is_reported(tmp_path: pathlib.Path) -> None:

@@ -371,6 +371,8 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # Each session's last finished-turn words, one store read per listing (BL-122); both
         # surfaces draw it as `agent said: ...`, and a host without it draws no such line.
         "last_words",
+        # `[rollover] mark_at`, as configured: both surfaces mark the same rows (BL-119).
+        "mark_at",
         "max_label_length",
     }
 

@@ -79,6 +79,7 @@ def backend_for(
     close_usage_readers: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
     forget_usage_records: Callable[[], Awaitable[None]] | None = _UNSET,  # type: ignore[assignment]
     last_words: object | None = _UNSET,
+    mark_at: object | None = _UNSET,
     schedules: object | None = _UNSET,
     rollovers: object | None = _UNSET,
     max_label_length: int = _UNSET,  # type: ignore[assignment]
@@ -121,6 +122,7 @@ def backend_for(
         "close_usage_readers": close_usage_readers,
         "forget_usage_records": forget_usage_records,
         "last_words": last_words,
+        "mark_at": mark_at,
         "schedules": schedules,
         "rollovers": rollovers,
         "max_label_length": max_label_length,

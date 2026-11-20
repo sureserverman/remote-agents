@@ -2578,6 +2578,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self.context_window_for(record.session_id),
             self._rollover_marks.get(str(record.session_id)),
             None if read is None else read.summary,
+            mark_at=self._services.backend.mark_at.get(str(record.profile_id)),
         )
 
     def agent_said_for(self, session_id: object) -> str | None:

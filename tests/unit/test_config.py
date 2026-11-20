@@ -1513,3 +1513,72 @@ def test_codex_permission_configuration_uses_plain_strings(tmp_path):
     path = write_config(tmp_path, example(tmp_path))
     assert type(load_config(path).codex_default_permissions) is str
     assert type(read_codex_permissions(path)) is str
+
+
+# --- Sub-plan 5 Task 1.5: `[rollover] mark_at`, the owner's per-profile threshold -------------
+
+
+def test_mark_at_loads_a_threshold_per_profile(tmp_path: Path) -> None:
+    from remote_agents.config import describe_schema_drift
+
+    path = write_config(
+        tmp_path, example(tmp_path) + "\n[rollover]\nmark_at = { claude = 80, codex = 85 }\n"
+    )
+
+    assert dict(load_config(path).mark_at) == {"claude": 80, "codex": 85}
+    drift = describe_schema_drift(path)
+    assert drift["unknown"] == [] and drift["missing"] == []
+
+
+def test_mark_at_absent_marks_nothing(tmp_path: Path) -> None:
+    for body in (example(tmp_path), example(tmp_path) + "\n[rollover]\nauto_rollover = true\n"):
+        assert dict(load_config(write_config(tmp_path, body)).mark_at) == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "{ claude = 20 }",
+        "{ claude = 100 }",
+        "{ claude = 49 }",
+        "{ claude = 80.5 }",
+        '{ claude = "80" }',
+        "{ claude = true }",
+        "{ gemini = 80 }",
+        "80",
+        '"claude=80"',
+    ],
+    ids=[
+        "20",
+        "100",
+        "49",
+        "float",
+        "string",
+        "bool",
+        "unknown-profile",
+        "bare-int",
+        "string-table",
+    ],
+)
+def test_mark_at_refuses_by_name_and_says_the_range(tmp_path: Path, value: str) -> None:
+    path = write_config(tmp_path, example(tmp_path) + f"\n[rollover]\nmark_at = {value}\n")
+
+    with pytest.raises(ConfigError, match=r"rollover\.mark_at") as raised:
+        load_config(path)
+    assert "50" in str(raised.value) and "99" in str(raised.value)
+
+
+def test_the_settings_writer_still_writes_only_the_switch_under_rollover(tmp_path: Path) -> None:
+    from remote_agents.config import write_config_key
+
+    path = write_config(tmp_path, example(tmp_path))
+
+    with pytest.raises(ConfigError, match="rollover.mark_at"):
+        write_config_key(path, "rollover", "mark_at", True)
+
+
+def test_mark_at_profiles_are_the_closed_profiles() -> None:
+    from remote_agents.config import MARK_AT_PROFILES
+    from remote_agents.domain.profiles import closed_profiles
+
+    assert {str(profile.profile_id) for profile in closed_profiles()} == MARK_AT_PROFILES

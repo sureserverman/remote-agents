@@ -226,6 +226,11 @@ class AppConfig:
     worktree_copy: tuple[str, ...] = DEFAULT_WORKTREE_COPY
     """`[worktrees] copy`: the repo-relative files a new session worktree copies (BL-116)."""
 
+    mark_at: Mapping[str, int] = field(default_factory=dict)
+    """`[rollover] mark_at`: a profile id mapped to the context percentage, 50 to 99, at or over
+    which a running session of that profile is marked `context N% - roll over?` (BL-119). Only
+    a mark: nothing is typed and nothing is pushed (OD-2). Absent marks nothing."""
+
     worktree_copy_by_project: Mapping[Path, tuple[str, ...]] = field(default_factory=dict)
     """`[worktrees.projects]`: an absolute project path mapped to the list replacing
     `worktree_copy` for that project only."""
@@ -329,9 +334,20 @@ also refuse every config already deployed, which is a schema change breaking the
 written for -- and DEC-058 says a config lacking a new key is not drift.
 """
 
-_ROLLOVER_KEYS = {"auto_rollover"}
-_OPTIONAL_ROLLOVER_KEYS = frozenset({"auto_rollover"})
+_ROLLOVER_KEYS = {"auto_rollover", "mark_at"}
+_OPTIONAL_ROLLOVER_KEYS = frozenset({"auto_rollover", "mark_at"})
 """Every `[rollover]` key is optional: the switch is off until the owner writes it (DEC-058)."""
+
+_WRITTEN_ROLLOVER_KEYS = frozenset({"auto_rollover"})
+"""The `[rollover]` keys a Settings row writes: the switch. `mark_at` is the owner's to type."""
+
+MARK_AT_PROFILES = frozenset({"claude", "codex", "opencode", "cursor-agent"})
+"""The profile ids `[rollover] mark_at` may name. Spelled here because this root-layer module
+may not import the domain; pinned equal to `domain.profiles.closed_profiles()` by
+`test_mark_at_profiles_are_the_closed_profiles`."""
+
+MARK_AT_BOUNDS = (50, 99)
+"""A mark below half a window is noise, and one at 100 is too late to act on (BL-119)."""
 
 _RESTART_KEYS = {"resume_interrupted"}
 _OPTIONAL_RESTART_KEYS = frozenset({"resume_interrupted"})
@@ -583,6 +599,7 @@ def load_config(path: Path) -> AppConfig:
     auto_rollover = _flag(
         rollover.get("auto_rollover", DEFAULT_AUTO_ROLLOVER), "rollover.auto_rollover"
     )
+    mark_at = _mark_at(rollover.get("mark_at", {}))
     resume_interrupted = _flag(
         restart.get("resume_interrupted", DEFAULT_RESUME_INTERRUPTED), "restart.resume_interrupted"
     )
@@ -608,6 +625,7 @@ def load_config(path: Path) -> AppConfig:
         resume_after_limit=resume_after_limit,
         auto_rollover=auto_rollover,
         resume_interrupted=resume_interrupted,
+        mark_at=mark_at,
         worktree_copy=worktree_copy,
         worktree_copy_by_project=worktree_copy_by_project,
         codex_default_permissions=permissions,
@@ -725,6 +743,23 @@ def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
         raise ConfigError(f"{name} must be an integer between {minimum} and {maximum}")
     return value
+
+
+def _mark_at(value: object) -> dict[str, int]:
+    """`[rollover] mark_at` as a profile-to-percentage table, refused by name otherwise."""
+    low, high = MARK_AT_BOUNDS
+    rule = f"rollover.mark_at maps a profile id to an integer from {low} to {high}"
+    if not isinstance(value, dict):
+        raise ConfigError(f"{rule}, as an inline table such as {{ claude = 80 }}")
+    thresholds: dict[str, int] = {}
+    for profile, figure in value.items():
+        if profile not in MARK_AT_PROFILES:
+            known = ", ".join(sorted(MARK_AT_PROFILES))
+            raise ConfigError(f"{rule}; {profile!r} is not a profile ({known})")
+        if isinstance(figure, bool) or not isinstance(figure, int) or not low <= figure <= high:
+            raise ConfigError(f"{rule}; rollover.mark_at.{profile} is not one")
+        thresholds[profile] = figure
+    return thresholds
 
 
 def _flag(value: object, name: str) -> bool:
@@ -1170,7 +1205,7 @@ def _write_config_key_locked(path: Path, table: str, key: str, value: bool | str
     if validate is not None:
         rendered = _toml_value(validate(value))
     elif table == "rollover":
-        if key not in _ROLLOVER_KEYS:
+        if key not in _WRITTEN_ROLLOVER_KEYS:
             raise ConfigError(f"rollover.{key} is not a key this schema writes")
         rendered = _toml_value(_flag(value, f"rollover.{key}"))
     elif table == "restart":

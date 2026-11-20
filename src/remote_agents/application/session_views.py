@@ -468,11 +468,27 @@ class SessionRowParts:
     note, and the first thing a row drops at its narrow width (`with_token`)."""
 
 
+def context_mark(context: ContextWindow | None, threshold: int | None) -> str | None:
+    """`context N% - roll over?` when the shown percentage is at or over the owner's figure.
+
+    The figure is `[rollover] mark_at` for the session's profile (BL-119). The percentage is
+    the one the gauge shows (`whole_percent`), so the mark never disagrees with the bar beside
+    it. No figure, no reading, or a ceiling nobody knows marks nothing: a percentage of an
+    unknown window would be invented (DEC-061). A mark only -- nothing is typed or pushed.
+    """
+    if threshold is None or context is None or context.used_fraction is None:
+        return None
+    shown = whole_percent(context.used_fraction * 100)
+    return f"context {shown}% - roll over?" if shown >= threshold else None
+
+
 def session_row_parts(
     record: SessionRecord,
     context: ContextWindow | None = None,
     rollover: RolloverMark | None = None,
     git: GitSummary | None = None,
+    *,
+    mark_at: int | None = None,
 ) -> SessionRowParts:
     """Take one listed record apart for a two-line or columned row.
 
@@ -489,7 +505,9 @@ def session_row_parts(
     **The note composes, in a fixed order:** what qualifies the state word (an adopted orphan's
     `ADOPTED_NOTE`) first, then the session's rollover (`rollover_note`: where it stands, then
     its lineage), each joined by ` · `. `rollover` is handed in, never read here; None draws
-    the row exactly as it was before rollovers existed.
+    the row exactly as it was before rollovers existed. Last, the owner's threshold mark
+    (`context_mark`, with `mark_at` the figure for this session's profile), on a RUNNING row
+    only -- the same rule the gauge keeps.
     """
     group = state_group(record.state)
     if group is None:
@@ -510,6 +528,9 @@ def session_row_parts(
     rolled = None if rollover is None else rollover_note(rollover)
     if rolled is not None:
         note = rolled if note is None else f"{note} · {rolled}"
+    marked = context_mark(context, mark_at) if record.state is SessionState.RUNNING else None
+    if marked is not None:
+        note = marked if note is None else f"{note} · {marked}"
     return SessionRowParts(
         identity=session_identity(record),
         sequence=record.display.sequence,
@@ -526,6 +547,8 @@ def session_lines(
     record: SessionRecord,
     context: ContextWindow | None = None,
     rollover: RolloverMark | None = None,
+    *,
+    mark_at: int | None = None,
 ) -> tuple[str, str]:
     """The two-line row: `identity #n` over `state · age[ · gauge][ · note]`.
 
@@ -534,7 +557,7 @@ def session_lines(
     Plain strings, no markup -- the bot bolds the identity and leaves the sequence outside the
     bold, and that is its `escape()`-then-compose business (DEC-014), not this module's.
     """
-    parts = session_row_parts(record, context, rollover)
+    parts = session_row_parts(record, context, rollover, mark_at=mark_at)
     tail = " · ".join(piece for piece in (parts.state, parts.age, parts.gauge, parts.note) if piece)
     return f"{parts.identity} #{parts.sequence}", tail
 

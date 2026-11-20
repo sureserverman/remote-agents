@@ -48,3 +48,7 @@ cursor_limits_source = "off"
 # stops the old session gracefully only after the new one accepts. Off by default, because that
 # is a launch and a stop nobody watched. Settings on either surface writes this key.
 auto_rollover = false
+# The context percentage, per profile, at or over which a running session is marked
+# "context 83% - roll over?" on both surfaces. Only a mark: nothing is typed and nothing is sent.
+# Each value is an integer from 50 to 99; a profile left out is never marked. Not a Settings row.
+# mark_at = { claude = 80, codex = 85 }

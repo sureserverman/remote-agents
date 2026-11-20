@@ -60,7 +60,12 @@ from remote_agents.application.session_actions import (
     remote_control_target,
     rollover_outcome,
 )
-from remote_agents.application.session_views import SessionGit, agent_said, git_line
+from remote_agents.application.session_views import (
+    SessionGit,
+    agent_said,
+    context_mark,
+    git_line,
+)
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
@@ -2020,6 +2025,7 @@ class SessionDetailScreen(ChoiceScreen):
         rollover = await self._rollover_offer(record)
         git = await self._git_read(record)
         said = await self._agent_said(record)
+        marked = await self._context_mark(record)
         if not self.showing:
             return
         # The name goes to the header and the state's meaning to the status line. They were
@@ -2054,11 +2060,27 @@ class SessionDetailScreen(ChoiceScreen):
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
             + permission_fact
         )
-        entries = self.detail_entries(record, rollover, git, said)
+        entries = self.detail_entries(record, rollover, git, said, marked)
         # The git and agent-said rows are facts: the cursor rests on the first row that does
         # something, so enter on a fresh detail copies the attach command as it always did.
         facts = sum(1 for key, _ in entries if key in FACT_ENTRIES)
         self.show_choices(entries, highlight=facts)
+
+    async def _context_mark(self, record: SessionRecord) -> str | None:
+        """`context N% - roll over?` when the session is at or over its profile's `mark_at`.
+
+        The bot says it under its context fact; this detail has no context line, so it is a
+        fact row of its own (BL-119, DEC-033). Total: a usage read never costs the detail."""
+        backend = self.services.backend
+        threshold = backend.mark_at.get(str(record.profile_id))
+        if threshold is None or backend.usage is None or record.state is not SessionState.RUNNING:
+            return None
+        try:
+            usage = await backend.usage(record.session_id)
+        except Exception:
+            _LOG.debug("the session usage could not be read", exc_info=True)
+            return None
+        return None if usage is None else context_mark(usage.context, threshold)
 
     async def _agent_said(self, record: SessionRecord) -> str | None:
         """The session's `agent said:` line through `Backend.last_words`, or nothing (BL-122).
@@ -2106,6 +2128,7 @@ class SessionDetailScreen(ChoiceScreen):
         rollover: tuple[str, ...] = (),
         git: SessionGit | None = None,
         said: str | None = None,
+        marked: str | None = None,
     ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
@@ -2130,6 +2153,9 @@ class SessionDetailScreen(ChoiceScreen):
         # after its facts. A fact row too; choosing it does nothing.
         if said is not None:
             entries.append((AGENT_SAID_ENTRY, said))
+        # The owner's threshold mark, a fact like the git row (BL-119).
+        if marked is not None:
+            entries.append((CONTEXT_MARK_ENTRY, marked))
         entries.append(("attach", "Copy attach"))
         if self.services.backend.capture is not None:
             entries.append(("inspect", "Inspect output"))
@@ -2868,7 +2894,10 @@ GIT_ENTRY = "\x00git"
 AGENT_SAID_ENTRY = "\x00said"
 """The detail's `agent said:` row: the agent's claim, a fact row like `GIT_ENTRY`."""
 
-FACT_ENTRIES = frozenset({GIT_ENTRY, AGENT_SAID_ENTRY})
+CONTEXT_MARK_ENTRY = "\x00mark"
+"""The detail's `context N% - roll over?` row: the owner's threshold, a fact row."""
+
+FACT_ENTRIES = frozenset({GIT_ENTRY, AGENT_SAID_ENTRY, CONTEXT_MARK_ENTRY})
 """The detail's rows that state something and do nothing; they lead, and the cursor skips them."""
 
 

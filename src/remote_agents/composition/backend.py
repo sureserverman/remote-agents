@@ -653,6 +653,7 @@ def compose_backend(
         forget_usage_records=_usage_record_sweep(backend_store, provider_usage),
         # The feed's own store, on the same connection: one query answers a whole listing.
         last_words=SQLiteActivityStore(connection).last_words,
+        mark_at=MappingProxyType(dict(config.mark_at)),
         # Over the same connection as the session store: schedules are domain rows, so a change
         # wakes the store watcher on both surfaces (DEC-090). Which profiles exist, and whether
         # each can take a `/` command, is the send's own fold of the descriptors (DEC-070,
