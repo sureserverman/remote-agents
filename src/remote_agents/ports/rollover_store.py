@@ -253,3 +253,22 @@ class RolloverStore(Protocol):
     async def continued_as(self, session_id: SessionId) -> SessionId | None:
         """The successor this session completed a rollover to, if any."""
         ...
+
+    async def latest_for_each(self, predecessors: Sequence[SessionId]) -> dict[SessionId, Rollover]:
+        """`latest_for` of every predecessor at once: one read, whatever the count (BL-126)."""
+        ...
+
+    async def events_for_each(
+        self, rollover_ids: Sequence[str]
+    ) -> dict[str, tuple[RolloverEvent, ...]]:
+        """`events` of every rollover at once, each oldest first: one read."""
+        ...
+
+    async def lineage_for_each(
+        self, session_ids: Sequence[SessionId]
+    ) -> tuple[dict[SessionId, SessionId], dict[SessionId, SessionId]]:
+        """`(continued_from, continued_as)` of every session at once: one read.
+
+        Each maps a session to the other end of its newest COMPLETED rollover, as the two
+        single reads do; a session with none is absent."""
+        ...

@@ -9,7 +9,8 @@ successor may already be starting, and only the pass may end the rollover then.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from remote_agents.application.session_actions import (
@@ -28,6 +29,21 @@ from remote_agents.ports.rollover_store import (
     RolloverEvent,
     RolloverStore,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class RolloverReadings:
+    """What a listing's rows need of the rollover store, read once for all of them.
+
+    `latest` is each session's newest non-cancelled rollover, `events` each of those
+    rollovers' history oldest first, and the two lineage maps the other end of each session's
+    newest COMPLETED rollover. A session with nothing is absent from a map.
+    """
+
+    latest: Mapping[SessionId, Rollover]
+    events: Mapping[str, Sequence[RolloverEvent]]
+    continued_from: Mapping[SessionId, SessionId]
+    continued_as: Mapping[SessionId, SessionId]
 
 
 class RolloverBook:
@@ -147,6 +163,21 @@ class RolloverBook:
 
     async def continued_as(self, session_id: SessionId) -> SessionId | None:
         return await self._store.continued_as(session_id)
+
+    async def marks_for(self, session_ids: Sequence[SessionId]) -> RolloverReadings:
+        """Every listed session's rollover reads, in three store reads whatever the count.
+
+        `latest_for`, the events of each rollover found and both ends of the lineage, for a
+        whole listing at once -- what `session_views.rollover_marks` reads per row. Before
+        this a refresh of either surface cost up to six reads per row (BL-126, item 3). No
+        sessions reads nothing.
+        """
+        if not session_ids:
+            return RolloverReadings({}, {}, {}, {})
+        latest = await self._store.latest_for_each(session_ids)
+        events = await self._store.events_for_each([rollover.id for rollover in latest.values()])
+        continued_from, continued_as = await self._store.lineage_for_each(session_ids)
+        return RolloverReadings(latest, events, continued_from, continued_as)
 
 
 async def _switch_on(switch: RolloverSettingPort | None) -> bool:

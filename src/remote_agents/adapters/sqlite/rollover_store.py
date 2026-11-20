@@ -319,6 +319,81 @@ class SQLiteRolloverStore:
     async def continued_as(self, session_id: SessionId) -> SessionId | None:
         return self._lineage("successor_session_id", "predecessor_session_id", session_id)
 
+    async def latest_for_each(self, predecessors: Sequence[SessionId]) -> dict[SessionId, Rollover]:
+        wanted = tuple(dict.fromkeys(str(session) for session in predecessors))
+        if not wanted:
+            return {}
+        marks = ",".join("?" * len(wanted))
+        # The single read's order, per predecessor: newest `updated_at`, then newest rowid.
+        rows = self._connection.execute(
+            f"SELECT {_COLUMNS} FROM ("
+            f" SELECT rowid AS _row, *, ROW_NUMBER() OVER ("
+            "  PARTITION BY predecessor_session_id ORDER BY updated_at DESC, rowid DESC"
+            " ) AS _rank FROM rollovers"
+            f" WHERE predecessor_session_id IN ({marks}) AND state <> ?"
+            ") WHERE _rank = 1",  # noqa: S608 -- only `?` placeholders are interpolated
+            (*wanted, RolloverState.CANCELLED.value),
+        ).fetchall()
+        found = (_rollover(row) for row in rows)
+        return {rollover.predecessor_session_id: rollover for rollover in found}
+
+    async def events_for_each(
+        self, rollover_ids: Sequence[str]
+    ) -> dict[str, tuple[RolloverEvent, ...]]:
+        wanted = tuple(dict.fromkeys(rollover_ids))
+        if not wanted:
+            return {}
+        marks = ",".join("?" * len(wanted))
+        rows = self._connection.execute(
+            "SELECT rollover_id, from_state, to_state, failure_code, detail, created_at"
+            f" FROM rollover_events WHERE rollover_id IN ({marks})"  # noqa: S608 -- `?` only
+            " ORDER BY event_id",
+            wanted,
+        ).fetchall()
+        events: dict[str, list[RolloverEvent]] = {}
+        for rollover_id, from_state, to_state, failure_code, detail, created_at in rows:
+            events.setdefault(rollover_id, []).append(
+                RolloverEvent(
+                    from_state=None if from_state is None else RolloverState(from_state),
+                    to_state=RolloverState(to_state),
+                    failure_code=failure_code,
+                    detail=detail,
+                    created_at=datetime.fromisoformat(created_at),
+                )
+            )
+        return {rollover_id: tuple(history) for rollover_id, history in events.items()}
+
+    async def lineage_for_each(
+        self, session_ids: Sequence[SessionId]
+    ) -> tuple[dict[SessionId, SessionId], dict[SessionId, SessionId]]:
+        wanted = tuple(dict.fromkeys(str(session) for session in session_ids))
+        if not wanted:
+            return {}, {}
+        marks = ",".join("?" * len(wanted))
+        # Newest first, as `_lineage` orders, so the first row seen for a key is its answer.
+        rows = self._connection.execute(
+            "SELECT predecessor_session_id, successor_session_id FROM rollovers"
+            f" WHERE state = ? AND (predecessor_session_id IN ({marks})"  # noqa: S608 -- `?` only
+            f" OR successor_session_id IN ({marks}))"
+            " ORDER BY updated_at DESC, rowid DESC",
+            (RolloverState.COMPLETED.value, *wanted, *wanted),
+        ).fetchall()
+        listed = set(wanted)
+        continued_from: dict[SessionId, SessionId] = {}
+        continued_as: dict[SessionId, SessionId] = {}
+        seen_from: set[str] = set()
+        seen_as: set[str] = set()
+        for predecessor, successor in rows:
+            if successor in listed and successor not in seen_from:
+                seen_from.add(successor)
+                if predecessor is not None:
+                    continued_from[SessionId.parse(successor)] = SessionId.parse(predecessor)
+            if predecessor in listed and predecessor not in seen_as:
+                seen_as.add(predecessor)
+                if successor is not None:
+                    continued_as[SessionId.parse(predecessor)] = SessionId.parse(successor)
+        return continued_from, continued_as
+
     def _lineage(self, wanted: str, keyed: str, session_id: SessionId) -> SessionId | None:
         row = self._connection.execute(
             f"SELECT {wanted} FROM rollovers WHERE {keyed} = ? AND state = ?"

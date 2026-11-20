@@ -323,6 +323,11 @@ class _BrokenBook:
     async def events(self, rollover_id):
         raise RuntimeError("database is locked")
 
+    async def marks_for(self, session_ids):
+        # The read the rows make since BL-126's item 3: every listed session's rollover facts
+        # at once. It fails like the others, so the rows must survive it the same way.
+        raise RuntimeError("database is locked")
+
     async def offered(self, record, switch):
         raise RuntimeError("database is locked")
 

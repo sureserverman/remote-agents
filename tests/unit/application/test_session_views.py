@@ -1669,3 +1669,63 @@ def test_the_agent_said_line_keeps_the_agent_s_words_on_one_line() -> None:
     from remote_agents.application.session_views import agent_said_line
 
     assert agent_said_line("first\nsecond") == "agent said: first second"
+
+
+# --- Sub-plan 5 Task 1.4: rollover marks in three store reads (BL-126 item 3) -------------------
+
+
+class _CountingStore:
+    """The real store, counting every call made on it: a store read is a call."""
+
+    def __init__(self, store: SQLiteRolloverStore) -> None:
+        self._store = store
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str):
+        attribute = getattr(self._store, name)
+        if not callable(attribute):
+            return attribute
+
+        def counted(*arguments, **keywords):
+            self.calls.append(name)
+            return attribute(*arguments, **keywords)
+
+        return counted
+
+
+async def _rolled_pairs(store: SQLiteRolloverStore, pairs: int) -> tuple[SessionRecord, ...]:
+    """`pairs` completed rollovers, each predecessor with a listed successor, plus a waiting one."""
+    listed: list[SessionRecord] = []
+    for index in range(pairs):
+        predecessor = _numbered(2 * index + 1, SessionState.PRESERVED)
+        successor = _numbered(2 * index + 2)
+        await _roll(store, predecessor, successor, RolloverState.COMPLETED, f"h-{index:020d}")
+        listed += [predecessor, successor]
+    return tuple(listed)
+
+
+@pytest.mark.parametrize("pairs", [1, 20])
+async def test_rollover_marks_make_the_same_few_store_reads_for_any_number_of_rows(
+    rollover_store: SQLiteRolloverStore, pairs: int
+) -> None:
+    listed = await _rolled_pairs(rollover_store, pairs)
+    counting = _CountingStore(rollover_store)
+
+    marks = await rollover_marks(RolloverBook(counting), listed)  # type: ignore[arg-type]
+
+    assert len(listed) == 2 * pairs
+    assert len(counting.calls) <= 3, counting.calls
+    assert sorted(marks) == sorted(str(record.session_id) for record in listed)
+    assert _notes(listed[:2], marks) == {1: "continued as #2", 2: "continued from #1"}
+
+
+async def test_one_row_and_forty_rows_cost_the_same_reads(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    listed = await _rolled_pairs(rollover_store, 20)
+    one, forty = _CountingStore(rollover_store), _CountingStore(rollover_store)
+
+    await rollover_marks(RolloverBook(one), listed[:1])  # type: ignore[arg-type]
+    await rollover_marks(RolloverBook(forty), listed)  # type: ignore[arg-type]
+
+    assert len(one.calls) == len(forty.calls) <= 3, (one.calls, forty.calls)

@@ -296,16 +296,18 @@ def _rollover_failure_reason(code: str) -> str:
     }.get(code, code.replace("-", " "))
 
 
+class _RolloverReadings(Protocol):
+    latest: Mapping[SessionId, Rollover]
+    events: Mapping[str, Sequence[RolloverEvent]]
+    continued_from: Mapping[SessionId, SessionId]
+    continued_as: Mapping[SessionId, SessionId]
+
+
 class _RolloverReads(Protocol):
-    """The three reads a row needs of `Backend.rollovers` (`application.rollover_book`)."""
+    """What the rows need of `Backend.rollovers` (`application.rollover_book`): one call that
+    reads every listed session's rollover facts in a fixed number of store reads (BL-126)."""
 
-    async def latest_for(self, session_id: SessionId) -> Rollover | None: ...
-
-    async def continued_from(self, session_id: SessionId) -> SessionId | None: ...
-
-    async def continued_as(self, session_id: SessionId) -> SessionId | None: ...
-
-    async def events(self, rollover_id: str) -> Sequence[RolloverEvent]: ...
+    async def marks_for(self, session_ids: Sequence[SessionId]) -> _RolloverReadings: ...
 
 
 class _SessionLister(Protocol):
@@ -347,8 +349,13 @@ async def rollover_marks(
     routes: dict[str, str] = {}
     holds: dict[str, str] = {}
     failures: dict[str, str] = {}
+    readings = await book.marks_for([record.session_id for record in listed])
+
+    def history(rollover_id: str) -> Sequence[RolloverEvent]:
+        return readings.events.get(rollover_id, ())
+
     for record in listed:
-        latest = await book.latest_for(record.session_id)
+        latest = readings.latest.get(record.session_id)
         state = latest.state if latest is not None else None
         if state is not None and state in TERMINAL and state not in _REPORTED_ENDS:
             # COMPLETED: its lineage says it. CANCELLED never comes back from `latest_for`.
@@ -367,23 +374,23 @@ async def rollover_marks(
                     f"{project_name(str(latest.project_id), catalogue)} → "
                     f"{project_name(str(latest.target.project_id), catalogue)}"
                 )
-            details = {event.detail or "" for event in await book.events(latest.id)}
+            details = {event.detail or "" for event in history(latest.id)}
             if any(d.startswith("waiting: legacy-destination-unbound") for d in details):
                 holds[key] = "rollover held · original destination needs owner resolution"
             if state in {RolloverState.FAILED, RolloverState.STOP_FAILED} and latest.failure_code:
                 failures[key] = _rollover_failure_reason(latest.failure_code)
         if state is RolloverState.REQUESTED and latest is not None:
-            details = [event.detail or "" for event in await book.events(latest.id)]
+            details = [event.detail or "" for event in history(latest.id)]
             if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
                 waiting.add(str(record.session_id))
         if state is RolloverState.SUCCESSOR_STARTING and latest is not None:
-            details = {event.detail for event in await book.events(latest.id)}
+            details = {event.detail for event in history(latest.id)}
             if TRUSTED_WAITING in details:
                 idle_waits.add(str(record.session_id))
             elif TRUST_HOLD in details:
                 held[str(record.session_id)] = latest.successor_session_id
-        before = await book.continued_from(record.session_id)
-        after = await book.continued_as(record.session_id)
+        before = readings.continued_from.get(record.session_id)
+        after = readings.continued_as.get(record.session_id)
         if state is not None or before is not None or after is not None:
             found[str(record.session_id)] = (state, before, after)
     missing = {

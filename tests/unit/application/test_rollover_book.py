@@ -109,3 +109,65 @@ async def test_a_cancel_that_loses_the_race_to_the_workflow_withdraws_nothing(
 
     assert await book.cancel(session) is False
     assert (await store.get(requested.id)).state is RolloverState.HANDOFF_READY
+
+
+# --- Sub-plan 5 Task 1.4: every listed row's rollover reads at once ----------------------------
+
+
+async def test_marks_for_answers_latest_events_and_lineage_for_many_sessions(
+    store: SQLiteRolloverStore,
+) -> None:
+    from datetime import timedelta
+
+    at = datetime(2026, 11, 20, 9, 0, tzinfo=UTC)
+    first, second, third, quiet = (SessionId.new() for _ in range(4))
+    opened = await store.open_for_ready(
+        first,
+        "h-00000000000000000001",
+        project_id=ProjectId("p"),
+        profile_id=ProfileId("claude"),
+        plan=None,
+        at=at,
+    )
+    assert opened is not None
+    for offset, state in enumerate(
+        (
+            RolloverState.SUCCESSOR_STARTING,
+            RolloverState.ADOPTING,
+            RolloverState.SUCCESSOR_ACCEPTED,
+            RolloverState.PREDECESSOR_STOPPING,
+            RolloverState.COMPLETED,
+        ),
+        start=1,
+    ):
+        await store.advance(
+            opened.id,
+            state,
+            at=at + timedelta(seconds=offset),
+            successor_session_id=second if state is RolloverState.SUCCESSOR_STARTING else None,
+        )
+    requested = await store.request(
+        third, project_id=ProjectId("p"), profile_id=ProfileId("claude"), at=at
+    )
+    await store.note(requested.id, "waiting: boundary", at=at + timedelta(seconds=1))
+
+    marks = await RolloverBook(store).marks_for((first, second, third, quiet))
+
+    assert marks.latest[first].state is RolloverState.COMPLETED
+    assert marks.latest[third].state is RolloverState.REQUESTED
+    assert second not in marks.latest and quiet not in marks.latest
+    assert [event.detail for event in marks.events[requested.id]][-1] == "waiting: boundary"
+    assert [event.to_state for event in marks.events[opened.id]][-1] is RolloverState.COMPLETED
+    assert marks.continued_as == {first: second}
+    assert marks.continued_from == {second: first}
+
+
+async def test_marks_for_no_sessions_reads_nothing(store: SQLiteRolloverStore) -> None:
+    marks = await RolloverBook(store).marks_for(())
+
+    assert (marks.latest, marks.events, marks.continued_from, marks.continued_as) == (
+        {},
+        {},
+        {},
+        {},
+    )
