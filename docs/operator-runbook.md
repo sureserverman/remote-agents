@@ -704,6 +704,13 @@ it and ask for it but never act.
   on your own press, and it runs whatever the switch says
   ([Rollover with a note](#rollover-with-a-note)). Rolling back to 0.58.0 or earlier needs the table deleted first; see
   [rollback](#rollback-and-local-recovery).
+- **The mark.** `rollover.mark_at`, also in `[rollover]`, is optional: a table of profile to an
+  integer from 50 to 99, such as `mark_at = { claude = 80, codex = 85 }`. A running session at
+  or over its profile's figure reads `context 83% - roll over?` on both surfaces. It is only a
+  mark: nothing is typed and nothing is sent; roll it over yourself if you want to. A value
+  outside 50-99, a non-integer or an unknown profile is refused when `serve` or the terminal
+  starts, naming `rollover.mark_at` and the range. A profile left out, or a session whose
+  context limit is unknown, is never marked. It is not a Settings row.
 - **What starts one.** Only `claude` and `codex` sessions take part: each runs a planning plugin
   that writes handoff envelopes. On both that is staged-planning's planning plugin, which stamps
   `planning-handoff` and learns who it is by running `PLANNING_SUPERVISOR_ID_CMD`. Envelopes
@@ -732,7 +739,7 @@ it and ask for it but never act.
   ambiguous destinations give a named refusal and preserve the predecessor. Legacy v1
   keeps its source project and validated source channel. Retired writer identities remain
   refused (DEC-132). A request written at the default root still cannot reach a plan that
-  never reports its different control root; it eventually ends `request-unanswered`.
+  never reports its different control root; that workflow request ends `request-unanswered`.
 - **Codex identity.** Cross-repository writer attribution requires the exact native thread
   to have an independent recorded managed conversation binding. A daemon-starter variable,
   reported root or heuristic hook mark cannot create one. Fresh unbound Codex threads
@@ -803,7 +810,7 @@ if it is not needed.
 ### Rollover with a note
 
 A session that runs no plan has no workflow to hand off, so **Rollover now** would only wait
-and end `request-unanswered`. **Rollover with a note** moves it instead (BL-119, WF-CONT-007):
+for a plan that never comes (`request-unanswered`). **Rollover with a note** moves it instead (BL-119, WF-CONT-007):
 the button on the bot's session screen, or the row of the same name in the terminal's session
 detail. It is offered on a running `claude` or `codex` session with no rollover open, **whatever
 the auto-rollover switch says**: your press is the consent for this one rollover. OpenCode and
@@ -873,6 +880,13 @@ closes out instead, so cancel the pending rollover then.
   `predecessor-gone` if it stopped. A held rollover cannot be cancelled: choosing *No, exit*,
   or stopping the successor, ends it as `successor-failed`. Only after 2 hours unanswered is it
   this code; the successor is left open, still asking. Trust it, stop it, then ask again.
+  **A Codex successor on "Hooks need review" holds the same way** (BL-146). That dialog is
+  yours alone to answer: trusting hooks lets them run outside the sandbox, so the service
+  presses nothing on it and the bot offers no trust row for it. The old session's row reads
+  *rollover held - successor waits on a hook review*, and the successor's detail reads
+  *waits on a hook review - answer it in its pane*. Open the successor's pane and answer it
+  there; the rollover goes on by itself at its next pass. Left unanswered for 2 hours it ends
+  as this code, and the notice names the hook review.
   Claude asks again in a folder that became its own git repo after the first session started:
   its trust lookup stops at the repo root, so trust inherited from a parent folder no longer
   applies.
@@ -901,7 +915,7 @@ closes out instead, so cancel the pending rollover then.
   at the checkout's top level is writable, then ask again.
 - **`request-lost`** — the written request was gone, or named another session, before the
   workflow answered. It is never written again. Ask again.
-- **`request-unanswered`** — no handoff answered the request within 24 hours of asking, so it
+- **`request-unanswered`** — no workflow handoff answered the request within 24 hours of asking, so it
   was given up and the checkout is free for another request. The old session is untouched. If
   its plan is still running, ask again and tell it to carry on.
 
