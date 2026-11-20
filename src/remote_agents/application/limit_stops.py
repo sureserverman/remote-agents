@@ -300,8 +300,8 @@ _CONTINUATION_LINES = 3
 #: the classification and delivery that run after this watch in the same activity pass.
 _PASS_BUDGET_SECONDS = 15.0
 
-#: Bounds one pane capture, for `CodexApprovalWatcher`'s reason: tmux's runner has no timeout of
-#: its own, and a wedged server would otherwise stop this watch for the life of the process.
+#: Bounds one pane capture, for `CodexApprovalWatcher`'s reason: tmux's runner bounds each call
+#: only at 30 s (since v0.70.5; unbounded before), far longer than this watch should stall.
 _CAPTURE_TIMEOUT_SECONDS = 5.0
 
 

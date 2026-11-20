@@ -231,7 +231,7 @@ class AsyncTmuxRunner(TmuxRunner):
                 process.kill()
             await process.wait()
             # A RuntimeError, as any failed tmux call is, so every caller's failure path takes it.
-            # Only the verb is named: the rest of an argv can carry a prompt's text.
+            # Only the verb is named: targets and keys are no business of a log line.
             verb = argv[3] if len(argv) > 3 and argv[1] in ("-L", "-S") else " ".join(argv[1:2])
             raise RuntimeError(f"tmux command timed out after {self._timeout:g}s: {verb}") from None
         except asyncio.CancelledError:

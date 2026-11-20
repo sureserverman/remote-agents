@@ -545,9 +545,9 @@ async def test_hiding_the_session_that_is_shown_brings_the_surface_back_when_it_
 async def test_a_console_that_never_answers_cannot_hold_up_a_force_stop() -> None:
     """The one that makes this a DEC-006 question rather than a tidiness one.
 
-    `AsyncTmuxRunner.run` awaits `process.communicate()` with no timeout — a hazard DEC-030
-    already names in this codebase — so a wedged tmux server makes every console round trip
-    block forever. Put an unbounded one between `VERIFIED_FORCE_STOP` and the kill, and a
+    `AsyncTmuxRunner.run` had no timeout before v0.70.5 (a hazard DEC-030 names) and bounds
+    each call only at 30 s now, so a wedged tmux server makes every console round trip block
+    for that long. Put an unbounded one between `VERIFIED_FORCE_STOP` and the kill, and a
     force stop on a runaway agent never reaches the agent: the per-session lock stays held,
     and every other composer operation queues behind the same `_links` lock. A stop whose
     forward progress depends on a *display* answering is exactly the coupling DEC-036

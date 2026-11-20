@@ -579,8 +579,8 @@ def _enter_console(
         )
         return 1
     if show_projects is not None:
-        # Bounded: the tmux runner has no timeout of its own, and a hung call here would keep
-        # the owner out of the console over a cosmetic move.
+        # Bounded: the tmux runner's own bound (30 s per call since v0.70.5) is far too long
+        # to keep the owner out of the console over a cosmetic move.
         try:
             asyncio.run(asyncio.wait_for(show_projects(), show_projects_timeout))
         except Exception:
