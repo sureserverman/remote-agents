@@ -272,7 +272,8 @@ def test_a_successor_held_on_a_hook_review_is_named_in_its_notice() -> None:
     )
 
     assert "a hook review" in text, text
-    assert "answer it in its pane" in text, text
+    assert "answer it in its pane or stop it, then ask again" in text, text
+    assert "2 hours after it was first held" in text, text
     assert "predecessor preserved" in text, text
 
 

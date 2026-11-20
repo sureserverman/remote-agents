@@ -165,7 +165,8 @@ async def test_the_bot_offers_no_trust_row_while_an_owner_dialog_is_up() -> None
     lines, buttons = await _telegram(sessions)
 
     assert lines == [LINE]
-    assert not any("Trust" in text for text in buttons), buttons
+    # Neither answer: not "Trust this project", not "Don't trust — close it".
+    assert not any("trust" in text.lower() for text in buttons), buttons
 
 
 async def test_a_folder_trust_dialog_still_gets_the_trust_row() -> None:

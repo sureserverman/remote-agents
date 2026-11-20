@@ -116,6 +116,11 @@ def test_every_owner_dialog_is_also_a_dialog_the_relay_refuses() -> None:
         composer = descriptor.composer
         for found in composer.owner_dialogs if composer is not None else ():
             declared += 1
-            assert found.marker in composer.dialogs, (descriptor.profile_id, found.marker)
+            # A plain dialog pattern is part of the owner marker, so whatever the surfaces name
+            # as an owner dialog the relay also refuses to type into.
+            assert any(pattern in found.marker for pattern in composer.dialogs), (
+                descriptor.profile_id,
+                found.marker,
+            )
             assert found.names.strip() == found.names and found.names, descriptor.profile_id
     assert declared, "no vertical declares an owner dialog; this check would pass vacuously"

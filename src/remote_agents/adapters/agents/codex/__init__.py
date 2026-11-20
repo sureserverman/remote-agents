@@ -154,7 +154,19 @@ def descriptor() -> ProviderDescriptor:
             # (`dialog_hooks_review_0171.txt`, a real pane, 2026-11-20). Trusting hooks lets them
             # run outside the sandbox, so only the owner answers it (BL-146): it stays in
             # `dialogs` above, so nothing is typed into it, and is named here for the surfaces.
-            owner_dialogs=(OwnerDialog(marker=r"Hooks need review", names="a hook review"),),
+            # The owner-dialog marker is the dialog's own shape, not its phrase: its title alone
+            # on a row, then its menu's "Trust all and continue" row within a few rows. A pane
+            # that merely shows the words (a diff, a transcript) is no owner dialog; the loose
+            # `dialogs` entry above still refuses to type there, the safe direction.
+            owner_dialogs=(
+                OwnerDialog(
+                    marker=(
+                        r"^ {0,4}Hooks need review$(?:\n.*){1,8}?\n.{0,4}\d\. Trust all and"
+                        r" continue$"
+                    ),
+                    names="a hook review",
+                ),
+            ),
             # 0.158.0: `/exit` mid-turn prints "Disconnected from this task. Any running work
             # continues." and the app server finished the turn 23 s later (`task_complete`);
             # `Esc` aborted it (`turn_aborted`, reason `interrupted`) and left the composer

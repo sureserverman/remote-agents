@@ -1072,6 +1072,14 @@ class RolloverPass:
         # and its work must not start on permissions the launch did not ask for.
         held = await self._held(record.session_id, rollover.profile_id)
         if held is not None:
+            # The binding's wait is bounded (about 80 s) and a dialog only the owner may answer
+            # can outlast it: then the rollover holds for the owner, not `binding-failed`
+            # (Stage 3 gate). The binder waits the dialog out on its own clock.
+            waits = await self._waits_on(record.session_id)
+            if waits is not None:
+                await self._store.note(rollover.id, TRUST_HOLD, at=self._now())
+                await self._store.note(rollover.id, OWNER_HOLD + waits, at=self._now())
+                return
             await self._fail(starting, seen, *held)
             return
         # The launch and a binding's wait can last a minute, and two sessions must not work one
@@ -1251,6 +1259,13 @@ class RolloverPass:
         # before the idle check below, so a wait here cannot make that check stale.
         held = await self._held(rollover.successor_session_id, rollover.profile_id)
         if held is not None:
+            # As at the launch: a dialog only the owner may answer that outlasted the binding's
+            # wait goes on holding, under the same patience.
+            waits = await self._waits_on(successor)
+            if waits is not None:
+                if not any((detail or "").startswith(OWNER_HOLD) for detail in details):
+                    await self._store.note(rollover.id, OWNER_HOLD + waits, at=self._now())
+                return
             await self._fail(rollover, seen, *held)
             return
         # The hold can last hours, and the owner may have gone back to the old session: its

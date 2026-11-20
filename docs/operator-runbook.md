@@ -884,9 +884,18 @@ closes out instead, so cancel the pending rollover then.
   yours alone to answer: trusting hooks lets them run outside the sandbox, so the service
   presses nothing on it and the bot offers no trust row for it. The old session's row reads
   *rollover held - successor waits on a hook review*, and the successor's detail reads
-  *waits on a hook review - answer it in its pane*. Open the successor's pane and answer it
-  there; the rollover goes on by itself at its next pass. Left unanswered for 2 hours it ends
-  as this code, and the notice names the hook review.
+  *waits on a hook review - answer it in its pane*. No trust message is sent for it: the held
+  row and the detail are where it shows. Open the successor's pane and answer it there; once
+  the dialog is gone and the successor's thread binds, the rollover goes on by itself at its
+  next pass (*Trust all and continue* is the answer that lets its hooks run). The 2 hours count
+  from the successor's first hold, folder trust included. Left unanswered that long it ends as
+  this code, and the notice names the hook review: answer it or stop the successor, then ask
+  again.
+  **A Codex successor in another project** (its handoff root is the old session's checkout)
+  may also write that checkout's `.claude/handoffs/` folder from inside its sandbox, and
+  nothing else of it, under *Approve for me* and *Ask*, so its acceptance lands (BL-144,
+  DEC-148). The grant is withdrawn when the rollover ends. A `.claude` or `handoffs` that is
+  a link, or not yours, gets no grant.
   Claude asks again in a folder that became its own git repo after the first session started:
   its trust lookup stops at the repo root, so trust inherited from a parent folder no longer
   applies.

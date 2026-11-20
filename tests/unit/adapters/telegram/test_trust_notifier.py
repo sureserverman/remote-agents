@@ -782,7 +782,7 @@ async def test_a_question_sent_over_a_hook_review_says_so_and_offers_no_trust_ro
     assert len(view.sent) == 1
     assert "waits on a hook review - answer it in its pane" in view.sent[0]["text"]
     assert "asking whether this folder can be trusted" not in view.sent[0]["text"]
-    assert not any("Trust" in label for label in _offered(view)), _offered(view)
+    assert not any("trust" in label.lower() for label in _offered(view)), _offered(view)
     assert view.amended == [], "no keyboard is attached: nothing here presses on the dialog"
 
 

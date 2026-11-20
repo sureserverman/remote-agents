@@ -31,6 +31,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import stat
+import unicodedata
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -204,7 +207,33 @@ def handoff_grant(rollover: Rollover, session_id: SessionId) -> tuple[Path, ...]
     destination = target.destination.root
     if root == destination or root.is_relative_to(destination):
         return ()
-    return (root / ".claude" / "handoffs",)
+    folder = root / ".claude" / "handoffs"
+    return (folder,) if _real_handoff_folder(folder) else ()
+
+
+def _real_handoff_folder(folder: Path) -> bool:
+    """Whether `folder` is safe to grant: absolute, no `..`, no control or format character,
+    and `.claude` and `handoffs` both real directories of this user, not links (Stage 3 gate).
+
+    The predecessor can write its own checkout, so a `handoffs` it made a link would otherwise
+    carry the grant to wherever the link points. A folder that fails gets no grant, and the
+    session is still given its plain preset: one extra root never costs it its permissions.
+    """
+    text = str(folder)
+    if (
+        not folder.is_absolute()
+        or ".." in folder.parts
+        or any(unicodedata.category(ch).startswith("C") for ch in text)
+    ):
+        return False
+    for path in (folder.parent, folder):
+        try:
+            found = os.lstat(path)
+        except OSError:
+            return False
+        if not stat.S_ISDIR(found.st_mode) or found.st_uid != os.getuid():
+            return False
+    return True
 
 
 class _OpenRollovers(Protocol):

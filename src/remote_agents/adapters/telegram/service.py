@@ -3145,7 +3145,9 @@ class PrivateBotBoundary:
                     self._callback("session.trust", session_value, mutation=True),
                 )
             )
-        if decline_trust_available(record):
+        # Neither answer over a dialog only the owner may answer: a decline reads no folder
+        # question there and presses nothing, so its button could never act (Stage 3 gate).
+        if waits is None and decline_trust_available(record):
             # **Offered on a different condition from the button beside it, so the row is
             # two-wide only when both hold.** Saying yes means typing into the agent's
             # dialog, so it is confined to the profiles this project can read and costs a

@@ -115,3 +115,28 @@ def test_the_trust_state_of_an_owner_dialog_is_not_awaiting() -> None:
     pane = PromptPane([HOOKS], profile="codex")
 
     assert asyncio.run(_terminal(pane).trust_state(pane.session_id)) is not TrustState.AWAITING
+
+
+def test_a_pane_that_only_shows_the_words_is_no_owner_dialog() -> None:
+    """Stage 3 gate finding: a diff, a transcript or this repo's own fixture on screen."""
+    codex = _descriptor("codex")
+    quoted = (
+        'GOT: grep says r"Hooks need review" in codex/__init__.py\n'
+        "  Hooks need review\n"
+        "› Ask Codex to do anything\n"
+        "  fake-model default · opaque-editor\n"
+    )
+
+    assert owner_dialog(quoted, codex) is None
+    pane = PromptPane([quoted], profile="codex")
+    assert asyncio.run(_terminal(pane).owner_dialog(pane.session_id)) is None
+
+
+def test_the_prompt_relay_types_nothing_onto_the_hook_review() -> None:
+    """The property every fail-open look leans on (Stage 3 gate): a send refuses the screen."""
+    pane = PromptPane([HOOKS], profile="codex")
+
+    delivery = asyncio.run(_terminal(pane).send_prompt(pane.session_id, "hello"))
+
+    assert delivery.outcome.value == "refused"
+    assert pane.typed == []

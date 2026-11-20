@@ -43,6 +43,7 @@ def _gate(test_rig: Rig, ready) -> None:  # noqa: F811
         notify=test_rig.told,
         now=lambda: test_rig.clock[0],
         sleep=test_rig.sleep,
+        owner_dialog=lambda session_id: test_rig.owner_dialog(session_id),
     )
 
 
@@ -239,11 +240,23 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId  # noqa:
 from remote_agents.domain.profiles import PermissionPreset  # noqa: E402
 from remote_agents.domain.rollover import RolloverKind  # noqa: E402
 from remote_agents.ports.handoff_envelopes import HandoffDestination  # noqa: E402
-from remote_agents.ports.rollover_store import Rollover, RolloverTarget  # noqa: E402
+from remote_agents.ports.rollover_store import OWNER_HOLD, Rollover, RolloverTarget  # noqa: E402
 
 _AT = datetime(2026, 11, 20, 9, 0, tzinfo=UTC)
 _ORCHARD = Path("/home/owner/dev/orchard")
 _RIVER = Path("/home/owner/dev/river")
+_SAME = object()
+
+
+@pytest.fixture
+def projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Two real checkouts, the source holding the handoff folder its writer made."""
+    orchard, river = tmp_path / "orchard", tmp_path / "river"
+    (orchard / ".claude" / "handoffs").mkdir(parents=True)
+    river.mkdir()
+    monkeypatch.setattr(__import__(__name__, fromlist=["_"]), "_ORCHARD", orchard)
+    monkeypatch.setattr(__import__(__name__, fromlist=["_"]), "_RIVER", river)
+    return orchard, river
 
 
 def _target(destination: Path, version: int = 2) -> RolloverTarget:
@@ -262,7 +275,7 @@ def _target(destination: Path, version: int = 2) -> RolloverTarget:
 def _rollover(
     successor: SessionId,
     *,
-    source: Path | None = _ORCHARD,
+    source: Path | None | object = _SAME,
     target: RolloverTarget | None = None,
     kind: RolloverKind = RolloverKind.WORKFLOW,
 ) -> Rollover:
@@ -280,13 +293,15 @@ def _rollover(
         failure_detail=None,
         requested_at=_AT,
         updated_at=_AT,
-        source_root=source,
+        source_root=_ORCHARD if source is _SAME else source,
         target=_target(_RIVER) if target is None else target,
         kind=kind,
     )
 
 
-def test_a_cross_project_successor_is_granted_exactly_its_source_handoff_folder() -> None:
+def test_a_cross_project_successor_is_granted_exactly_its_source_handoff_folder(
+    projects: tuple[Path, Path],
+) -> None:
     successor = SessionId.new()
 
     assert handoff_grant(_rollover(successor), successor) == (_ORCHARD / ".claude" / "handoffs",)
@@ -296,7 +311,9 @@ def test_a_cross_project_successor_is_granted_exactly_its_source_handoff_folder(
     "case",
     ["same-checkout", "source-inside-destination", "version-1", "no-source", "note", "other"],
 )
-def test_nothing_is_granted_where_the_ruling_does_not_reach(case: str) -> None:
+def test_nothing_is_granted_where_the_ruling_does_not_reach(
+    case: str, projects: tuple[Path, Path]
+) -> None:
     successor = SessionId.new()
     rollover = {
         "same-checkout": _rollover(successor, target=_target(_ORCHARD)),
@@ -312,7 +329,9 @@ def test_nothing_is_granted_where_the_ruling_does_not_reach(case: str) -> None:
     assert handoff_grant(rollover, successor) == ()
 
 
-async def test_the_grant_is_read_off_the_open_rollover_and_ends_with_it(tmp_path: Path) -> None:
+async def test_the_grant_is_read_off_the_open_rollover_and_ends_with_it(
+    tmp_path: Path, projects: tuple[Path, Path]
+) -> None:
     from .test_permission_apply import _record
 
     store = SQLiteRolloverStore(open_database(tmp_path / "rows.sqlite3"))
@@ -466,3 +485,80 @@ def test_the_served_apply_pass_reads_the_grant_off_the_rollovers(tmp_path: Path)
 
     assert apply_pass._writable_roots is not None
     assert apply_pass._writable_roots.__qualname__.startswith("handoff_grants")
+
+
+@pytest.mark.parametrize("trust_first", [False, True])
+async def test_a_hook_review_that_outlasts_the_binding_wait_holds_not_fails(
+    rig: Rig,  # noqa: F811
+    trust_first: bool,
+) -> None:
+    """Stage 3 gate finding: the dialog is drawn during the binding's bounded wait, which gives
+    up unbound. The rollover holds for the owner, then goes on once the dialog is answered."""
+    bound = [False]
+
+    async def ready(session_id, profile_id) -> Readiness:
+        if not bound[0]:
+            # Drawn while the binder waited, which then gave up.
+            rig.owner_dialogs[session_id] = "a hook review"
+        return Readiness(bound=bound[0])
+
+    _gate(rig, ready)
+    rig.ready()
+    if trust_first:
+        rig.launched_state = SessionState.UNTRUSTED
+        await rig.run()
+        _trust(rig)
+    await rig.run(passes=2)
+
+    rollover = await rig.rollover()
+    assert rollover.state is RolloverState.SUCCESSOR_STARTING, rollover.failure_code
+    details = [e.detail for e in await rig.store.events(rollover.id)]
+    assert OWNER_HOLD + "a hook review" in details
+    assert rig.sends == [] and rig.reports == []
+
+    rig.owner_dialogs.pop(rig.successor)  # answered in the pane
+    bound[0] = True
+    await rig.run(passes=2)
+
+    assert rig.sends == [(rig.successor, TEMPLATE)]
+
+
+@pytest.mark.parametrize("case", ["handoffs-link", "claude-link", "missing", "a-file"])
+def test_a_handoff_folder_that_is_not_a_real_one_is_never_granted(
+    case: str, projects: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Stage 3 gate finding: the predecessor writes its own checkout, so a `handoffs` (or
+    `.claude`) it made a link would carry the grant to the link's target."""
+    import shutil
+
+    orchard, _river = projects
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    handoffs = orchard / ".claude" / "handoffs"
+    if case == "handoffs-link":
+        handoffs.rmdir()
+        handoffs.symlink_to(elsewhere)
+    elif case == "claude-link":
+        shutil.rmtree(orchard / ".claude")
+        (elsewhere / "handoffs").mkdir()
+        (orchard / ".claude").symlink_to(elsewhere)
+    elif case == "missing":
+        handoffs.rmdir()
+    else:
+        handoffs.rmdir()
+        handoffs.write_text("not a folder")
+    successor = SessionId.new()
+
+    assert handoff_grant(_rollover(successor), successor) == ()
+
+
+def test_a_source_root_that_cannot_be_granted_still_gets_its_preset(
+    projects: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """A control character in a legal folder name: no grant, never an adapter refusal that
+    would fail the whole preset (Stage 3 gate)."""
+    odd = tmp_path / "odd\x07name"
+    (odd / ".claude" / "handoffs").mkdir(parents=True)
+    successor = SessionId.new()
+
+    assert handoff_grant(_rollover(successor, source=odd), successor) == ()
