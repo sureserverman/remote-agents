@@ -431,6 +431,7 @@ def test_the_bot_manages_the_production_server_whatever_tmux_it_inherited(
     `$TMUX` names. A service that inherited a test console's `$TMUX` (a hand-run `serve` from a
     test pane, an environment imported into the user manager) would otherwise manage a
     disposable server and never see the owner's sessions. Swept: every `TmuxGateway` reachable
+    through `remote_agents` objects' attributes (not through a `partial` or a closure)
     from the composition, by walking it rather than naming the two that exist today.
     """
     from remote_agents.adapters.tmux.gateway import TmuxGateway

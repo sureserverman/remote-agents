@@ -599,7 +599,7 @@ async def test_a_transient_wide_split_then_narrow_leaves_the_sessions_pane_idle(
     # Given rows back first. Its neighbours are console-hosted since DEC-144 and fit their own
     # heights on every join, so ten joins beneath the limits pane leave this one a row tall --
     # too short to draw any text, stuck or not. A redraw at a usable height is the proof it is
-    # idle because it is done, and stronger than the old read: a stuck pane would not answer.
+    # still drawing at all. Idleness itself is the CPU check above, which runs before this.
     await _run(*tmux, "resize-pane", "-t", sessions, "-y", "12")
     for _ in range(20):
         if _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions):

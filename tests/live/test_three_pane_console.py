@@ -532,15 +532,11 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
         await _type(host_socket, "o")  # focus moves to the sessions pane
         assert await _active_pane(console_socket) == by_slot["sessions"].pane_id
 
-        # The exchange itself is driven through the composer rather than by pressing Enter,
-        # and the reason is a harness limit worth naming rather than hiding. A pane surface
-        # builds its composer with the **production** socket name baked in
-        # (`bootstrap._console_composer`), so a surface running inside a *disposable* console
-        # would drive the owner's real server instead of this test's. The seam it would use is
-        # unit-driven — `_console_opener` in `test_sessions_pane.py` — and the *key*-driven
-        # exchange has its own live proof next door, in the projects-key test, where the
-        # binding runs a command carrying this socket. What is left undriven anywhere live is
-        # precisely: a pane surface's own keypress reaching a composer on a test socket.
+        # The exchange itself is driven through the composer rather than by pressing Enter, for
+        # the docstring's reason: this journey is about the console around the exchange. A pane
+        # surface's own keypress reaching its composer on a test socket is driven live by the
+        # session chord case at the end of this file (DEC-144); the opener seam itself is
+        # unit-driven (`_console_opener` in `test_sessions_pane.py`).
         await composer.show(session_id)
         await asyncio.sleep(2.0)
 

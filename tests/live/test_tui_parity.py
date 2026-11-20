@@ -157,7 +157,8 @@ def _harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Harness:
     profile = ProfileId(os.environ.get("REMOTE_AGENTS_ACCEPTANCE_PROFILE", "claude"))
     # Set before anything runs tmux, and read by tmux itself rather than by this project:
     # `tmux -L remote-agents` resolves its socket under `$TMUX_TMPDIR/tmux-$UID`, so this is
-    # what makes the composition root's hard-coded socket name name a server of this run's own.
+    # what makes the composition root's default socket name (used with no `$TMUX`) name a
+    # server of this run's own.
     monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path))
 
     store = tmp_path / "sessions.sqlite3"
