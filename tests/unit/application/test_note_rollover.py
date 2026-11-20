@@ -9,7 +9,7 @@ this user's, not a link, 1 byte to 32 KiB, and the agent is idle again. With no 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,7 +22,9 @@ from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelop
 from remote_agents.adapters.workflow.handoff_notes import MAX_NOTE_BYTES, FileHandoffNotes
 from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
 from remote_agents.application.rollover import (
+    ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
+    NOTE_FIRST_MESSAGE,
     NOTE_PATIENCE,
     NOTE_REFUSED,
     NOTE_REQUEST,
@@ -515,3 +517,252 @@ async def test_a_note_written_while_the_session_stays_busy_fails_as_not_idle(
 
     row = await rig.row()
     assert row.state is RolloverState.FAILED and row.failure_code == PREDECESSOR_NOT_IDLE
+
+
+# Task 2.4 -- the successor reads the note; the old session stops after its first turn ------
+
+
+@dataclass
+class SuccessorRig(NoteRig):
+    """`NoteRig` whose launch starts a successor and whose feed records finished turns."""
+
+    launched_state: SessionState = SessionState.RUNNING
+    turns: dict[SessionId, list[datetime]] = field(default_factory=dict)
+
+    async def launch(self, command: LaunchCommand) -> object:
+        self.launches.append(command)
+        record = replace(_record(SessionId.new(), command.profile_id), state=self.launched_state)
+        self.sessions[record.session_id] = record
+        return _Launched(record)
+
+    async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
+        self.stops.append(command)
+        self.sessions[command.session_id] = replace(
+            self.sessions[command.session_id], state=SessionState.ENDED
+        )
+        return TerminalObservation(command.session_id, False, True)
+
+    async def finished_turn(self, session_id: SessionId, since: datetime) -> bool:
+        return any(at >= since for at in self.turns.get(session_id, ()))
+
+    def turn(self, session_id: SessionId) -> None:
+        self.turns.setdefault(session_id, []).append(self.clock[0])
+
+    @property
+    def successor(self) -> SessionId:
+        (other,) = [s for s in self.sessions if s != self.predecessor]
+        return other
+
+    def new_pass(self) -> RolloverPass:
+        templates = adopt_templates()
+        return RolloverPass(
+            self.store,
+            FileHandoffEnvelopes(),
+            adopt_templates={CLAUDE: templates[CLAUDE], CODEX: templates[CODEX]},
+            note_rollable=frozenset({CLAUDE, CODEX}),
+            notes=FileHandoffNotes(),
+            finished_turn=self.finished_turn,
+            sessions=self.list_sessions,
+            handoff_root=lambda project: self.root if project == PROJECT else None,
+            enabled=self.enabled,
+            idle=self.idle,
+            launch=self.launch,
+            send=self.send,
+            graceful_stop=self.graceful_stop,
+            notify=self.told,
+            now=lambda: self.clock[0],
+        )
+
+    async def to_handoff_ready(self) -> Rollover:
+        asked = await self.press()
+        await self.run()
+        _write(self.note_path(asked), b"# Handoff\nDoing X; next Y.\n")
+        await self.run()
+        assert (await self.row()).state is RolloverState.HANDOFF_READY
+        return asked
+
+
+@dataclass(frozen=True)
+class _Launched:
+    record: SessionRecord
+    remote_control: bool = False
+
+
+@pytest.fixture
+def successor_rig(tmp_path: Path):
+    root = tmp_path / "tv-set"
+    root.mkdir()
+    rig = SuccessorRig(SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")), root)
+    yield rig
+    assert all(command.only_if_idle for command in rig.stops)
+
+
+async def test_the_successor_is_typed_only_the_fixed_first_message(
+    successor_rig: SuccessorRig,
+) -> None:
+    rig = successor_rig
+    asked = await rig.to_handoff_ready()
+
+    await rig.run()
+
+    (command,) = rig.launches
+    assert (command.project_id, command.profile_id) == (PROJECT, CLAUDE)
+    assert command.reuse_folder_of == rig.predecessor
+    assert command.inherit_permissions_of == rig.predecessor
+    assert command.idempotency_key == f"rollover:{asked.id}"
+    first = NOTE_FIRST_MESSAGE.format(path=rig.note_path(asked))
+    assert rig.sends[-1] == (rig.successor, first)
+    assert (await rig.row()).state is RolloverState.ADOPTING
+    assert rig.stops == []
+
+
+async def test_the_predecessor_stops_only_after_the_successor_finishes_a_turn(
+    successor_rig: SuccessorRig,
+) -> None:
+    rig = successor_rig
+    asked = await rig.to_handoff_ready()
+    await rig.run()
+    await rig.run(passes=2)
+    assert rig.stops == []
+
+    rig.later(timedelta(minutes=1))
+    rig.turn(rig.successor)
+    await rig.run()
+
+    assert rig.stops == [GracefulStopCommand(rig.predecessor, CLAUDE, only_if_idle=True)]
+    row = await rig.row()
+    assert row.state is RolloverState.COMPLETED
+    assert await rig.store.continued_as(rig.predecessor) == rig.successor
+    assert not rig.note_path(asked).exists()
+
+
+async def test_a_turn_finished_before_the_first_message_does_not_count(
+    successor_rig: SuccessorRig,
+) -> None:
+    """A successor that finished a turn of its own before it was typed to has not read the
+    note: only a turn observed after the typing adopts it."""
+    rig = successor_rig
+    await rig.to_handoff_ready()
+    rig.later(timedelta(seconds=-5))
+
+    async def early_turn(command: LaunchCommand) -> object:
+        launched = await SuccessorRig.launch(rig, command)
+        rig.turn(launched.record.session_id)  # recorded before the typing
+        rig.later(timedelta(seconds=5))
+        return launched
+
+    rig.launch = early_turn  # type: ignore[method-assign]
+    rig._pass = rig.new_pass()
+    await rig.run(passes=3)
+
+    assert rig.stops == []
+    assert (await rig.row()).state is RolloverState.ADOPTING
+
+
+async def test_no_finished_turn_within_the_patience_fails_and_keeps_the_predecessor(
+    successor_rig: SuccessorRig,
+) -> None:
+    rig = successor_rig
+    asked = await rig.to_handoff_ready()
+    await rig.run()
+
+    rig.later(ADOPTION_PATIENCE)
+    await rig.run()
+
+    row = await rig.row()
+    assert row.state is RolloverState.FAILED and row.failure_code == "adoption-timeout"
+    assert rig.sessions[rig.predecessor].state is SessionState.RUNNING
+    assert rig.stops == []
+    assert not rig.note_path(asked).exists()
+
+
+async def test_an_untrusted_successor_holds_and_is_typed_once_trusted(
+    successor_rig: SuccessorRig,
+) -> None:
+    rig = successor_rig
+    rig.launched_state = SessionState.UNTRUSTED
+    asked = await rig.to_handoff_ready()
+    sends_before = len(rig.sends)
+
+    await rig.run(passes=2)
+    assert len(rig.sends) == sends_before, "nothing typed into the trust dialog"
+    assert (await rig.row()).state is RolloverState.SUCCESSOR_STARTING
+
+    rig.sessions[rig.successor] = replace(rig.sessions[rig.successor], state=SessionState.RUNNING)
+    await rig.run(passes=2)
+
+    first = NOTE_FIRST_MESSAGE.format(path=rig.note_path(asked))
+    assert rig.sends[sends_before:] == [(rig.successor, first)]
+    assert (await rig.row()).state is RolloverState.ADOPTING
+
+
+async def test_the_note_is_removed_when_the_rollover_is_cancelled(
+    successor_rig: SuccessorRig,
+) -> None:
+    from remote_agents.application.rollover_book import RolloverBook
+
+    rig = successor_rig
+    asked = await rig.press()
+    await rig.run()
+    _write(rig.note_path(asked), b"a note\n")
+    rig.not_idle.add(rig.predecessor)  # not yet idle again: stays REQUESTED
+    await rig.run()
+    assert await RolloverBook(rig.store).cancel(rig.predecessor)
+
+    await rig.run()
+
+    assert (await rig.row()).state is RolloverState.CANCELLED
+    assert not rig.note_path(asked).exists()
+    assert rig.launches == []
+
+
+async def test_the_note_rollover_runs_under_a_destination_resolver(
+    successor_rig: SuccessorRig,
+) -> None:
+    """Production passes a destination resolver; a note row has no frozen target and must
+    not be held as an unbound legacy destination."""
+    rig = successor_rig
+
+    async def refuse(*_args):
+        raise AssertionError("a note rollover resolves no destination")
+
+    base = rig.new_pass
+
+    def resolved_pass() -> RolloverPass:
+        made = base()
+        made._resolve_destination = refuse
+        made._resolve_legacy_destination = refuse
+        return made
+
+    rig.new_pass = resolved_pass  # type: ignore[method-assign]
+    await rig.to_handoff_ready()
+    await rig.run()
+    rig.later(timedelta(minutes=1))
+    rig.turn(rig.successor)
+    await rig.run()
+
+    assert (await rig.row()).state is RolloverState.COMPLETED
+
+
+async def test_an_adopting_note_rollover_nothing_was_typed_into_fails_at_once(
+    successor_rig: SuccessorRig,
+) -> None:
+    """A restart between the launch and the first message leaves ADOPTING with no
+    NOTE_FIRST_TYPED: that absence proves nothing was typed, so the successor never read the
+    note, and waiting out the adoption's patience would only delay saying so."""
+    rig = successor_rig
+    asked = await rig.to_handoff_ready()
+    for state in (RolloverState.SUCCESSOR_STARTING,):
+        await rig.store.advance(asked.id, state, at=rig.clock[0])
+    successor = SessionId.new()
+    rig.sessions[successor] = _record(successor)
+    await rig.store.record_successor(asked.id, successor, at=rig.clock[0])
+    await rig.store.advance(asked.id, RolloverState.ADOPTING, at=rig.clock[0])
+
+    rig._pass = rig.new_pass()  # the service restarted
+    await rig.run()
+
+    row = await rig.row()
+    assert row.state is RolloverState.FAILED and row.failure_code == "not-typed"
+    assert rig.stops == []
+    assert rig.sends[-1][0] == rig.predecessor, "nothing was typed into the successor"

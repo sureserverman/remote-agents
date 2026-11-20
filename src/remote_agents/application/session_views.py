@@ -50,6 +50,7 @@ from remote_agents.ports.agent_usage import (
 from remote_agents.ports.git_checkout import GitSummary
 from remote_agents.ports.rollover_store import (
     NOTE_ASKED,
+    NOTE_FIRST_TYPED,
     REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
@@ -249,6 +250,9 @@ _NOTE_IDLE_NOTE = "rollover with a note · waiting for this session to be idle"
 _NOTE_ASKED_NOTE = "rollover with a note · waiting for the session's note"
 """REQUESTED, kind `note`, asked: the agent was asked for its note and has not written it."""
 
+_NOTE_READING_NOTE = "rollover with a note · successor reading the note"
+"""ADOPTING, kind `note`: the successor was typed the note's path and has not finished a turn."""
+
 _TRUST_HOLD_NOTE = "starting successor · waiting for folder trust"
 """SUCCESSOR_STARTING, held: the successor is up on its folder-trust question (DEC-125)."""
 
@@ -395,6 +399,13 @@ async def rollover_marks(
         ):
             asked = any(event.detail == NOTE_ASKED for event in history(latest.id))
             holds[key] = _NOTE_ASKED_NOTE if asked else _NOTE_IDLE_NOTE
+        elif (
+            state is RolloverState.ADOPTING
+            and latest is not None
+            and latest.kind is RolloverKind.NOTE
+            and any(event.detail == NOTE_FIRST_TYPED for event in history(latest.id))
+        ):
+            holds[key] = _NOTE_READING_NOTE
         elif state is RolloverState.REQUESTED and latest is not None:
             details = [event.detail or "" for event in history(latest.id)]
             if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:

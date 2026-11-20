@@ -1307,6 +1307,7 @@ def build_rollover_pass(
         # The owner's "Rollover with a note" (BL-119): which profiles may, and their notes.
         note_rollable=note_rollable,
         notes=FileHandoffNotes(),
+        finished_turn=_finished_turn(SQLiteActivityStore(connection)),
         sessions=sessions_seen,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,
@@ -1336,6 +1337,17 @@ def build_rollover_pass(
         handoff_versions=SQLiteSessionStore(connection).handoff_versions,
         continuation_permissions=sessions.continuation_permissions,
     )
+
+
+def _finished_turn(
+    activity: SQLiteActivityStore,
+) -> Callable[[SessionId, datetime], Awaitable[bool]]:
+    """The feed's answer to "did this session finish a turn since?", keyed as the pass keys."""
+
+    async def finished(session_id: SessionId, since: datetime) -> bool:
+        return await activity.finished_turn_since(str(session_id), since)
+
+    return finished
 
 
 def reported_roots_reader(

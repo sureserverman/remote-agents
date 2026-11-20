@@ -92,7 +92,7 @@ _WHY = {
 }
 
 #: A note rollover's own words where its step differs from a workflow's (BL-119): its request
-#: is typed into the session itself, before any successor exists.
+#: is typed into the session itself, before any successor exists. Used only before then.
 _WHY_NOTE = {
     "not-typed": "the request for a handoff note was not confirmed typed into the session",
     "predecessor-not-idle": (
@@ -152,7 +152,9 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
             f"Rollover stop failed: {session} — {why}{kept}. Its successor has taken over: "
             "stop this session when it is done, or force stop it"
         )
-    words = _WHY_NOTE.get(code) if rollover.kind is RolloverKind.NOTE else None
+    # Only before a successor exists: from its launch on, a note rollover fails as a workflow's.
+    asking = rollover.kind is RolloverKind.NOTE and rollover.successor_session_id is None
+    words = _WHY_NOTE.get(code) if asking else None
     why = words or _WHY.get(code, escape(code) or "it did not complete")
     if code in ("not-typed", "permissions-failed") and rollover.failure_detail:
         why = f"{why} ({escape(rollover.failure_detail)})"

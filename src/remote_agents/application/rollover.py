@@ -110,6 +110,7 @@ from remote_agents.ports.handoff_envelopes import (
 from remote_agents.ports.handoff_notes import HandoffNotes, NoteReading
 from remote_agents.ports.rollover_store import (
     NOTE_ASKED,
+    NOTE_FIRST_TYPED,
     REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
@@ -194,6 +195,11 @@ NOTE_REQUEST = (
 """The one text a note rollover types into the predecessor, after the owner's press (OD-2,
 amending DEC-099). Its only field is the note's path, which the service builds from its own
 root and the rollover's own id: no byte of it comes from the session or the agent."""
+
+NOTE_FIRST_MESSAGE = "Read `{path}` and continue the work it describes."
+"""The one text a note rollover types into its successor: the note's path, never its words
+(BL-119). With `NOTE_REQUEST`, the only two messages this kind types, both after the owner's
+press, and neither holding a byte an agent wrote."""
 
 #: What a booting agent shows on its way to an idle composer, so the template waits it out.
 _BOOTING = frozenset(
@@ -297,6 +303,7 @@ class RolloverPass:
         | None = None,
         note_rollable: frozenset[ProfileId] = frozenset(),
         notes: HandoffNotes | None = None,
+        finished_turn: Callable[[SessionId, datetime], Awaitable[bool]] | None = None,
     ) -> None:
         self._resolve_legacy_destination = resolve_legacy_destination
         self._handoff_versions = handoff_versions
@@ -339,6 +346,10 @@ class RolloverPass:
         #: is ever asked for: its rows fail `not-rollable`.
         self._note_rollable = note_rollable
         self._notes = notes
+        #: Whether the agent reported a finished turn of a session at or after an instant: a
+        #: note rollover's adoption. Without it no note successor is ever taken as adopted,
+        #: and such a rollover ends `adoption-timeout` with its predecessor running.
+        self._finished_turn = finished_turn
         self._recovered = False
         self._notes_recovered = False
 
@@ -638,6 +649,23 @@ class RolloverPass:
     # -- one step ----------------------------------------------------------------------------
 
     async def _step(self, rollover: Rollover, seen: _Seen) -> None:
+        if rollover.kind is RolloverKind.NOTE:
+            # Its successor starts where its predecessor works, by the legacy path; it has no
+            # frozen destination to validate, and is never held as an unbound one.
+            match rollover.state:
+                case _S.REQUESTED:
+                    await self._ask_for_note(rollover, seen)
+                case _S.HANDOFF_READY:
+                    await self._start_successor(rollover, seen)
+                case _S.SUCCESSOR_STARTING:
+                    await self._found_starting(rollover, seen)
+                case _S.ADOPTING:
+                    await self._await_note_adoption(rollover, seen)
+                case _S.SUCCESSOR_ACCEPTED:
+                    await self._stop_predecessor(rollover, seen)
+                case _S.PREDECESSOR_STOPPING:
+                    await self._reconcile_stop(rollover, seen)
+            return
         if self._resolve_destination is not None and rollover.state not in (
             _S.REQUESTED,
             _S.HANDOFF_READY,
@@ -657,11 +685,6 @@ class RolloverPass:
             except DestinationRefused as error:
                 await self._fail(rollover, seen, error.code)
                 return
-        if rollover.kind is RolloverKind.NOTE:
-            match rollover.state:
-                case _S.REQUESTED:
-                    await self._ask_for_note(rollover, seen)
-            return
         match rollover.state:
             case _S.REQUESTED:
                 await self._signal(rollover, seen)
@@ -908,7 +931,9 @@ class RolloverPass:
                 if target.permissions is None
                 else None,
             )
-        assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
+        # A workflow's key is its handoff's id; a note rollover's, which has none, its own.
+        key = rollover.handoff_id if rollover.kind is RolloverKind.WORKFLOW else rollover.id
+        assert key is not None  # a workflow's HANDOFF_READY is opened from a `ready` only
         predecessor = rollover.predecessor_session_id
         reported = seen.roots.get(predecessor)
         default = seen.defaults.get(predecessor)
@@ -918,7 +943,7 @@ class RolloverPass:
             return LaunchCommand(
                 rollover.project_id,
                 rollover.profile_id,
-                f"rollover:{rollover.handoff_id}",
+                f"rollover:{key}",
                 guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
                 folder=reported,
                 inherit_permissions_of=predecessor,
@@ -926,7 +951,7 @@ class RolloverPass:
         return LaunchCommand(
             rollover.project_id,
             rollover.profile_id,
-            f"rollover:{rollover.handoff_id}",
+            f"rollover:{key}",
             guard_wait=UNATTENDED_LAUNCH_WAIT_SECONDS,
             reuse_folder_of=predecessor,
             inherit_permissions_of=predecessor,
@@ -945,9 +970,11 @@ class RolloverPass:
             if self._now() - rollover.updated_at >= NOT_IDLE_PATIENCE:
                 await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
             return
-        assert rollover.handoff_id is not None  # HANDOFF_READY is opened from a `ready` only
         try:
-            if rollover.target is None:
+            if rollover.kind is RolloverKind.NOTE:
+                pass  # started where its predecessor works; nothing frozen to validate
+            elif rollover.target is None:
+                assert rollover.handoff_id is not None  # a workflow's HANDOFF_READY has one
                 root = seen.root_of(rollover)
                 record = seen.sessions.get(rollover.predecessor_session_id)
                 if root is None or record is None:
@@ -969,7 +996,8 @@ class RolloverPass:
                     raise DestinationRefused("legacy-destination-unbound")
                 target = await self._target_for(ready, record, root)
                 rollover = await self._store.freeze(rollover.id, root, target, at=self._now())
-            await self._validate_target(rollover)
+            if rollover.kind is RolloverKind.WORKFLOW:
+                await self._validate_target(rollover)
         except DestinationRefused as error:
             await self._fail(rollover, seen, error.code)
             return
@@ -1022,18 +1050,39 @@ class RolloverPass:
         if not await self._looks_idle(rollover.predecessor_session_id):
             await self._fail(starting, seen, PREDECESSOR_NOT_IDLE)
             return
-        reason = await self._type_template(
-            record.session_id,
+        reason = await self._type_into_successor(rollover, record.session_id)
+        if reason is not None:
+            await self._fail(starting, seen, NOT_TYPED, reason)
+            return
+        await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
+
+    async def _type_into_successor(self, rollover: Rollover, successor: SessionId) -> str | None:
+        """Type the successor its one message: a workflow's adopt template, or a note
+        rollover's `NOTE_FIRST_MESSAGE`. None once it landed, else why it was not typed."""
+        if rollover.kind is RolloverKind.NOTE:
+            root = rollover.source_root
+            path = (
+                None
+                if root is None or self._notes is None
+                else self._notes.note_path(root, rollover.id)
+            )
+            if path is None or not _typable(str(path)):
+                return "the note's path cannot be typed"
+            # Before the keys: its time is the line the successor's finished turn must cross. It
+            # is taken before `_type_text`'s boot retries, so a turn the successor reported while
+            # still booting would count. Accepted: only Claude and Codex roll over with a note,
+            # and neither reports a finished turn it was never given (BL-119, Task 2.4 review).
+            await self._store.note(rollover.id, NOTE_FIRST_TYPED, at=self._now())
+            return await self._type_text(successor, _note_first_message(path))
+        assert rollover.handoff_id is not None  # a workflow's successor starts from a `ready`
+        return await self._type_template(
+            successor,
             rollover.profile_id,
             rollover.handoff_id,
             source_root=rollover.source_root
             if rollover.target and rollover.target.version == 2
             else None,
         )
-        if reason is not None:
-            await self._fail(starting, seen, NOT_TYPED, reason)
-            return
-        await self._store.advance(rollover.id, _S.ADOPTING, at=self._now())
 
     async def _held(
         self, session_id: SessionId, profile_id: ProfileId
@@ -1070,6 +1119,11 @@ class RolloverPass:
         text = template.format(handoff_id=handoff_id)
         if source_root is not None:
             text += " --handoff-root " + shlex.quote(str(source_root))
+        return await self._type_text(session_id, text)
+
+    async def _type_text(self, session_id: SessionId, text: str) -> str | None:
+        """Type one fixed text into a successor with the schedules' retry while it boots; None
+        once it landed. Never typed twice: a send that may have typed is given up (DEC-099)."""
         retries = 0  # counted, never read off the clock (`STARTUP_RETRIES`)
         while True:
             try:
@@ -1169,15 +1223,7 @@ class RolloverPass:
         adopting = await self._store.advance(
             rollover.id, _S.ADOPTING, at=self._now(), detail=TRUSTED_TYPING
         )
-        assert adopting.handoff_id is not None  # opened from a `ready`, which names one
-        reason = await self._type_template(
-            rollover.successor_session_id,
-            rollover.profile_id,
-            adopting.handoff_id,
-            source_root=rollover.source_root
-            if rollover.target and rollover.target.version == 2
-            else None,
-        )
+        reason = await self._type_into_successor(adopting, rollover.successor_session_id)
         if reason is not None:
             await self._fail(adopting, seen, NOT_TYPED, reason)
 
@@ -1196,6 +1242,41 @@ class RolloverPass:
         elif envelope is not None:
             await self._fail(rollover, seen, envelope.failure_code or SUCCESSOR_FAILED)
         elif not seen.up(rollover.successor_session_id):
+            await self._fail(rollover, seen, SUCCESSOR_FAILED)
+        elif self._now() - rollover.updated_at >= ADOPTION_PATIENCE:
+            await self._fail(rollover, seen, ADOPTION_TIMEOUT)
+
+    async def _await_note_adoption(self, rollover: Rollover, seen: _Seen) -> None:
+        """A note successor has adopted the work once it finishes a turn begun after its first
+        message was typed -- one it finished before never read the note."""
+        typed_at = next(
+            (
+                e.created_at
+                for e in await self._store.events(rollover.id)
+                if e.detail == NOTE_FIRST_TYPED
+            ),
+            None,
+        )
+        successor = rollover.successor_session_id
+        if typed_at is None:
+            # Recorded before the keys, so its absence proves nothing was typed: a restart came
+            # between the launch and the first message. The successor never read the note, and
+            # it is never typed to now (DEC-099), so the rollover ends here, its predecessor kept.
+            await self._fail(rollover, seen, NOT_TYPED, "a restart came before the first message")
+            return
+        if (
+            successor is not None
+            and self._finished_turn is not None
+            and await self._finished_turn(successor, typed_at)
+        ):
+            accepted = await self._store.advance(
+                rollover.id,
+                _S.SUCCESSOR_ACCEPTED,
+                at=self._now(),
+                detail="successor finished its first turn",
+            )
+            await self._stop_predecessor(accepted, seen)
+        elif not seen.up(successor):
             await self._fail(rollover, seen, SUCCESSOR_FAILED)
         elif self._now() - rollover.updated_at >= ADOPTION_PATIENCE:
             await self._fail(rollover, seen, ADOPTION_TIMEOUT)
@@ -1381,6 +1462,11 @@ def _typable(text: str) -> bool:
     """Whether `text` can sit inside the typed request as it is: printable, one line, and no
     backtick to close the request's own quoting."""
     return text.isprintable() and "`" not in text
+
+
+def _note_first_message(path: Path) -> str:
+    """`NOTE_FIRST_MESSAGE` with the note's path, the one field the service fills in."""
+    return NOTE_FIRST_MESSAGE.format(path=path)
 
 
 def _note_request(path: Path) -> str:

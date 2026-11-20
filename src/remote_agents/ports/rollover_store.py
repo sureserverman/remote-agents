@@ -44,6 +44,12 @@ patience. A row reads it to say the rollover waits for the note rather than for 
 session."""
 
 
+NOTE_FIRST_TYPED = "first message typed"
+"""The history detail a note rollover records *before* typing its successor's first message
+(BL-119). Its time is the line a finished turn must cross to count as the successor's adoption:
+a turn the successor finished before it was typed to never read the note."""
+
+
 class IllegalRolloverMove(ValueError):
     """An `advance` the domain matrix does not allow; nothing was written."""
 

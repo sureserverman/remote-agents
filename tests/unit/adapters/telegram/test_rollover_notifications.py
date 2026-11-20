@@ -239,3 +239,21 @@ def test_a_note_that_was_never_written_is_said_with_its_patience() -> None:
 
     assert f"{int(NOTE_PATIENCE.total_seconds() // 60)} minutes" in text
     assert "note" in text
+
+
+def test_a_note_rollover_whose_successor_was_not_typed_to_names_the_successor() -> None:
+    from dataclasses import replace
+
+    from remote_agents.domain.rollover import RolloverKind
+
+    report = _report(RolloverState.FAILED, "not-typed", detail="composing", successor=_record(4))
+    report = RolloverReport(
+        replace(report.rollover, kind=RolloverKind.NOTE, handoff_id=None, reason="owner"),
+        report.predecessor,
+        report.successor,
+    )
+
+    text = rollover_message(report, project_name="remote-agents")
+
+    assert "successor" in text and "handoff note was not confirmed" not in text
+    assert "#4" in text and "still open" in text

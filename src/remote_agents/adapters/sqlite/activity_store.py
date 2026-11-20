@@ -194,6 +194,27 @@ class SQLiteActivityStore:
         ).fetchall()
         return {row[0]: row[1] for row in rows if isinstance(row[1], str) and row[1].strip()}
 
+    async def finished_turn_since(self, session_id: str, since: datetime) -> bool:
+        """Whether the agent itself reported a finished turn of `session_id` at or after `since`.
+
+        A note rollover's adoption (BL-119): the successor finished the turn its first message
+        began. Only `REPORTED` `COMPLETED` rows count -- the record's own meaning (DEC-143), never
+        this service's guess. Compared as instants, not as text: the stored form drops a zero
+        microsecond part. The newest rows are the ones after a typing, so a bounded few are read.
+        """
+        rows = self._connection.execute(
+            "SELECT observed_at FROM agent_activity WHERE session_id = ? AND kind = ?"
+            " AND confidence = ? ORDER BY activity_id DESC LIMIT 20",
+            (session_id, ActivityKind.COMPLETED.value, ActivityConfidence.REPORTED.value),
+        ).fetchall()
+        for (observed_at,) in rows:
+            try:
+                if datetime.fromisoformat(observed_at) >= since:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     async def newest_stop_detail(self, session_id: str) -> str | None:
         """The words of the session's newest recorded limit stop, or `None` with none."""
         row = self._connection.execute(

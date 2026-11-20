@@ -274,3 +274,40 @@ async def test_last_words_of_no_sessions_reads_nothing(store) -> None:
     finally:
         store._connection.set_trace_callback(None)
     assert statements == []
+
+
+async def test_a_finished_turn_since_counts_only_reported_completions_at_or_after(store) -> None:
+    """A note rollover's adoption (BL-119): the agent's own finished turn, compared as an
+    instant -- the stored text drops a zero microsecond part, so text order would lie."""
+    from datetime import UTC, datetime, timedelta
+
+    from remote_agents.ports.agent_activity import (
+        ActivityConfidence,
+        ActivityKind,
+        AgentActivity,
+    )
+
+    typed = datetime(2026, 11, 20, 9, 0, 0, 500_000, tzinfo=UTC)
+    await store.append(
+        AgentActivity("s1", ActivityKind.COMPLETED, "before", typed - timedelta(seconds=1))
+    )
+    await store.append(
+        AgentActivity(
+            "s1",
+            ActivityKind.COMPLETED,
+            "a guess",
+            typed + timedelta(minutes=1),
+            confidence=ActivityConfidence.INFERRED,
+        )
+    )
+    await store.append(
+        AgentActivity("s1", ActivityKind.NEEDS_ANSWER, "a question", typed + timedelta(minutes=2))
+    )
+    await store.append(
+        AgentActivity("s2", ActivityKind.COMPLETED, "another session", typed + timedelta(minutes=3))
+    )
+    assert not await store.finished_turn_since("s1", typed)
+
+    whole_second = datetime(2026, 11, 20, 9, 1, tzinfo=UTC)  # stored with no fraction
+    await store.append(AgentActivity("s1", ActivityKind.COMPLETED, "after", whole_second))
+    assert await store.finished_turn_since("s1", typed)

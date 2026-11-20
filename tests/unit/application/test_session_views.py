@@ -1797,3 +1797,34 @@ async def test_a_note_rollover_says_what_it_waits_for(
         1: "rollover with a note · waiting for this session to be idle",
         2: "rollover with a note · waiting for the session's note",
     }
+
+
+async def test_a_note_successor_reading_the_note_says_so(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    from remote_agents.domain.rollover import RolloverKind
+
+    predecessor, successor = _numbered(1), _numbered(2)
+    asked = await rollover_store.request(
+        predecessor.session_id,
+        project_id=ProjectId("demo"),
+        profile_id=ProfileId("claude"),
+        at=_ROLL_AT,
+        kind=RolloverKind.NOTE,
+    )
+    assert asked is not None
+    for state in (RolloverState.HANDOFF_READY, RolloverState.SUCCESSOR_STARTING):
+        await rollover_store.advance(asked.id, state, at=_ROLL_AT)
+    await rollover_store.record_successor(asked.id, successor.session_id, at=_ROLL_AT)
+    await rollover_store.advance(asked.id, RolloverState.ADOPTING, at=_ROLL_AT)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
+    assert _notes((predecessor,), marks) == {1: "successor validating handoff"}, (
+        "nothing typed yet: no claim that the successor reads anything"
+    )
+
+    from remote_agents.ports.rollover_store import NOTE_FIRST_TYPED
+
+    await rollover_store.note(asked.id, NOTE_FIRST_TYPED, at=_ROLL_AT)
+    marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
+    assert _notes((predecessor,), marks) == {1: "rollover with a note · successor reading the note"}
