@@ -69,7 +69,7 @@ from remote_agents.composition.limits_source import (
     ConfigRolloverSetting,
 )
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
@@ -276,10 +276,38 @@ def _usage_reader(
             return None
         if workspace is None:
             return None
-        query = UsageQuery(record.profile_id, workspace, record.created_at, record.resume_source_id)
+        query = UsageQuery(
+            record.profile_id,
+            workspace,
+            record.created_at,
+            record.resume_source_id,
+            session_id=str(record.session_id),
+        )
         return await asyncio.to_thread(readers.read, query)
 
     return read
+
+
+def _usage_record_sweep(
+    store: SQLiteSessionStore, readers: ProfileUsageReaders
+) -> Callable[[], Awaitable[None]]:
+    """Keep the per-session usage records of every session that has not ENDED; drop the rest.
+
+    Only ENDED, as `forget_marks` forgets conversation marks: an UNTRUSTED, STARTING or FAILED
+    session is still listed and may still be read. A record whose session the store does not
+    know is dropped too -- nothing will ever read it. The removal is a directory sweep, so it
+    runs off the event loop.
+    """
+
+    async def sweep() -> None:
+        kept = frozenset(
+            str(record.session_id)
+            for record in await store.list()
+            if record.state is not SessionState.ENDED
+        )
+        await asyncio.to_thread(readers.forget_except, kept)
+
+    return sweep
 
 
 _GIT_SUMMARY_SECONDS = 2.0
@@ -471,6 +499,7 @@ def compose_backend(
         ),
         claude_context_window_stated=config.claude_context_window_stated,
         claude_limits_path=paths.claude_limits_path,
+        claude_context_directory=paths.claude_context_directory,
         # The file the config was loaded from, not `paths.config_path`: `--config` can name
         # another, and the switch must be read back from the one the owner is editing.
         claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),
@@ -620,6 +649,7 @@ def compose_backend(
         ),
         limits=_limits_reader(provider_usage),
         close_usage_readers=provider_usage.aclose,
+        forget_usage_records=_usage_record_sweep(backend_store, provider_usage),
         # Over the same connection as the session store: schedules are domain rows, so a change
         # wakes the store watcher on both surfaces (DEC-090). Which profiles exist, and whether
         # each can take a `/` command, is the send's own fold of the descriptors (DEC-070,

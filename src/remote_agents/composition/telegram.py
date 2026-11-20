@@ -122,6 +122,7 @@ def _private_boundary(
         ),
         claude_context_window_stated=config.claude_context_window_stated,
         claude_limits_path=paths.claude_limits_path,
+        claude_context_directory=paths.claude_context_directory,
         # The file the config was loaded from, not `paths.config_path`: `--config` can name
         # another, and the switch must be read back from the one the owner is editing.
         claude_limits_switch=partial(read_claude_limits_source, config.path or paths.config_path),

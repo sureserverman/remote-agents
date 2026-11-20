@@ -58,15 +58,33 @@ class ContextWindow:
     denominator is an assertion and the other is a measurement.
     """
 
+    reported_percent: float | None = None
+    """The share in use as the provider itself reported it, or `None` when this is a count.
+
+    Claude Code hands its status line the percentage it computes for the conversation, and the
+    status-line hop keeps it per managed session (DEC-146). When it is set the figure is the
+    provider's own -- not an estimate over a declared ceiling -- and `used_fraction` is exactly
+    it, rather than a re-division of tokens derived from it.
+    """
+
     def __post_init__(self) -> None:
         if self.used_tokens < 0:
             raise ValueError("a context window cannot have used negative tokens")
         if self.limit_tokens is not None and self.limit_tokens < 1:
             raise ValueError("a context limit must be positive when it is known")
+        if self.reported_percent is not None and not 0 <= self.reported_percent <= 100:
+            raise ValueError("a reported context percentage runs from 0 to 100")
+
+    @property
+    def provider_reported(self) -> bool:
+        """Whether the share is the provider's own figure rather than this service's estimate."""
+        return self.reported_percent is not None
 
     @property
     def used_fraction(self) -> float | None:
         """The share of the window in use, or None when the ceiling is not known."""
+        if self.reported_percent is not None:
+            return self.reported_percent / 100
         return None if self.limit_tokens is None else self.used_tokens / self.limit_tokens
 
 
@@ -297,7 +315,7 @@ class AgentLimits:
 class UsageQuery:
     """The identity of one managed session, in the terms a provider's files are searched by.
 
-    None of the four fields is optional-by-accident. `workspace` is what every provider keys
+    None of the first four fields is optional-by-accident. `workspace` is what every provider keys
     its conversations on, `started_at` is what separates this session's conversation from the
     ones the owner ran in the same directory yesterday, and `resume_source_id` short-circuits
     both when it is present — a resumed session names its provider conversation exactly, so a
@@ -308,3 +326,10 @@ class UsageQuery:
     workspace: Path
     started_at: datetime
     resume_source_id: str | None = None
+    session_id: str | None = None
+    """The managed session's own id, for a reader that keeps a record per managed session.
+
+    Claude's reader looks up the figure the status-line hop recorded under it (DEC-146). A
+    query without one -- a reader set asked about no particular managed session -- reads the
+    provider's files as before.
+    """

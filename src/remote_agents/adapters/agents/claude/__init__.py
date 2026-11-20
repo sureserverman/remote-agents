@@ -40,6 +40,7 @@ def descriptor(
     context_window: int | None = None,
     context_window_stated: bool = False,
     limits_path: Path | None = None,
+    context_directory: Path | None = None,
     limits_switch: Callable[[], str] | None = None,
     home: Path | None = None,
 ) -> ProviderDescriptor:
@@ -71,6 +72,8 @@ def descriptor(
                 # Where the status-line hop records the plan's windows; the composition root
                 # hands it down from `ProductionPaths`, and a set built without one reads nothing.
                 limits_path=limits_path,
+                # Where the same hop keeps each managed session's own context figure (DEC-146).
+                context_directory=context_directory,
             ),
             limits_switch,
             home,

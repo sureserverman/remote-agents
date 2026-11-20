@@ -285,6 +285,22 @@ class ProfileUsageReaders:
         except AttributeError:
             return None
 
+    def forget_except(self, kept: frozenset[str]) -> None:
+        """Ask each reader that keeps a record per managed session to drop all but `kept`'s.
+
+        Found the way `aclose` is: a reader without `forget_except` keeps nothing to drop.
+        Today that is Claude's alone, for the context figure its status-line hop records
+        (DEC-146). A reader's failure is its own; the others are still asked.
+        """
+        for reader in self._readers:
+            forget = getattr(reader, "forget_except", None)
+            if forget is None:
+                continue
+            try:
+                forget(kept)
+            except OSError:
+                continue
+
     async def aclose(self) -> None:
         """Reclaim whatever a reader holds open -- today, Codex's app-server child.
 
@@ -313,6 +329,7 @@ def provider_descriptors(
     claude_context_window: int | None = None,
     claude_context_window_stated: bool = False,
     claude_limits_path: Path | None = None,
+    claude_context_directory: Path | None = None,
     claude_limits_switch: Callable[[], str] | None = None,
     claude_home: Path | None = None,
     cursor_limits_switch: Callable[[], str] | None = None,
@@ -322,7 +339,8 @@ def provider_descriptors(
 
     The keyword arguments thread the host's facts through to claude's builder: the one
     owner-configurable capability (DEC-061 — the ceiling reaches the reader only when the
-    owner stated it), where the status-line hop records the plan's windows, the switch that
+    owner stated it), where the status-line hop records the plan's windows and each managed
+    session's own context figure, the switch that
     names Claude's limits source and the home its credential file lives under -- all of which
     only the composition root knows (DEC-046). Cursor's two are the same pair for its own
     opt-in account read.
@@ -332,6 +350,7 @@ def provider_descriptors(
             context_window=claude_context_window,
             context_window_stated=claude_context_window_stated,
             limits_path=claude_limits_path,
+            context_directory=claude_context_directory,
             limits_switch=claude_limits_switch,
             home=claude_home,
         ),

@@ -8,6 +8,8 @@ retired.
 
 from __future__ import annotations
 
+import os
+import stat
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -40,6 +42,18 @@ A recording from the future would otherwise never age past the bound below: a ho
 clock ran ahead when the hop wrote would show that reading as fresh for as long as the skew
 lasted. Ninety seconds is the same allowance `_START_TOLERANCE` gives a session's own clock.
 """
+
+_STALE_CONTEXT_AGE = timedelta(minutes=10)
+"""How old the hop's context record may be before the transcript estimate is shown instead.
+
+The hop writes on every status-line update, which Claude Code draws at least once a turn, so a
+working session's record is seconds old. One ten minutes old belongs to an idle session, whose
+figure has not moved either, but the owner asked for "the provider's own figure" to mean a
+current one: an idle session falls back to the estimate, hedged as before (BL-118).
+"""
+
+_CONTEXT_RECORD_MAX_BYTES = 4096
+"""A record is three numbers; anything larger was not written by the hop and is not read."""
 
 _STALE_LIMIT_AGE = timedelta(minutes=30)
 """How old the hop's recording may be before its numbers stop being shown.
@@ -86,6 +100,7 @@ class ClaudeUsageReader:
         limits_path: Path | None = None,
         context_window: int | None = None,
         context_window_stated: bool = False,
+        context_directory: Path | None = None,
         now: object = None,
     ) -> None:
         self._sessions_root = sessions_root or Path.home() / ".claude" / "projects"
@@ -109,9 +124,24 @@ class ClaudeUsageReader:
         supplied its own ceiling would be inventing one, which DEC-061 forbids in exactly those
         words.
         """
+        self._context_directory = context_directory
+        """Where the status-line hop keeps each managed session's own context figure, or `None`.
+
+        Handed in from `ProductionPaths.claude_context_directory`, as `limits_path` is, and for
+        the same reason; `None` reads the transcript alone.
+        """
         self._now = now
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
+        reported = self._reported_context(query.session_id)
+        if reported is not None:
+            windows, stale, _ = self._limits()
+            return AgentUsage(
+                context=reported,
+                windows=windows,
+                observed_at=_moment(self._now),
+                stale_source=stale,
+            )
         transcript = self._transcript_for(query)
         if transcript is None:
             # No conversation matched, and the account's windows do not change that. They used
@@ -138,6 +168,86 @@ class ClaudeUsageReader:
             observed_at=_moment(self._now),
             stale_source=stale,
         )
+
+    def _reported_context(self, session_id: str | None) -> ContextWindow | None:
+        """Claude's own figure for the session, when the hop recorded one in the last ten minutes.
+
+        Every doubt answers `None`, and the caller reads the transcript: a link (the directory
+        or the file), a file that is not regular, over 4 KiB or unreadable, malformed JSON, a
+        percentage that is not a number from 0 to 100, a size that is not a positive integer,
+        or a time outside the freshness bound. The id is the file's name, so it is used only as
+        the composition's own record of the session, never from a pane.
+        """
+        if self._context_directory is None or not session_id:
+            return None
+        if "/" in session_id or session_id.startswith("."):
+            return None
+        try:
+            if self._context_directory.is_symlink():
+                return None
+            descriptor = os.open(
+                self._context_directory / f"{session_id}.json", os.O_RDONLY | os.O_NOFOLLOW
+            )
+        except OSError:
+            return None
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISREG(status.st_mode) or status.st_size > _CONTEXT_RECORD_MAX_BYTES:
+                return None
+            raw = os.read(descriptor, _CONTEXT_RECORD_MAX_BYTES + 1)
+        except OSError:
+            return None
+        finally:
+            os.close(descriptor)
+        document = _loads(raw.decode("utf-8", errors="replace"))
+        if not isinstance(document, dict):
+            return None
+        observed = _instant(document.get("recorded_at"))
+        if observed is None:
+            return None
+        age = _moment(self._now) - observed
+        if age > _STALE_CONTEXT_AGE or age < -_FUTURE_TOLERANCE:
+            return None
+        percent = document.get("used_percentage")
+        size = _positive_int(document.get("context_window_size"))
+        if isinstance(percent, bool) or not isinstance(percent, (int, float)) or size is None:
+            return None
+        if not 0 <= percent <= 100:
+            return None
+        return ContextWindow(
+            round(size * percent / 100),
+            size,
+            limit_declared=False,
+            reported_percent=float(percent),
+        )
+
+    def forget_except(self, kept: frozenset[str]) -> None:
+        """Remove every session's record but the kept sessions'; quiet, and never via a link.
+
+        Called once the service knows which sessions are still live, so an ended session's
+        record goes with it (DEC-146). Only `<id>.json` regular files are this reader's to
+        remove: the hop's in-flight temporaries are dotted and collected by the hop.
+        """
+        directory = self._context_directory
+        if directory is None:
+            return
+        try:
+            if directory.is_symlink() or not directory.is_dir():
+                return
+            entries = list(os.scandir(directory))
+        except OSError:
+            return
+        for entry in entries:
+            name = entry.name
+            if name.startswith(".") or not name.endswith(".json"):
+                continue
+            if name.removesuffix(".json") in kept:
+                continue
+            try:
+                if entry.is_file(follow_symlinks=False) or entry.is_symlink():
+                    os.unlink(entry.path)
+            except OSError:
+                continue
 
     def _transcript_for(self, query: UsageQuery) -> Path | None:
         directory = self._sessions_root / _escaped_workspace(query.workspace)

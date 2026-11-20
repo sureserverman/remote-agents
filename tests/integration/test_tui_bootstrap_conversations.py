@@ -364,6 +364,10 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # on the readers, so a host whose readers own nothing carries a `None` both surfaces
         # can see. Each surface calls it on its own way out; neither renders it.
         "close_usage_readers",
+        # Drops each ended session's per-session usage record -- the Claude context figure the
+        # status-line hop keeps (DEC-146). Called by the service after each reconciliation;
+        # a declared field for `close_usage_readers`' reason, and no surface renders it.
+        "forget_usage_records",
         "max_label_length",
     }
 

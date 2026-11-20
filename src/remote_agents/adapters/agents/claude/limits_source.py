@@ -60,6 +60,12 @@ class ClaudeLimitsSource:
     def read(self, query: UsageQuery) -> AgentUsage | None:
         return self._hop.read(query)
 
+    def forget_except(self, kept: frozenset[str]) -> None:
+        """The session records are the hop reader's; the switch does not bear on them."""
+        forget = getattr(self._hop, "forget_except", None)
+        if forget is not None:
+            forget(kept)
+
     def limits(self) -> AgentLimits:
         try:
             chosen = self._read_switch()

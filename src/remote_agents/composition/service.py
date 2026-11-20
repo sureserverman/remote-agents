@@ -1760,3 +1760,22 @@ async def _reconcile_quietly(composition: ServiceComposition) -> None:
         await composition.reconciler.reconcile(await composition.terminal.managed_observations())
     except Exception:
         _LOG.exception("reconciliation pass failed")
+    await _forget_usage_records(composition)
+
+
+async def _forget_usage_records(composition: ServiceComposition) -> None:
+    """After a pass that may have ended sessions, drop their per-session usage records.
+
+    DEC-146: the status-line hop's context record goes with its session. Reached through the
+    backend's declared field, as `_close_usage_readers` is, and never raises into the loop.
+    """
+    backend = getattr(composition.boundary, "backend", None)
+    if backend is None:
+        return
+    forget = backend.forget_usage_records
+    if forget is None:
+        return
+    try:
+        await forget()
+    except Exception:
+        _LOG.exception("the ended sessions' usage records could not be swept")

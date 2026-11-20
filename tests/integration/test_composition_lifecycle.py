@@ -933,6 +933,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
                 "context_window": _STATED_CEILING,
                 "context_window_stated": True,
                 "limits_path": paths.claude_limits_path,
+                "context_directory": paths.claude_context_directory,
             }
         ]
         assert config.claude_context_window == _STATED_CEILING
@@ -984,6 +985,7 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
                 "context_window": None,
                 "context_window_stated": False,
                 "limits_path": paths.claude_limits_path,
+                "context_directory": paths.claude_context_directory,
             }
         ]
     finally:
@@ -1573,3 +1575,76 @@ async def test_shutdown_abandons_an_enable_holding_the_codex_lock_after_the_drai
         await asyncio.gather(*enabling, return_exceptions=True)
     finally:
         connection.close()
+
+
+async def test_a_reconciliation_pass_sweeps_the_ended_sessions_usage_records(
+    tmp_path: Path,
+) -> None:
+    """DEC-146: the hop's context record goes with its session, after the pass that ends it."""
+    from backends import backend_for
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.telegram.service import build_private_bot
+    from remote_agents.application.reconcile import ReconciliationService
+    from remote_agents.composition.service import ServiceComposition, _reconcile_quietly
+
+    swept: list[str] = []
+
+    async def forget() -> None:
+        swept.append("swept")
+
+    async def failing() -> None:
+        raise OSError("disk gone")
+
+    class _Terminal:
+        async def managed_observations(self) -> tuple:
+            return ()
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        store = SQLiteSessionStore(connection)
+        for sweep in (forget, failing, None):
+            boundary = build_private_bot(7, 11, backend=backend_for(forget_usage_records=sweep))
+            await _reconcile_quietly(
+                ServiceComposition(boundary, _Terminal(), ReconciliationService(store))
+            )
+        # Once for the sweep that works; the failing one is logged, never raised; `None` skips.
+        assert swept == ["swept"]
+    finally:
+        connection.close()
+
+
+async def test_the_backend_sweep_keeps_every_session_that_has_not_ended(tmp_path: Path) -> None:
+    import json
+
+    from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
+    from remote_agents.adapters.agents.registry import ProfileUsageReaders
+    from remote_agents.composition.backend import _usage_record_sweep
+    from remote_agents.domain.models import SessionState
+
+    class _Record:
+        def __init__(self, session_id: str, state: SessionState) -> None:
+            self.session_id = session_id
+            self.state = state
+
+    class _Store:
+        async def list(self) -> list[_Record]:
+            return [
+                _Record("running-one", SessionState.RUNNING),
+                _Record("failed-one", SessionState.FAILED),
+                _Record("ended-one", SessionState.ENDED),
+            ]
+
+    directory = tmp_path / "claude-context"
+    directory.mkdir()
+    for session in ("running-one", "failed-one", "ended-one", "unknown-one"):
+        (directory / f"{session}.json").write_text(json.dumps({}), encoding="utf-8")
+    readers = ProfileUsageReaders([ClaudeUsageReader(context_directory=directory)])
+
+    await _usage_record_sweep(_Store(), readers)()  # type: ignore[arg-type]
+
+    assert sorted(path.name for path in directory.iterdir()) == [
+        "failed-one.json",
+        "running-one.json",
+    ]

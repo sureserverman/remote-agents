@@ -558,8 +558,11 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     # Twenty-seven since `permission_failures` joined them
     # (`2026-11-12-codex-permissions-on-the-daemon-plan.md`, Task 2.4), for the same reason: the
     # permission pass tells only the bot.
-    assert len(fields) == 27, (
-        f"`Backend` now declares {len(fields)} fields, not 25. That is fine — but it widens "
+    # Twenty-eight since `forget_usage_records` joined them
+    # (`2026-11-18-backlog-sweep-sub-05-context-and-planless-rollover-plan.md`, Task 1.2): the
+    # service drops ended sessions' context records after each reconciliation (DEC-146).
+    assert len(fields) == 28, (
+        f"`Backend` now declares {len(fields)} fields, not 28. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

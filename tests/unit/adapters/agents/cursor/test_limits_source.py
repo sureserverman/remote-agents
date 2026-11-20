@@ -263,6 +263,7 @@ def test_cursor_limits_source_each_composition_root_hands_cursor_its_own_switch(
     paths = SimpleNamespace(
         home=tmp_path / "home",
         claude_limits_path=tmp_path / "claude-limits.json",
+        claude_context_directory=tmp_path / "claude-context",
         config_path=config_file if loaded_from_default_path else elsewhere,
     )
 

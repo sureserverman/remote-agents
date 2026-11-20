@@ -199,6 +199,14 @@ class Backend:
     is a hang that orphans the very child it was reclaiming.
     """
 
+    forget_usage_records: Callable[[], Awaitable[None]] | None = None
+    """Drop the records a usage reader keeps per managed session, for every session that ended.
+
+    Today the Claude context figures the status-line hop records (DEC-146). Called by the
+    service after each reconciliation pass, the step that ends a session whose pane has gone;
+    a surface that runs no reconciliation never calls it. `None` keeps nothing to drop.
+    """
+
     host_remote_control: object | None = None
     """The one host-level action (`application.host_remote_control.HostRemoteControlService`).
 
