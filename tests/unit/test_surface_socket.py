@@ -1,4 +1,4 @@
-"""A surface drives the tmux server it runs on, and no other (BL-041).
+"""A surface drives the tmux server it runs on, and no other (DEC-144).
 
 A surface inside a disposable console once classified itself as console-hosted and then drove
 the owner's real console, because the composition root built its composer on the literal

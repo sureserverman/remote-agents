@@ -69,7 +69,7 @@ def test_hosting_mode_reads_the_tmux_socket_not_just_its_presence() -> None:
     # safe only because of what came first: the composer is built on the socket the surface
     # runs on (`composition/tui.py::_surface_socket`), so a surface in a test console can reach
     # that console and nothing else. When the composer was built on the production socket,
-    # this exact classification made a test console drive the owner's real one (BL-041).
+    # this exact classification made a test console drive the owner's real one (DEC-042).
     assert (
         hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-test-abc123,42,0"})
         is HostingMode.CONSOLE

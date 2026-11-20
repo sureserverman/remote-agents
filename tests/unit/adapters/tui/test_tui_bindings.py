@@ -1444,10 +1444,9 @@ async def test_f4_from_every_console_pane_opens_the_detail_and_escape_comes_home
 ) -> None:
     """The Stage 3 gate's judgment check, at unit scope across all four panes.
 
-    The check as written says to drive the *real* console. That cannot be automated — BL-041:
-    `hosting_mode` classifies a pane surface inside a disposable console as FOREIGN, deliberately,
-    and the only other console on this host is the owner's live one. So this covers the property
-    for all four panes and the live drive is reported as blocked rather than claimed.
+    The check as written says to drive the *real* console. A disposable console can be driven
+    since DEC-144, and `tests/live/test_three_pane_console.py` presses F4 in a real projects
+    pane there; this covers the property for all four panes, which the live case does not.
 
     Two halves, and the second is the one a single-screen assertion cannot give: `M-d` opens the
     detail of the session the *sessions pane* highlights — on three of these panes that is a row

@@ -732,7 +732,7 @@ def _switch_argv() -> Callable[[SessionId], tuple[str, ...]]:
 
     Bound to the socket this process runs inside, for `_surface_socket`'s reason: a surface in a
     disposable console that switched the client on the production server would be moving the
-    owner's terminal from a test (BL-041).
+    owner's terminal from a test (DEC-144).
     """
     return partial(switch_client_argv, socket=_surface_socket())
 

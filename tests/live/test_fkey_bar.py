@@ -5,14 +5,14 @@ Everything else about the bar is proven piecewise: the format on a scratch clien
 drill shows is the whole: `remote-agents` entered from a bare shell, the four real pane
 processes publishing through the real gateway, and the owner's terminal showing the result.
 
-**How a real pane gets to publish here, when DEC-042 says it may not on a test socket.**
-`hosting_mode` accepts only a socket *named* `remote-agents`, and the composition root
-hardcodes that name. So the console here **is** named `remote-agents` -- in a private
-`TMUX_TMPDIR`. tmux resolves `-L remote-agents` under `$TMUX_TMPDIR`, the server hands its
+**Why the console here is named `remote-agents`, in a private `TMUX_TMPDIR`.** The drill
+enters it the way the owner does, from a bare shell, and a bare shell builds on the
+production name. tmux resolves `-L remote-agents` under `$TMUX_TMPDIR`, the server hands its
 environment to every pane, and so every tmux call the panes make lands on this private
-server. The hosting rule is not widened; the socket directory is isolated.
+server. (Since DEC-144 a `remote-agents-test-` console would serve the panes too; the entry
+from a bare shell is what still needs the production name.)
 
-That is the exact shape of the incident DEC-042 records -- a test console driving the
+A slip in that isolation is the incident DEC-042 recorded -- a test console driving the
 owner's real one -- so it is **guarded rather than trusted**: the owner's real console
 (default `TMUX_TMPDIR`) is read before and after, and the drill fails if its panes or its
 bar options changed. Not opt-in, for `test_weekly_pace`'s reason: it drives its own servers

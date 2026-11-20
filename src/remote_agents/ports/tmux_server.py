@@ -8,7 +8,7 @@ one. That is this module's whole subject.
 the composition root built every surface's `ConsoleComposer` on the production socket, so a
 surface inside a *disposable* console that called itself console-hosted drove the owner's real
 one — splitting panes into their live console window, installing a root binding on their
-server, running the start-time repair against it (BL-041). That happened on the machine this
+server, running the start-time repair against it. That happened on the machine this
 was written on, and was found by a final gate's evaluator reading the artifact rather than by
 any test. The composer is built on the socket the surface runs inside now, so "hosted by one
 of ours" and "the server this surface drives" are the same server by construction.

@@ -115,7 +115,7 @@ def _surface_socket(environment: Mapping[str, str] | None = None) -> str:
     """The tmux server this process drives: the one it runs inside, else production.
 
     Read from `$TMUX` rather than fixed, so a surface inside a disposable `remote-agents-test-`
-    console can only ever reach that console (BL-041). A bare shell, a systemd service and a
+    console can only ever reach that console (DEC-144). A bare shell, a systemd service and a
     foreign tmux client have no server of ours around them and keep the production one.
     """
     return hosting_socket(os.environ if environment is None else environment) or SOCKET_NAME

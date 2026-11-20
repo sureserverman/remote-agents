@@ -45,7 +45,7 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
     composition root built that composer on the production socket, accepting a test socket
     here made a surface inside a *disposable* console drive the owner's **real** one: panes
     split into their live console window, a root binding installed on their server, the
-    start-time repair run against it (BL-041). The composer is now built on
+    start-time repair run against it. The composer is now built on
     `composition/tui.py::_surface_socket`, the server this process runs inside, so a CONSOLE
     classification names that server and no other — which is what lets
     `tests/live/test_three_pane_console.py` press a key inside a pane of a test console.

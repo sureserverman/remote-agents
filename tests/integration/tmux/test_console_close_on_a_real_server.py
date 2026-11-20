@@ -11,19 +11,17 @@ consults a key table, so a root binding it is meant to exercise would not fire a
 test would pass by delivering the key itself.
 
 **What is a substitute here, stated plainly.** The production route is F10 -> root binding ->
-the *sessions pane's* `action_quit` -> a detached `remote-agents console close`. The middle hop
-cannot be driven on a disposable server: `hosting_mode` classifies a surface as console-hosted
-by socket name and the composition root hardcodes the composer's server to the production
-socket (BL-041, and DEC-042 is the rule that keeps `hosting_mode` strict until it stops being
-hardcoded). A surface started in a pane here would therefore either decline to be
-console-hosted or drive the owner's real console — which has happened on this machine and was
-found by a gate evaluator rather than by a test.
+the *sessions pane's* `action_quit` -> a detached `remote-agents console close`. The verb at
+the end runs for real: it builds its composer on the server its `$TMUX` names (DEC-144), so
+started from this server's root binding it closes this console and can reach no other. The
+middle hop is the substitute: the root binding here runs the verb directly rather than
+forwarding F10 to a sessions-pane surface, because these panes run `sleep`.
 
-So the root binding runs the teardown against *this* socket directly. What that still proves is
-the whole of what the fakes cannot: a real keypress reaches a real root binding, the real
-`ConsoleComposer.close()` runs over a real `TmuxGateway`, the real console session goes, and the
-real agent process is still running afterwards. What it does not prove is the forwarding hop,
-which `test_function_key_forwarding.py` owns and which Task 1.5's unit tests pin on the action's
+What that proves is the whole of what the fakes cannot: a real keypress reaches a real root
+binding, the real `remote-agents console close` runs `ConsoleComposer.close()` over a real
+`TmuxGateway`, the real console session goes, and the real agent process is still running
+afterwards. What it does not prove is the forwarding hop, which
+`test_function_key_forwarding.py` owns and which Task 1.5's unit tests pin on the action's
 own side.
 """
 
@@ -88,8 +86,7 @@ def _wait_until(ready) -> bool:
 def _composer(socket: str, cwd: Path) -> ConsoleComposer:
     """The real composer, over the real gateway, with only the server name injected.
 
-    Every command is `sleep`: what the panes *run* is irrelevant to a teardown, and a pane
-    running a real surface is the thing BL-041 forbids here.
+    Every command is `sleep`: what the panes *run* is irrelevant to a teardown.
     """
     return ConsoleComposer(
         TmuxGateway(socket, AsyncTmuxRunner()),

@@ -372,7 +372,7 @@ async def test_each_pane_surface_renders_its_own_content_in_the_console(
 
         # The projects list as a console-hosted pane draws it -- the owner's own console draws
         # the same title. "Choose a project" was the off-console screen, which is what a pane
-        # here drew while a test console classified as foreign (BL-041).
+        # here drew while a test console classified as foreign (before DEC-144).
         assert "Projects 1" in rendered["surface"], rendered["surface"]
         assert "qualification" in rendered["surface"], rendered["surface"]
         assert "No managed sessions" in rendered["sessions"], rendered["sessions"]
@@ -1000,13 +1000,11 @@ async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
 ) -> None:
     """Who may read the console's selection, decided against a real tmux arrangement.
 
-    **This is the half of Stage 3 that real tmux can answer, and the unit tests cannot.** The
-    chord itself is a Textual binding inside a pane process, and BL-041 records why no live test
-    can drive one: `hosting_mode` classifies a pane surface inside a *disposable* console as
-    FOREIGN, deliberately, because the composition root hardcodes the composer's server — the
-    one time that strictness was relaxed, a surface in a throwaway console drove the owner's
-    real one. So the keypress is covered by `tests/unit/adapters/tui/test_tui_bindings.py`, and
-    what runs here is the decision that keypress depends on.
+    **This is the half of the read-side gate that real tmux can answer, and the unit tests
+    cannot.** The chord itself is a Textual binding inside a pane process, driven live by
+    `test_the_session_chord_inside_a_pane_acts_on_the_sessions_pane_s_row` below; what runs
+    here is the decision that keypress depends on, including the exchanged-out pane that the
+    chord case never reaches.
 
     `holds_console_slot` filters a real `list-panes -a` for two facts at once: the pane carries
     one of the console's slot marks, **and** the console is still the window showing it. The
@@ -1720,7 +1718,7 @@ class _RealConsole:
 
 
 async def test_down_in_a_real_sessions_pane_publishes_the_second_row(tmp_path: Path) -> None:
-    """A key pressed inside a console pane, on a disposable server, read back (BL-041).
+    """A key pressed inside a console pane, on a disposable server, read back (DEC-144).
 
     The publish half used to be driven only through the gateway, because a pane surface in a
     test console classified as foreign and was never wired to publish. Here the real sessions

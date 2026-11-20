@@ -2,7 +2,7 @@
 
 Shared by the live drills that need the real console window: its status bar, its panes and
 their geometry. The console runs under a private `TMUX_TMPDIR`, so the owner's own console
-(DEC-042's production socket) is never touched, and `drill_console` asserts that on the way out.
+(the production socket) is never touched, and `drill_console` asserts that on the way out.
 """
 
 from __future__ import annotations
