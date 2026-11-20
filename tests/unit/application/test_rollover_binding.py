@@ -221,3 +221,248 @@ async def test_applied_permissions_let_the_rollover_proceed_in_its_existing_orde
     assert rig.sends == [(rig.successor, TEMPLATE)]
     assert asked[0][2] == [], "asked before anything was typed"
     assert (await rig.rollover()).state is RolloverState.ADOPTING
+
+
+# --- Sub-plan 5 Task 3.3: the owner's BL-144 ruling, the source's handoff folder ------------
+
+from datetime import UTC, datetime  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from remote_agents.adapters.sqlite.database import open_database  # noqa: E402
+from remote_agents.adapters.sqlite.rollover_store import SQLiteRolloverStore  # noqa: E402
+from remote_agents.application.permission_apply import (  # noqa: E402
+    PermissionApplyPass,
+    handoff_grant,
+    handoff_grants,
+)
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId  # noqa: E402
+from remote_agents.domain.profiles import PermissionPreset  # noqa: E402
+from remote_agents.domain.rollover import RolloverKind  # noqa: E402
+from remote_agents.ports.handoff_envelopes import HandoffDestination  # noqa: E402
+from remote_agents.ports.rollover_store import Rollover, RolloverTarget  # noqa: E402
+
+_AT = datetime(2026, 11, 20, 9, 0, tzinfo=UTC)
+_ORCHARD = Path("/home/owner/dev/orchard")
+_RIVER = Path("/home/owner/dev/river")
+
+
+def _target(destination: Path, version: int = 2) -> RolloverTarget:
+    if version == 1:
+        return RolloverTarget(
+            1, ProjectId("river"), HandoffDestination(destination, "main", "/p.md", "", None),
+            None, None, None, None,
+        )  # fmt: skip
+    return RolloverTarget(
+        2, ProjectId("river"),
+        HandoffDestination(destination, "feature", "/abs/next.md", "Task 1.1", None),
+        "/abs/source.md", (True, 2, 1), "a" * 64, PermissionPreset.ASK,
+    )  # fmt: skip
+
+
+def _rollover(
+    successor: SessionId,
+    *,
+    source: Path | None = _ORCHARD,
+    target: RolloverTarget | None = None,
+    kind: RolloverKind = RolloverKind.WORKFLOW,
+) -> Rollover:
+    return Rollover(
+        id="r1",
+        handoff_id="h-0123456789abcdef0123",
+        predecessor_session_id=SessionId.new(),
+        successor_session_id=successor,
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("codex"),
+        reason="workflow",
+        plan=None,
+        state=RolloverState.SUCCESSOR_STARTING,
+        failure_code=None,
+        failure_detail=None,
+        requested_at=_AT,
+        updated_at=_AT,
+        source_root=source,
+        target=_target(_RIVER) if target is None else target,
+        kind=kind,
+    )
+
+
+def test_a_cross_project_successor_is_granted_exactly_its_source_handoff_folder() -> None:
+    successor = SessionId.new()
+
+    assert handoff_grant(_rollover(successor), successor) == (_ORCHARD / ".claude" / "handoffs",)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["same-checkout", "source-inside-destination", "version-1", "no-source", "note", "other"],
+)
+def test_nothing_is_granted_where_the_ruling_does_not_reach(case: str) -> None:
+    successor = SessionId.new()
+    rollover = {
+        "same-checkout": _rollover(successor, target=_target(_ORCHARD)),
+        "source-inside-destination": _rollover(
+            successor, source=_RIVER / "sub", target=_target(_RIVER)
+        ),
+        "version-1": _rollover(successor, target=_target(_RIVER, version=1)),
+        "no-source": _rollover(successor, source=None),
+        "note": _rollover(successor, kind=RolloverKind.NOTE),
+        "other": _rollover(SessionId.new()),
+    }[case]
+
+    assert handoff_grant(rollover, successor) == ()
+
+
+async def test_the_grant_is_read_off_the_open_rollover_and_ends_with_it(tmp_path: Path) -> None:
+    from .test_permission_apply import _record
+
+    store = SQLiteRolloverStore(open_database(tmp_path / "rows.sqlite3"))
+    successor = SessionId.new()
+    row = await store.open_for_ready(
+        SessionId.new(),
+        "h-0123456789abcdef0123",
+        project_id=ProjectId("orchard"),
+        profile_id=ProfileId("codex"),
+        plan="/abs/next.md",
+        at=_AT,
+        source_root=_ORCHARD,
+        target=_target(_RIVER),
+    )
+    assert row is not None
+    await store.advance(row.id, RolloverState.SUCCESSOR_STARTING, at=_AT)
+    await store.record_successor(row.id, successor, at=_AT)
+    grants = handoff_grants(store)
+
+    assert await grants(_record(successor)) == (_ORCHARD / ".claude" / "handoffs",)
+    assert await grants(_record(SessionId.new())) == ()
+
+    await store.advance(row.id, RolloverState.FAILED, at=_AT, failure_code="adoption-timeout")
+    assert await grants(_record(successor)) == ()
+
+
+async def test_the_apply_pass_hands_the_grant_to_the_server_and_none_to_others() -> None:
+    from .test_permission_apply import PROVIDER, SECOND, SESSION, THREAD, _record
+    from .test_permission_apply import Rig as ApplyRig
+
+    apply_rig = ApplyRig(_record(resumed_from=THREAD), _record(SECOND, resumed_from=THREAD))
+    apply_rig.bindings.pending(SESSION, PermissionPreset.ASK)
+    apply_rig.bindings.pending(SECOND, PermissionPreset.ASK)
+    granted = (_ORCHARD / ".claude" / "handoffs",)
+
+    async def roots(record):
+        return granted if record.session_id == SESSION else ()
+
+    apply_rig.apply_pass = PermissionApplyPass(
+        apply_rig.bindings,
+        sessions=apply_rig._sessions,
+        appliers={str(PROVIDER): apply_rig.server},
+        thread_of=apply_rig._thread_of,
+        writable_roots=roots,
+        now=lambda: apply_rig.now,
+        sleep=apply_rig._sleep,
+    )
+    await apply_rig.tick()
+
+    assert sorted(apply_rig.server.roots, key=len) == [(), granted]
+
+
+async def test_a_grant_that_cannot_be_read_grants_nothing() -> None:
+    from .test_permission_apply import PROVIDER, SESSION, THREAD, _record
+    from .test_permission_apply import Rig as ApplyRig
+
+    apply_rig = ApplyRig(_record(resumed_from=THREAD))
+    apply_rig.bindings.pending(SESSION, PermissionPreset.ASK)
+
+    async def broken(_record):
+        raise OSError("the store went away")
+
+    apply_rig.apply_pass = PermissionApplyPass(
+        apply_rig.bindings,
+        sessions=apply_rig._sessions,
+        appliers={str(PROVIDER): apply_rig.server},
+        thread_of=apply_rig._thread_of,
+        writable_roots=broken,
+        now=lambda: apply_rig.now,
+        sleep=apply_rig._sleep,
+    )
+    await apply_rig.tick()
+
+    assert apply_rig.server.roots == [()]
+
+
+def _apply_rig_with(roots_of):
+    from .test_permission_apply import PROVIDER, SESSION, THREAD, _record
+    from .test_permission_apply import Rig as ApplyRig
+
+    apply_rig = ApplyRig(_record(resumed_from=THREAD))
+    apply_rig.bindings.pending(SESSION, PermissionPreset.ASK)
+
+    async def roots(_record):
+        return roots_of()
+
+    apply_rig.apply_pass = PermissionApplyPass(
+        apply_rig.bindings,
+        sessions=apply_rig._sessions,
+        appliers={str(PROVIDER): apply_rig.server},
+        thread_of=apply_rig._thread_of,
+        writable_roots=roots,
+        now=lambda: apply_rig.now,
+        sleep=apply_rig._sleep,
+    )
+    return apply_rig
+
+
+async def test_a_grant_that_appears_after_an_apply_without_it_is_sent_once() -> None:
+    """Review finding: the background pass applied before the rollover recorded its successor.
+    The next look sees the grant it is owed and re-applies with it, once."""
+    owed: list[tuple] = [()]
+    apply_rig = _apply_rig_with(lambda: owed[0])
+    await apply_rig.tick()
+    assert apply_rig.server.roots == [()]
+
+    owed[0] = (_ORCHARD / ".claude" / "handoffs",)
+    await apply_rig.tick()
+    await apply_rig.tick()
+
+    assert apply_rig.server.roots == [(), owed[0]]
+
+
+async def test_a_grant_whose_rollover_ended_is_withdrawn_by_an_apply_without_it() -> None:
+    """Review finding: the thread keeps what it was last sent, so an ended rollover's grant is
+    taken back by re-applying the preset with no root."""
+    granted = (_ORCHARD / ".claude" / "handoffs",)
+    owed: list[tuple] = [granted]
+    apply_rig = _apply_rig_with(lambda: owed[0])
+    await apply_rig.tick()
+    assert apply_rig.server.roots == [granted]
+
+    owed[0] = ()
+    await apply_rig.tick()
+    await apply_rig.tick()
+
+    assert apply_rig.server.roots == [granted, ()]
+
+
+async def test_an_unchanged_grant_is_never_sent_again() -> None:
+    granted = (_ORCHARD / ".claude" / "handoffs",)
+    apply_rig = _apply_rig_with(lambda: granted)
+    for _ in range(4):
+        await apply_rig.tick()
+
+    assert apply_rig.server.roots == [granted]
+
+
+def test_the_served_apply_pass_reads_the_grant_off_the_rollovers(tmp_path: Path) -> None:
+    from remote_agents.adapters.agents.registry import provider_descriptors
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.composition.service import build_permission_apply_pass
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    apply_pass = build_permission_apply_pass(
+        store=SQLiteSessionStore(connection),
+        descriptors=provider_descriptors(),
+        activity_directory=tmp_path / "activity",
+        connection=connection,
+    )
+
+    assert apply_pass._writable_roots is not None
+    assert apply_pass._writable_roots.__qualname__.startswith("handoff_grants")

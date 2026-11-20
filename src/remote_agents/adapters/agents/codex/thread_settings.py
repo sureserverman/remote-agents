@@ -154,18 +154,39 @@ class CodexThreadPermissions:
         self._timeout = timeout
         self._home = home
 
-    async def apply(self, thread_id: str, preset: PermissionPreset) -> None:
-        """Set `thread_id`'s settings to `preset`'s. `thread_id` is the service's own binding."""
+    async def apply(
+        self,
+        thread_id: str,
+        preset: PermissionPreset,
+        *,
+        writable_roots: tuple[Path, ...] = (),
+    ) -> None:
+        """Set `thread_id`'s settings to `preset`'s. `thread_id` is the service's own binding.
+
+        `writable_roots` go only into a `workspaceWrite` sandbox, as its `writableRoots`, and
+        only as one handoff folder (`_grantable`): the owner granted a cross-project successor its
+        source's `.claude/handoffs` and nothing else (BL-144, DEC-139: on the thread, never as a
+        launch flag). Full access has no sandbox to widen and ignores them.
+        """
         try:
             params = CODEX_THREAD_SETTINGS.get(PermissionPreset(preset))
         except ValueError:
             raise ThreadPermissionsError("unknown permission preset") from None
         if params is None:
             return
-        await self._session(
-            thread_id,
-            (("thread/settings/update", {"threadId": thread_id, **_plain(params)}),),
-        )
+        if len(writable_roots) > 1:
+            raise ThreadPermissionsError("more than one writable root")
+        for root in writable_roots:
+            if not _grantable(root):
+                raise ThreadPermissionsError("a writable root that is not a handoff folder")
+        update = {"threadId": thread_id, **_plain(params)}
+        sandbox = update.get("sandboxPolicy")
+        if writable_roots and isinstance(sandbox, dict) and sandbox.get("type") == "workspaceWrite":
+            update["sandboxPolicy"] = {
+                **sandbox,
+                "writableRoots": [str(root) for root in writable_roots],
+            }
+        await self._session(thread_id, (("thread/settings/update", update),))
 
     async def server_identity(self) -> str | None:
         """Which daemon process serves this `CODEX_HOME`, or None when no record says.
@@ -410,6 +431,18 @@ def _daemon_pid_file(home: Path) -> Path:
     if any(present(state / name) for name in _STANDALONE_ARTIFACTS):
         return state / "app-server.pid"
     return state / "daemon.pid"
+
+
+def _grantable(root: Path) -> bool:
+    """Whether `root` may be granted: an absolute `<somewhere>/.claude/handoffs`, no control
+    character in it, no `..` in it. The one folder the owner's BL-144 ruling grants."""
+    text = str(root)
+    return (
+        root.is_absolute()
+        and root.parts[-2:] == (".claude", "handoffs")
+        and ".." not in root.parts
+        and not any(unicodedata.category(ch).startswith("C") for ch in text)
+    )
 
 
 def _plain(value: object) -> object:

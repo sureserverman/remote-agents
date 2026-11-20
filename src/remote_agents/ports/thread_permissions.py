@@ -10,6 +10,7 @@ provider (DEC-122).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
 
 from remote_agents.domain.profiles import PermissionPreset
@@ -31,7 +32,18 @@ class ThreadPermissionsError(Exception):
 class ThreadPermissions(Protocol):
     """Apply one preset to one thread, or raise `ThreadPermissionsError` saying why not."""
 
-    async def apply(self, thread_id: str, preset: PermissionPreset) -> None: ...
+    async def apply(
+        self,
+        thread_id: str,
+        preset: PermissionPreset,
+        *,
+        writable_roots: tuple[Path, ...] = (),
+    ) -> None:
+        """Set the preset. `writable_roots` are folders outside the thread's own workspace that
+        a sandboxed preset also lets it write: only a cross-project successor's source handoff
+        folder, as the owner ruled for BL-144. A preset with no sandbox, or none at all, ignores
+        them."""
+        ...
 
     async def server_identity(self) -> str | None:
         """Which server instance is running, or None when that cannot be read.

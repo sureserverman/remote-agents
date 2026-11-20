@@ -61,6 +61,7 @@ from remote_agents.application.permission_apply import (
     RETRY_SECONDS,
     PermissionApplyPass,
     Readiness,
+    handoff_grants,
     preset_owed,
 )
 from remote_agents.application.reconcile import ReconciliationService
@@ -1210,6 +1211,8 @@ def build_permission_apply_pass(
         notify=notify,
         # Its rollover ends `permissions-failed` or `binding-failed` and reports that itself.
         told_elsewhere=reported_by_its_rollover(SQLiteRolloverStore(connection)),
+        # A cross-project successor may also write its source's handoff folder (BL-144).
+        writable_roots=handoff_grants(SQLiteRolloverStore(connection)),
     )
 
 

@@ -76,13 +76,18 @@ class FakeServer:
         self.identity: str | None = "daemon-A"
         self.loaded: dict[str, str] = {THREAD: "/srv/project", DECOY: "/srv/project"}
         self.calls: list[tuple[str, PermissionPreset]] = []
+        self.roots: list[tuple] = []
+        """The writable roots each apply was given (BL-144)."""
         self.failures: list[str] = []
         """Reasons the next applies fail with, first first."""
         self.during_apply: list = []
         """Awaited one per apply, while it is in flight: what else happens meanwhile."""
 
-    async def apply(self, thread_id: str, preset: PermissionPreset) -> None:
+    async def apply(
+        self, thread_id: str, preset: PermissionPreset, *, writable_roots: tuple = ()
+    ) -> None:
         self.calls.append((thread_id, preset))
+        self.roots.append(writable_roots)
         if self.during_apply:
             await self.during_apply.pop(0)()
         if self.failures:
@@ -588,7 +593,9 @@ async def test_one_session_failing_does_not_stop_the_pass_reaching_the_next() ->
 
 async def test_an_applier_that_raises_something_else_is_a_failure_not_a_dead_pass() -> None:
     class Broken(FakeServer):
-        async def apply(self, thread_id: str, preset: PermissionPreset) -> None:
+        async def apply(
+            self, thread_id: str, preset: PermissionPreset, *, writable_roots: tuple = ()
+        ) -> None:
             self.calls.append((thread_id, preset))
             raise RuntimeError("a traceback with /home/owner/secret in it")
 

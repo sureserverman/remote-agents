@@ -35,12 +35,16 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import Path
+from typing import Protocol
 
 from remote_agents.application.permission_presets import permission_label
 from remote_agents.application.thread_binding import LIVE_STATES
 from remote_agents.domain.models import ProfileId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.profiles import PermissionPreset
+from remote_agents.domain.rollover import RolloverKind
 from remote_agents.ports.permission_bindings import PermissionBindings, PermissionState
+from remote_agents.ports.rollover_store import Rollover
 from remote_agents.ports.thread_permissions import ThreadPermissions, ThreadPermissionsError
 
 _LOG = logging.getLogger(__name__)
@@ -183,6 +187,51 @@ class _Attempt:
     """When the server first said it does not have the thread, while that is still waited out."""
 
 
+def handoff_grant(rollover: Rollover, session_id: SessionId) -> tuple[Path, ...]:
+    """The folder a rollover's successor may also write: its source's handoff folder, or none.
+
+    The owner's ruling on BL-144 (2026-11-19, "Grant the handoff folder"): a successor whose
+    handoff root is **another project** writes its acceptance there, so a sandboxed preset lets
+    it write exactly `<source root>/.claude/handoffs`. A successor in the same checkout already
+    writes it, and gets nothing. Only a workflow rollover carrying the handoff root to the
+    successor (a version-2 target, as `--handoff-root` is typed) qualifies.
+    """
+    if rollover.successor_session_id != session_id or rollover.kind is not RolloverKind.WORKFLOW:
+        return ()
+    root, target = rollover.source_root, rollover.target
+    if root is None or target is None or target.version != 2:
+        return ()
+    destination = target.destination.root
+    if root == destination or root.is_relative_to(destination):
+        return ()
+    return (root / ".claude" / "handoffs",)
+
+
+class _OpenRollovers(Protocol):
+    async def open_rollovers(self) -> tuple[Rollover, ...]: ...
+
+
+def handoff_grants(
+    rollovers: _OpenRollovers,
+) -> Callable[[SessionRecord], Awaitable[tuple[Path, ...]]]:
+    """Each session's grant, read off the open rollover it is the successor of (BL-144).
+
+    Read at each look, and the pass re-applies when the answer changes: a grant that appears
+    after an apply without it is sent, and one whose rollover has ended is withdrawn by an
+    apply without it, since the thread keeps what it was last sent. A service restart forgets
+    what was sent, so a grant still open is sent once more, and one that ended while the
+    service was down stays on the thread until its next apply (DEC-148).
+    """
+
+    async def grants(record: SessionRecord) -> tuple[Path, ...]:
+        for rollover in await rollovers.open_rollovers():
+            if rollover.successor_session_id == record.session_id:
+                return handoff_grant(rollover, record.session_id)
+        return ()
+
+    return grants
+
+
 class PermissionApplyPass:
     """One pass over running sessions that are owed a preset. Everything outside is handed in."""
 
@@ -197,6 +246,7 @@ class PermissionApplyPass:
         bound: Callable[..., Awaitable[bool]] | None = None,
         notify: Callable[[SessionRecord, str], Awaitable[None]] | None = None,
         told_elsewhere: Callable[[SessionId], Awaitable[bool]] | None = None,
+        writable_roots: Callable[[SessionRecord], Awaitable[tuple[Path, ...]]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -215,6 +265,12 @@ class PermissionApplyPass:
         self._bound = bound
         self._notify = notify
         self._told_elsewhere = told_elsewhere
+        #: Folders a session's sandboxed preset also lets it write (`handoff_grants`, BL-144).
+        self._writable_roots = writable_roots
+        #: The roots each session's last apply in this process carried. A grant that appears
+        #: after an apply without it (the successor recorded after a background apply), or goes
+        #: when its rollover ends, is owed a re-apply: the thread keeps what it was last sent.
+        self._granted: dict[str, tuple[Path, ...]] = {}
         self._now = now
         self._sleep = sleep
         self._attempts: dict[str, _Attempt] = {}
@@ -225,7 +281,12 @@ class PermissionApplyPass:
     @property
     def tracked(self) -> frozenset[str]:
         """The sessions this pass holds anything in memory for."""
-        return frozenset(self._attempts) | frozenset(self._failed_under) | frozenset(self._locks)
+        return (
+            frozenset(self._attempts)
+            | frozenset(self._failed_under)
+            | frozenset(self._locks)
+            | frozenset(self._granted)
+        )
 
     async def run_once(self) -> None:
         records = await self._sessions()
@@ -235,6 +296,7 @@ class PermissionApplyPass:
             self._attempts.pop(key, None)
             self._failed_under.pop(key, None)
             self._locks.pop(key, None)
+            self._granted.pop(key, None)
         for record in records:
             if record.state is not SessionState.RUNNING:
                 continue
@@ -321,9 +383,14 @@ class PermissionApplyPass:
             if state is None or state.requested is PermissionPreset.PROVIDER_DEFAULT:
                 return ApplyStep.APPLIED
             identity = await self._identity(applier)
+            roots = await self._roots(record)
             if state.failure is None:
                 self._failed_under.pop(key, None)
-                if state.applied is state.requested and identity in (None, state.daemon):
+                if (
+                    state.applied is state.requested
+                    and identity in (None, state.daemon)
+                    and roots == self._granted.get(key, ())
+                ):
                     self._attempts.pop(key, None)
                     return ApplyStep.APPLIED
             elif key not in self._failed_under:
@@ -360,7 +427,7 @@ class PermissionApplyPass:
                 if since < RETRY_SECONDS:
                     return ApplyStep.WAITING
             try:
-                await applier.apply(thread, state.requested)
+                await applier.apply(thread, state.requested, writable_roots=roots)
             except ThreadPermissionsError as error:
                 reason = error.reason
                 if error.not_loaded:
@@ -381,6 +448,7 @@ class PermissionApplyPass:
             else:
                 self._attempts.pop(key, None)
                 self._failed_under.pop(key, None)
+                self._granted[key] = roots
                 if not await self._bindings.mark_applied(
                     record.session_id, state.requested, identity or ""
                 ):
@@ -392,6 +460,17 @@ class PermissionApplyPass:
             if attempt.failures < _TRIES:
                 return ApplyStep.WAITING
             return await self._fail(record.session_id, state, reason, identity)
+
+    async def _roots(self, record: SessionRecord) -> tuple[Path, ...]:
+        """The session's grant, or none. A read that fails grants nothing: the narrower policy,
+        and the one every session had before BL-144's ruling."""
+        if self._writable_roots is None:
+            return ()
+        try:
+            return tuple(await self._writable_roots(record))
+        except Exception:
+            _LOG.exception("the writable roots of %s could not be read", record.session_id)
+            return ()
 
     async def _fail(
         self, session_id: SessionId, state: PermissionState, reason: str, identity: str | None

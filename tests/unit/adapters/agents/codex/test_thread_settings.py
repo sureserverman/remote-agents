@@ -664,3 +664,80 @@ async def test_a_repeated_cursor_ends_the_paging() -> None:
             await client.loaded_threads()
     assert raised.value.reason == "unexpected reply from the Codex daemon"
     assert daemon.connections == 2
+
+
+# --- Sub-plan 5 Task 3.3: the source's handoff folder, granted as the owner ruled (BL-144) ---
+
+_GRANT = Path("/home/owner/dev/orchard/.claude/handoffs")
+
+
+@pytest.mark.parametrize("preset", [PermissionPreset.APPROVE_FOR_ME, PermissionPreset.ASK])
+async def test_a_workspace_write_preset_carries_exactly_the_granted_folder(preset) -> None:
+    async with FakeDaemon(_cooperative) as daemon:
+        client, _ = _client(daemon.path)
+        await client.apply(THREAD, preset, writable_roots=(_GRANT,))
+    params = daemon.received[-1]["params"]
+    assert params["sandboxPolicy"] == {"type": "workspaceWrite", "writableRoots": [str(_GRANT)]}
+    # Everything else is the preset's pinned row, unchanged.
+    assert {k: v for k, v in params.items() if k != "sandboxPolicy"} == {
+        "threadId": THREAD,
+        **{k: v for k, v in EXPECTED[preset].items() if k != "sandboxPolicy"},
+    }
+
+
+@pytest.mark.parametrize("preset", [PermissionPreset.APPROVE_FOR_ME, PermissionPreset.ASK])
+async def test_no_grant_sends_the_pinned_row_with_no_writable_roots(preset) -> None:
+    async with FakeDaemon(_cooperative) as daemon:
+        client, _ = _client(daemon.path)
+        await client.apply(THREAD, preset, writable_roots=())
+    assert daemon.received[-1]["params"] == {"threadId": THREAD, **EXPECTED[preset]}
+    assert "writableRoots" not in daemon.received[-1]["params"]["sandboxPolicy"]
+
+
+async def test_full_access_is_never_given_a_writable_root() -> None:
+    async with FakeDaemon(_cooperative) as daemon:
+        client, _ = _client(daemon.path)
+        await client.apply(THREAD, PermissionPreset.FULL_ACCESS, writable_roots=(_GRANT,))
+    assert daemon.received[-1]["params"] == {
+        "threadId": THREAD,
+        **EXPECTED[PermissionPreset.FULL_ACCESS],
+    }
+
+
+async def test_the_provider_default_is_still_no_call_with_a_grant() -> None:
+    runner = FakeRunner(_version(Path("/nonexistent/socket")))
+    client = CodexThreadPermissions(runner=runner)
+    await client.apply(THREAD, PermissionPreset.PROVIDER_DEFAULT, writable_roots=(_GRANT,))
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        Path("relative/.claude/handoffs"),
+        Path("/home/owner/dev/orchard"),
+        Path("/a/\n/.claude/handoffs"),
+    ],
+)
+async def test_only_an_absolute_handoff_folder_may_be_granted(root: Path) -> None:
+    runner = FakeRunner(_version(Path("/nonexistent/socket")))
+    client = CodexThreadPermissions(runner=runner)
+    with pytest.raises(ThreadPermissionsError):
+        await client.apply(THREAD, PermissionPreset.ASK, writable_roots=(root,))
+    assert runner.calls == [], "refused before any daemon is reached"
+
+
+@pytest.mark.parametrize(
+    "roots",
+    [
+        (Path("/a/../.claude/handoffs"),),
+        (Path("/a/​/.claude/handoffs"),),
+        (_GRANT, Path("/home/owner/dev/other/.claude/handoffs")),
+    ],
+)
+async def test_a_climbing_hidden_or_second_root_is_refused(roots) -> None:
+    runner = FakeRunner(_version(Path("/nonexistent/socket")))
+    client = CodexThreadPermissions(runner=runner)
+    with pytest.raises(ThreadPermissionsError):
+        await client.apply(THREAD, PermissionPreset.APPROVE_FOR_ME, writable_roots=roots)
+    assert runner.calls == []
