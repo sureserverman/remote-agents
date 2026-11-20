@@ -1220,7 +1220,7 @@ wheels = [
 
 [[package]]
 name = "remote-agents"
-version = "0.70.4"
+version = "0.70.5"
 source = { editable = "." }
 dependencies = [
     { name = "psutil" },
