@@ -21,6 +21,9 @@ answers, and the narrower one is the one attached to a live tmux server.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
+
 #: The dedicated server this project talks to in production.
 SOCKET_NAME = "remote-agents"
 
@@ -31,3 +34,21 @@ TEST_SOCKET_PREFIX = "remote-agents-test-"
 def is_our_socket(socket_name: str) -> bool:
     """Whether a tmux server name is one this project's **gateway** may address."""
     return socket_name == SOCKET_NAME or socket_name.startswith(TEST_SOCKET_PREFIX)
+
+
+def hosting_socket(environment: Mapping[str, str]) -> str | None:
+    """The `-L` name of the tmux server this process runs inside, when that server is ours.
+
+    tmux sets `TMUX` to `socket_path,server_pid,session_id` in every pane and every
+    `run-shell` child, and the socket's basename is the server's `-L` name. Anything absent,
+    garbled, or naming somebody else's server is None: a surface outside our servers builds on
+    the production one, exactly as it always has.
+    """
+    value = environment.get("TMUX")
+    if not value:
+        return None
+    socket_path = value.split(",", 1)[0]
+    name = os.path.basename(socket_path)
+    if os.path.sep in socket_path and is_our_socket(name):
+        return name
+    return None

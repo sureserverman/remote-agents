@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -90,6 +91,7 @@ from remote_agents.composition.telegram import _private_boundary
 from remote_agents.composition.tui import (
     _console_composer,
     _resolve_profile_executable,
+    _surface_socket,
     local_context,
 )
 from remote_agents.config import (
@@ -107,6 +109,7 @@ from remote_agents.ports.argv_text import (
     refuse_a_credential_shaped_value,
 )
 from remote_agents.ports.service_supervisor import SupervisorKind
+from remote_agents.ports.tmux_server import SOCKET_NAME
 from remote_agents.production import ProductionPaths
 from remote_agents.statusline import hop_from_stdin
 
@@ -645,7 +648,7 @@ def _upgrade_sessions() -> int:
     Says what it did, including when there was nothing to do, because "nothing happened" is
     the failure mode this whole repair exists to end.
     """
-    gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
+    gateway = TmuxGateway(SOCKET_NAME, AsyncTmuxRunner())
     try:
         upgraded = asyncio.run(gateway.upgrade_pane_identity())
     except Exception as error:  # noqa: BLE001 - reported, never a traceback at the terminal
@@ -721,7 +724,17 @@ def _run_surface(
         return 1
     finally:
         connection.close()
-    return attach_to(request, switch_argv=switch_client_argv)
+    return attach_to(request, switch_argv=_switch_argv())
+
+
+def _switch_argv() -> Callable[[SessionId], tuple[str, ...]]:
+    """The `switch-client` builder a console-hosted surface execs, on its own server.
+
+    Bound to the socket this process runs inside, for `_surface_socket`'s reason: a surface in a
+    disposable console that switched the client on the production server would be moving the
+    owner's terminal from a test (BL-041).
+    """
+    return partial(switch_client_argv, socket=_surface_socket())
 
 
 def _enter_pane(name: str, config_path: Path | None = None) -> int:
@@ -760,7 +773,7 @@ def _console_features_available(working_directory: Path) -> bool:
         return False
 
 
-def _console_marks(socket: str = "remote-agents") -> tuple[tuple[str, str, bool], ...] | None:
+def _console_marks(socket: str = SOCKET_NAME) -> tuple[tuple[str, str, bool], ...] | None:
     """Read every slot-marked pane on the production server, for `doctor` (BL-043).
 
     Read-only: one `list-panes`. Beside `_console_features_available` and for its reason
@@ -896,7 +909,7 @@ def _sandbox_labels(supervisor) -> tuple[SandboxReading, ...]:
         return int(text) if completed.returncode == 0 and text.isdigit() else None
 
     def tmux_server() -> int | None:
-        gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
+        gateway = TmuxGateway(SOCKET_NAME, AsyncTmuxRunner())
         return asyncio.run(asyncio.wait_for(gateway.server_pid(), timeout=5))
 
     readers: list[tuple[str, Callable[[], int | None], str | None]] = [
@@ -961,7 +974,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         core_ready=registry.error is None,
         database_ready=database_is_ready(config.database_path),
         ui_store_ready=database_is_ready(ui_database_path(config.database_path), UI_MIGRATIONS),
-        tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
+        tmux_ready=_command_succeeds(("tmux", "-L", SOCKET_NAME, "-V")),
         tmux_console_ready=_console_features_available(paths.home),
         console_marks=_console_marks(),
         worktrees=_kept_worktrees(config),

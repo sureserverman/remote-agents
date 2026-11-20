@@ -44,6 +44,7 @@ from remote_agents.composition.backend import (
 from remote_agents.config import read_claude_limits_source, read_cursor_limits_source
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
+from remote_agents.ports.tmux_server import SOCKET_NAME, hosting_socket
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
@@ -110,6 +111,16 @@ def _curated_environment(source: Mapping[str, str]) -> dict[str, str]:
     return environment
 
 
+def _surface_socket(environment: Mapping[str, str] | None = None) -> str:
+    """The tmux server this process drives: the one it runs inside, else production.
+
+    Read from `$TMUX` rather than fixed, so a surface inside a disposable `remote-agents-test-`
+    console can only ever reach that console (BL-041). A bare shell, a systemd service and a
+    foreign tmux client have no server of ours around them and keep the production one.
+    """
+    return hosting_socket(os.environ if environment is None else environment) or SOCKET_NAME
+
+
 def _local_runtime(
     config, paths: ProductionPaths, project_paths, descriptors=None, *, folder_for
 ) -> LocalRuntime:
@@ -150,7 +161,7 @@ def _local_runtime(
                 definition, executable, allowed_environment
             )
     gateway = TmuxGateway(
-        "remote-agents",
+        _surface_socket(),
         AsyncTmuxRunner(),
         intent_directory=paths.intent_directory,
         # Both surfaces' runtimes come from here, so both name the same lock files and their
@@ -274,7 +285,7 @@ def _console_composer(gateway=None, home: Path | None = None):
     from remote_agents.ports.console import ConsolePaneSlot
 
     return ConsoleComposer(
-        gateway if gateway is not None else TmuxGateway("remote-agents", AsyncTmuxRunner()),
+        gateway if gateway is not None else TmuxGateway(_surface_socket(), AsyncTmuxRunner()),
         (sys.executable, "-m", "remote_agents", "tui"),
         home if home is not None else Path.home(),
         projects_command=_projects_command(),

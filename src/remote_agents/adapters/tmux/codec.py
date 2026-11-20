@@ -22,6 +22,7 @@ from remote_agents.ports.console import (
     StatusBarKey,
     StatusBarPalette,
 )
+from remote_agents.ports.tmux_server import SOCKET_NAME
 
 _DELIMITER = "|"
 
@@ -349,7 +350,7 @@ def attach_argv(
     return (
         "tmux",
         "-L",
-        "remote-agents",
+        SOCKET_NAME,
         "attach-session",
         *(("-r",) if read_only else ()),
         "-t",
@@ -375,7 +376,7 @@ def console_attach_argv() -> tuple[str, ...]:
     The full form for the same reason `attach_argv` and `switch_client_argv` carry one:
     the composition root execs this without assembling a tmux invocation of its own.
     """
-    return ("tmux", "-L", "remote-agents", "attach-session", "-t", console_target())
+    return ("tmux", "-L", SOCKET_NAME, "attach-session", "-t", console_target())
 
 
 #: Which characters a bindable key may be made of, once one optional modifier is stripped.
@@ -801,7 +802,7 @@ CONSOLE_MARKS_FORMAT = f"#{{session_name}}|#{{{CONSOLE_SLOT_OPTION}}}"
 """One row per pane: the session holding it, then its console slot mark (empty when unmarked)."""
 
 
-def console_marks_argv(socket: str = "remote-agents") -> tuple[str, ...]:
+def console_marks_argv(socket: str = SOCKET_NAME) -> tuple[str, ...]:
     """The full argv that lists every pane's session and slot mark on one server.
 
     For `doctor`'s read-only probe (BL-043). Full form for `attach_argv`'s reason: the caller is
@@ -834,7 +835,7 @@ def parse_console_marks(output: str) -> tuple[tuple[str, str, bool], ...]:
     return tuple(marks)
 
 
-def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
+def switch_client_argv(session_id: SessionId, *, socket: str = SOCKET_NAME) -> tuple[str, ...]:
     """Return the full production argv that switches the current client to one session.
 
     The full form exists for the same reason `attach_argv` does: the one non-adapter caller
@@ -852,7 +853,7 @@ def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
     return (
         "tmux",
         "-L",
-        "remote-agents",
+        socket,
         "switch-client",
         "-t",
         exact_session_target(f"ra-{session_id}"),
