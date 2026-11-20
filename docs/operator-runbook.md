@@ -643,7 +643,8 @@ or `/exit` a Claude session; that is the accepted cost recorded in DEC-099.
 
 To drill it: send one message to an idle session and one to a busy one, and watch the busy one
 arrive after its turn ends. The automated drill is
-`uv run --locked pytest tests/live/test_prompt_relay.py -q`, on a scratch tmux server.
+`REMOTE_AGENTS_LIVE_ACCEPTANCE=1 uv run --locked pytest tests/live/test_prompt_relay.py -q -ra`, on a
+scratch tmux server. It spends a few short agent turns, so a plain run skips it.
 
 ## Scheduled sessions
 

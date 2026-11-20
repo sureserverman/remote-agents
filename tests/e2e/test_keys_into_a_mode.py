@@ -151,3 +151,24 @@ async def test_keys_into_a_pane_in_a_mode_reach_the_agent(rig: Rig, send: str, m
             break
         await asyncio.sleep(0.1)
     assert "GOT: /exit" in screen, screen
+
+
+async def test_a_key_sent_straight_into_a_mode_fails_within_the_runners_bound(rig: Rig) -> None:
+    """The v0.70.3 hang itself, kept as a failure rather than a freeze (v0.70.5).
+
+    A raw `send-keys /exit` into view-mode reaches the `t` of `exit`, which the default (emacs)
+    copy table binds to a jump prompt; `send-keys` waits on it for as long as a client is
+    attached. (`/` does the same in the vi table.) The gateway no longer sends keys into a
+    mode, but if any path ever does, the runner's bound ends it.
+    """
+    pane = await rig.launched()
+    rig.tmux("set-option", "-g", "mode-keys", "emacs")
+    _into_mode(rig, pane, "view-mode")
+
+    with pytest.raises(RuntimeError, match="timed out after 1s: send-keys"):
+        await asyncio.wait_for(
+            AsyncTmuxRunner(timeout=1.0).run(
+                "tmux", "-L", rig.socket, "send-keys", "-t", pane, "/exit"
+            ),
+            BOUND,
+        )

@@ -6,10 +6,12 @@ bracketed two-line prompt lands as **one** message, that one `Enter` submits it,
 mid-turn is refused before anything is typed. So this drives the real `TmuxTerminal` and gateway
 against real Claude and Codex panes on a scratch tmux server.
 
-**Not opt-in**, like `test_steady_panes.py` and for its reason: it is a stage gate's command, and an
-opt-in skip there would report green over a drill that never ran. It skips only for what the host
-lacks -- a binary or its credentials -- decided before a pane opens. It spends a few short turns
-on the owner's accounts (Claude on `sonnet`).
+**Opt-in** with `REMOTE_AGENTS_LIVE_ACCEPTANCE=1`, since v0.70.5: it spends a few short turns on
+the owner's accounts (Claude on `sonnet`), and a plain `pytest` run should spend none. Until then it
+was not opt-in, so that a stage gate naming it could not report green over a drill that never ran.
+That risk is now carried by the skip's `BLOCKED:` reason, which `-ra` prints: a gate that names this
+file sets the variable, and reads its skips. Otherwise it skips only for what the host lacks -- a
+binary or its credentials -- decided before a pane opens.
 
 Boundaries: a `remote-agents-test-*` socket that is destroyed; a disposable workspace per agent;
 Codex in a disposable `CODEX_HOME` whose `auth.json` is a link to the owner's, never opened here;
@@ -115,6 +117,8 @@ def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _requirements(agent: str) -> None:
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled (spends agent turns)")
     for needed in (agent, "tmux"):
         if shutil.which(needed) is None:
             pytest.skip(f"BLOCKED: executable_missing: {needed}")

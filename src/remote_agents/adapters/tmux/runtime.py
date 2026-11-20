@@ -195,8 +195,20 @@ class TerminalWaits:
 _DEFAULT_WAITS = TerminalWaits()
 
 
+#: How long one tmux call may take before it is killed and reported as failed. A healthy call
+#: returns in milliseconds. On 2026-11-19 (v0.70.3) a stop's `send-keys /exit` went to a pane in
+#: view-mode and waited on a search prompt for 3.5 hours, holding the service's operation lock:
+#: the bot answered nothing and no rollover ran until the call was killed by hand. Killing it made
+#: the stop fail as unconfirmed and freed the locks, which is what this bound now does by itself.
+#: v0.70.4 removed that cause; this covers the ones not yet found.
+TMUX_CALL_TIMEOUT_SECONDS = 30.0
+
+
 class AsyncTmuxRunner(TmuxRunner):
-    """Run only prevalidated tmux argument vectors without a shell."""
+    """Run only prevalidated tmux argument vectors without a shell, each within a time bound."""
+
+    def __init__(self, timeout: float = TMUX_CALL_TIMEOUT_SECONDS) -> None:
+        self._timeout = timeout
 
     async def run(self, *argv: str) -> str:
         return await self._exec(argv, None)
@@ -213,7 +225,15 @@ class AsyncTmuxRunner(TmuxRunner):
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await process.communicate(stdin)
+            stdout, stderr = await asyncio.wait_for(process.communicate(stdin), self._timeout)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+            # A RuntimeError, as any failed tmux call is, so every caller's failure path takes it.
+            # Only the verb is named: the rest of an argv can carry a prompt's text.
+            verb = argv[3] if len(argv) > 3 and argv[1] in ("-L", "-S") else " ".join(argv[1:2])
+            raise RuntimeError(f"tmux command timed out after {self._timeout:g}s: {verb}") from None
         except asyncio.CancelledError:
             # A caller's time bound ran out (the prompt relay bounds every call it makes): the
             # tmux process must not outlive the call that was waiting for it.
