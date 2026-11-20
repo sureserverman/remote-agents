@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from remote_agents.adapters.agents.codex.hooks import ACTION_REQUIRED_TITLE as _TITLE
 from remote_agents.adapters.agents.registry import profiles_watched_by_title
 from remote_agents.application.activity import (
     CodexApprovalWatcher,
@@ -83,18 +84,21 @@ def test_codex_action_required_is_a_rising_edge_not_pane_text() -> None:
         session_id="codex-title-session",
         title="[ ! ] Action Required | multitor",
         now=moment,
+        pattern=_TITLE,
     )
     repeated, duplicate = observe_codex_action_required(
         active,
         session_id="codex-title-session",
         title="[ ! ] Action Required | multitor",
         now=moment,
+        pattern=_TITLE,
     )
     cleared, after_clear = observe_codex_action_required(
         repeated,
         session_id="codex-title-session",
         title="multitor",
         now=moment,
+        pattern=_TITLE,
     )
 
     assert active is True
@@ -118,7 +122,7 @@ def test_either_action_required_frame_is_the_marker() -> None:
 
     def observe(was: bool, title: str):
         return observe_codex_action_required(
-            was, session_id="codex-title-session", title=title, now=moment
+            was, session_id="codex-title-session", title=title, now=moment, pattern=_TITLE
         )
 
     active, first = observe(False, "[ ! ] Action Required | multitor")
@@ -143,7 +147,11 @@ def test_either_action_required_frame_is_the_marker() -> None:
 )
 def test_a_project_named_like_the_action_required_marker_does_not_forge_it(title: str) -> None:
     active, observation = observe_codex_action_required(
-        False, session_id="codex-title-session", title=title, now=datetime(2026, 10, 9, tzinfo=UTC)
+        False,
+        session_id="codex-title-session",
+        title=title,
+        now=datetime(2026, 10, 9, tzinfo=UTC),
+        pattern=_TITLE,
     )
 
     assert active is False
@@ -319,6 +327,7 @@ def test_a_title_derived_wait_names_no_ask_class_because_a_title_names_none() ->
         session_id="codex-title-session",
         title="[ ! ] Action Required | multitor",
         now=datetime(2026, 9, 6, 15, 0, tzinfo=UTC),
+        pattern=_TITLE,
     )
 
     assert observation is not None

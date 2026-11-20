@@ -78,7 +78,7 @@ def test_the_title_watch_is_handed_exactly_the_hybrid_profiles() -> None:
     fold that lost Codex would silence its native approvals and one that gained a hook-exclusive
     profile would cost a tmux round trip per pass for a marker that profile never draws.
     """
-    assert profiles_watched_by_title() == {"codex"}
+    assert set(profiles_watched_by_title()) == {"codex"}
 
 
 def test_the_limit_watch_is_handed_each_profile_s_own_reported_kinds() -> None:

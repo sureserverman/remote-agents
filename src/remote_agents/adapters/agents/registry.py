@@ -80,6 +80,8 @@ import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from re import Pattern
+from types import MappingProxyType
 
 from remote_agents.adapters.agents import claude, codex, cursor, opencode
 from remote_agents.adapters.agents.claude.hooks import PROVIDER as _CLAUDE
@@ -597,17 +599,24 @@ def profiles_bound_by_thread(
 
 def profiles_watched_by_title(
     descriptors: tuple[ProviderDescriptor, ...] | None = None,
-) -> frozenset[str]:
-    """The curated profiles whose hook needs a pane-title watch beside it (`HYBRID`, DEC-063).
+) -> Mapping[str, Pattern[str]]:
+    """The curated profiles whose hook needs a pane-title watch beside it (`HYBRID`, DEC-063),
+    each with the approval title its vertical declares (`action_required_title`, BL-131).
 
     What `CodexApprovalWatcher` reads titles for and nothing else: a profile outside this set
-    costs no tmux round trip, because its title can never carry the marker.
+    costs no tmux round trip, because its title can never carry the marker. A `HYBRID` profile
+    that declares no title is left out, since there would be nothing to match.
     """
-    return frozenset(
-        name
-        for name, licence in _profile_licences(descriptors).items()
-        if licence.source is ActivitySource.HYBRID
-    )
+    built = provider_descriptors() if descriptors is None else descriptors
+    by_provider = {str(descriptor.profile_id): descriptor for descriptor in built}
+    executables = {str(profile.profile_id): profile.executable for profile in closed_profiles()}
+    watched: dict[str, Pattern[str]] = {}
+    for name, licence in _profile_licences(built).items():
+        descriptor = by_provider.get(name) or by_provider.get(executables.get(name, ""))
+        title = None if descriptor is None else descriptor.action_required_title
+        if licence.source is ActivitySource.HYBRID and title is not None:
+            watched[name] = title
+    return MappingProxyType(watched)
 
 
 def profile_reported_kinds(

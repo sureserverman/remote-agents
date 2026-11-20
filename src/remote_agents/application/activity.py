@@ -41,11 +41,13 @@ import logging
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Collection, Iterator
+from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from re import Pattern
+from types import MappingProxyType
 from uuid import uuid4
 
 from remote_agents.domain.models import SessionId, SessionState
@@ -85,14 +87,6 @@ MAXIMUM_RECORD_BYTES = 65_536
 #: happens is the kind of thing a reader trusts and a maintainer copies.
 _TITLE_TIMEOUT_SECONDS = 15.0
 
-# Observed in the managed Codex TUI while a native local approval is open.  Codex animates the
-# bracket (`[ ! ]` and `[ . ]` alternate), so one non-space glyph is admitted there; the project
-# name after the separator varies, so that suffix is admitted too.  Anchored at the start, so a
-# title that merely contains the marker does not match (BL-034, DEC-063); a project directory
-# named exactly like the marker still would, as it did before.  This is terminal metadata,
-# not an upstream hook contract: it may become unavailable in a later Codex release, in which
-# case it safely yields no inferred activity.
-_CODEX_ACTION_REQUIRED = re.compile(r"^\[ \S \] Action Required \| ")
 
 _ASK_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 """The same shape `activity_spool._plain_token` writes, asserted again on the way back in.
@@ -365,8 +359,12 @@ def observe_codex_action_required(
     session_id: str,
     title: str,
     now: datetime,
+    pattern: Pattern[str],
 ) -> tuple[bool, AgentActivity | None]:
     """Fold one content-free Codex pane-title observation into its edge state.
+
+    `pattern` is the provider's own `action_required_title`, declared in its vertical and handed
+    in by composition (BL-131): this module spells no provider's title.
 
     Since Codex 0.154 its ``PermissionRequest`` hook reports a native command escalation, and
     that report is the primary signal; this title is the fallback for an approval the hook does
@@ -384,7 +382,7 @@ def observe_codex_action_required(
     behind it, and the surfaces say the unqualified sentence they said before, under the hedge
     `ActivityConfidence.INFERRED` already earns it.
     """
-    action_required = _CODEX_ACTION_REQUIRED.match(title) is not None
+    action_required = pattern.match(title) is not None
     if not action_required or was_action_required:
         return action_required, None
     return True, AgentActivity(
@@ -418,15 +416,16 @@ class CodexApprovalWatcher:
         store: SessionStore,
         title: Callable[[SessionId], Awaitable[str]],
         *,
-        watched_profiles: Collection[str],
+        watched_profiles: Mapping[str, Pattern[str]],
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
         self._title = title
-        # The `HYBRID` profiles, from each vertical's licence through composition: this module
-        # names no provider (BL-050). Required, because an empty default would watch nothing
-        # and fail silent on exactly the asks the hook cannot see.
-        self._watched_profiles = frozenset(watched_profiles)
+        # The `HYBRID` profiles and the approval title each declares, from each vertical through
+        # composition: this module names no provider and spells no title (BL-050, BL-131).
+        # Required, because an empty default would watch nothing and fail silent on exactly the
+        # asks the hook cannot see.
+        self._watched_profiles = MappingProxyType(dict(watched_profiles))
         self._title_timeout = _TITLE_TIMEOUT_SECONDS
         self._now = now
         # A title is never stored: only whether the anchored native Codex marker was present on
@@ -486,6 +485,7 @@ class CodexApprovalWatcher:
                 session_id=key,
                 title=title,
                 now=self._now(),
+                pattern=self._watched_profiles[str(record.profile_id)],
             )
             self._action_required[key] = action_required
             self._title_observed.add(key)
