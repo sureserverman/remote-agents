@@ -285,3 +285,25 @@ def test_a_successor_never_trusted_keeps_the_folder_trust_words() -> None:
 
     assert "was not trusted within 2 hours" in text, text
     assert "hook review" not in text
+
+
+def test_a_stale_note_rollover_never_claims_nothing_was_asked() -> None:
+    """`request-stale` covers a press never typed and a note written but found too late, where
+    the request had been typed (Stage 4 gate, 2026-11-20): the push may not say nothing was
+    asked, and it says no session was started."""
+    text = rollover_message(
+        _report(RolloverState.FAILED, "request-stale"), project_name="remote-agents"
+    )
+
+    assert "asked nothing" not in text and "nothing was" not in text
+    assert "no fresh session was started" in text
+    assert "note" in text
+
+
+def test_a_stale_note_rollover_row_names_the_press_or_its_note() -> None:
+    from remote_agents.application.session_views import _rollover_failure_reason
+
+    words = _rollover_failure_reason("request-stale")
+
+    assert "before the session was asked" not in words
+    assert "note" in words

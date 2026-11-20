@@ -236,7 +236,8 @@ qualification remains an independent final gate.
 - **Postconditions:** COMPLETED; the rows show the lineage (`continued as #N`); the note's
   folder is gone. Short of it: `predecessor-not-idle` (not idle within 10 minutes of the press, or a note
   written by a session that never went idle again), `request-stale` (a press, or a written note,
-  the pass first reached after its patience because it was not running), `note-unwritten` (no note within
+  the pass first acted on after its patience: it was not running, or the session went idle
+  only then), `note-unwritten` (no note within
   10 minutes of the asking), `note-refused` (something at the note's name that is not a note),
   `not-typed`, `adoption-timeout` (no finished turn within 30 minutes). Each failure sends one
   notice and keeps the old session running.

@@ -29,7 +29,12 @@ from remote_agents.adapters.agents.opencode.plugin import (
 #: What the acceptance document refuses by name. Two of them hold the literal command the owner
 #: was asked to approve; `always` is a glob over commands; the rest are provider identifiers
 #: this project has no use for and no licence to keep.
-_UNLICENSED_FIELDS = ("patterns", "metadata", "always", "tool", "sessionID", "requestID", "reply")
+#:
+#: `sessionID` left this list on 2026-11-19 with the licence's amendment (BL-134, DEC-076 as
+#: amended): `session.idle` may read `properties.sessionID`, OpenCode's own id, for the
+#: conversation mark. It is licensed there and nowhere else, which
+#: `test_the_one_licensed_session_id_is_read_only_at_session_idle` holds.
+_UNLICENSED_FIELDS = ("patterns", "metadata", "always", "tool", "requestID", "reply")
 
 #: The subset the generated file's own header names, and the reason the raw text cannot be the
 #: sweep. Narrower than the list above on purpose: `sessionID`, `requestID` and `reply` belong to
@@ -77,6 +82,34 @@ def test_no_unlicensed_field_is_named_in_the_generated_code() -> None:
             f"the generated plugin names {field!r}, which "
             "docs/acceptance-2026-09-06-opencode-activity.md refuses"
         )
+
+
+def _session_idle_branch(code: str) -> str:
+    """The generated handler's `session.idle` branch: from its test to the next event test."""
+    start = code.index('if (type === "session.idle")')
+    following = code.find("if (type ===", start + 1)
+    return code[start:] if following == -1 else code[start:following]
+
+
+def test_the_one_licensed_session_id_is_read_only_at_session_idle() -> None:
+    """The amended licence admits `properties.sessionID` on `session.idle` alone. Named once,
+    inside that branch: a read anywhere else (a `permission.asked` payload, say) is the widening
+    the licence still refuses."""
+    code = _code(plugin_source(_COMMAND))
+
+    assert code.count("sessionID") == 1, "the plugin names sessionID outside its one licensed read"
+    assert "properties.sessionID" in _session_idle_branch(code)
+
+
+def test_the_session_id_check_fires_on_a_read_outside_session_idle() -> None:
+    """Turned on a second read it must catch, so the case above means something."""
+    code = _code(plugin_source(_COMMAND))
+    poisoned = code.replace(
+        "permission: permission", "permission: permission, asker: properties.sessionID", 1
+    )
+
+    assert poisoned != code, "the poison found nothing to replace, so it proves nothing"
+    assert poisoned.count("sessionID") > 1
 
 
 def test_the_detector_fires_on_a_deliberately_poisoned_source() -> None:

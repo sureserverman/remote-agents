@@ -54,7 +54,9 @@ code it is recorded under:
 - `FAILED: request-unanswered` -- no `ready` answered the owner's request within
   `REQUEST_PATIENCE` of asking (DEC-119)
 - `FAILED: request-stale` -- a note rollover's press found no idle pane to type into within
-  `NOT_IDLE_PATIENCE` because the pass was not running; it is never typed later
+  `NOT_IDLE_PATIENCE` because the pass was not running, and it is never typed later; or its
+  note was written but first found, on an idle pane, past `NOTE_PATIENCE` (the pass was not
+  running, or the session went idle only then), and no successor is started
 - `FAILED: note-unwritten` -- a note rollover's session wrote no note within `NOTE_PATIENCE`
   of being asked; `FAILED: note-refused` -- what it left at the note's name is not a note (a
   link, a directory, empty, over 32 KiB, another user's)

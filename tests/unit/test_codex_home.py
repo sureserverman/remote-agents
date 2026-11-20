@@ -789,8 +789,21 @@ def test_an_unreadable_process_keeps_only_a_home_with_no_start_bound():
         shutil.rmtree(unbounded, ignore_errors=True)
 
 
-def test_a_sweep_that_fails_lets_the_session_start(monkeypatch, capsys):
-    import conftest
+def _root_conftest(pytestconfig):
+    """`tests/conftest.py` itself, found by its file among the loaded plugins.
+
+    Not `import conftest`: with several conftest files and no packages, that name is whichever
+    one was imported last, and in a full run that is `tests/provider_contract/conftest.py`
+    (found by the v0.71.0 full suite, 2026-11-20)."""
+    root = Path(__file__).resolve().parents[1] / "conftest.py"
+    for plugin in pytestconfig.pluginmanager.get_plugins():
+        if Path(getattr(plugin, "__file__", "") or "").resolve() == root:
+            return plugin
+    raise AssertionError(f"{root} is not a loaded plugin")
+
+
+def test_a_sweep_that_fails_lets_the_session_start(monkeypatch, capsys, pytestconfig):
+    conftest = _root_conftest(pytestconfig)
 
     monkeypatch.delenv("REMOTE_AGENTS_TEST_SOCKET_OWNER", raising=False)
     monkeypatch.setattr(conftest, "_test_sockets", set)

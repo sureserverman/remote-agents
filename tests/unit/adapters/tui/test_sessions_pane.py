@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
 from console_selection import SelectionConsole
+from textual.content import Content
 from textual.geometry import Region
 from textual.widgets import OptionList
 from tui_positions import position
@@ -1986,3 +1987,24 @@ async def test_without_a_reader_the_pane_subtitle_stays_empty() -> None:
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
         assert not str(choices.border_subtitle or "")
+
+
+async def test_the_agent_s_words_in_the_subtitle_are_text_not_markup() -> None:
+    """The words are the agent's (DEC-037). A str subtitle is parsed as Textual markup, where an
+    unbalanced closing tag raised `MarkupError` and took the pane down (Stage 4 gate, 2026-11-20)
+    and `[link=…]` would act."""
+    words = "fixed [/tmp] handling and [link=https://example.invalid]this[/link]"
+
+    async def last_words(session_ids):
+        return {str(_SESSION): words}
+
+    app = SessionsPane(_context((_record(),), last_words=last_words))
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 0
+        await pilot.pause()
+        subtitle = choices.border_subtitle
+
+    # The getter hands the subtitle back as markup, escaped; what it draws is its plain text.
+    assert Content.from_markup(str(subtitle)).plain == f"agent said: {words}"

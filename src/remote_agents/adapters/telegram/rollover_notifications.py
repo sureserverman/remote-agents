@@ -89,9 +89,11 @@ _WHY = {
     "request-unanswered": f"the workflow did not answer the request within {_HOURS_ASKED} hours",
     "note-unwritten": f"the session wrote no handoff note within {_MINUTES_NOTE} minutes",
     "note-refused": "what the session left as its handoff note is not a plain note file",
+    # Two cases share the code: a press never typed, and a note written but first found past
+    # its patience. Neither starts a session; only the first means nothing was typed.
     "request-stale": (
-        f"the service could not ask the session for its note within {_MINUTES_IDLE} minutes"
-        " of the press, so it asked nothing"
+        f"the press, or the note the session wrote, was not acted on within {_MINUTES_IDLE}"
+        " minutes, so no fresh session was started"
     ),
 }
 

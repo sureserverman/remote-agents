@@ -1449,10 +1449,29 @@ def console_layout_args(main_percent: int, column: Sequence[tuple[str, int]]):
 
 
 def pane_height_args(pane_id: str, rows: int) -> tuple[str, ...]:
-    """Return the argv suffix resizing one decoded pane to *rows* rows (`resize-pane -y`)."""
+    """Return the argv suffix resizing one decoded pane to *rows* rows (`resize-pane -y`), but
+    only while its window is not zoomed.
+
+    `resize-pane` unzooms the window it lands in (tmux 3.4, measured 2026-11-20), and a folded
+    console is a zoomed one. The limits pane fits its own height whenever its width changes,
+    and a fold's slide changes it, so its fit landed after the fold's zoom and undid it: the
+    window was left unzoomed while the record said folded (seen in
+    `test_ten_toggles_at_a_real_client_leave_every_pane_idle`). The guard is tmux's own,
+    `if-shell -F`, which evaluates a format and runs no shell, so the check and the resize are
+    one command in the server and no zoom can land between them. A fit skipped while folded is
+    asked again when the unfold's slide changes the width back.
+    """
     if rows < 1:
         raise ValueError("a pane is at least one row high")
-    return ("resize-pane", "-t", exact_pane_target(pane_id), "-y", str(rows))
+    target = exact_pane_target(pane_id)
+    return (
+        "if-shell",
+        "-F",
+        "-t",
+        target,
+        "#{?window_zoomed_flag,,1}",
+        f"resize-pane -t {target} -y {rows}",
+    )
 
 
 def console_layout_hook_args(

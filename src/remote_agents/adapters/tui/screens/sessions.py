@@ -1228,7 +1228,10 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return
         key = self.highlighted_session()
         line = None if key is None else self.tui.agent_said_for(key)
-        self.set_pane_subtitle(found.first(OptionList), line or "")
+        # `Content`, never a str: a str border subtitle is parsed as Textual markup, and these
+        # are the agent's own words (DEC-037), where an unbalanced `[/x]` raises `MarkupError`
+        # and takes the pane down, and `[link=…]` would act.
+        self.set_pane_subtitle(found.first(OptionList), Content(line or ""))
 
     def _newest_arrival(
         self, records: tuple[SessionRecord, ...], previously_drawn: frozenset[str]

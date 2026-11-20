@@ -134,7 +134,7 @@ class OrphanEvidence:
 
 _ABSENT_SERVER_SIGNATURES = ("no server running on", "error connecting to")
 
-#: What tmux says to a query that lands while a killed server is still exiting: `kill-server`
+#: What tmux says to a query that lands while a killed server is still exiting: killing it
 #: returns before the server has gone (measured 2026-10-17, 2 in 300 tries on tmux 3.4). It stays
 #: an error everywhere (DEC-141): the same phrase from a server that is up would end every live
 #: record. Only `server_started_at`, read once at boot, asks again until it clears.
@@ -297,7 +297,7 @@ class TmuxGateway:
         has one-second resolution, and a caller comparing it with a record's creation allows
         for that.
 
-        A server caught exiting (`_SERVER_EXITING`, the moment after `kill-server`) is asked
+        A server caught exiting (`_SERVER_EXITING`, the moment after the server is killed) is asked
         again for about 2 s, because this read decides at boot whether sessions are resumed
         (DEC-127), and a `serve` started in that instant used to resume nothing. Past the bound
         the phrase is raised as before; any other error is raised at once (DEC-141, BL-136).

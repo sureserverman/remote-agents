@@ -838,7 +838,11 @@ Its own failure codes (the old session is kept running in every one, and one not
 
 - **`predecessor-not-idle`** — the session was not idle within 10 minutes of the press, or it
   wrote its note and then never went idle again. Let it finish, then press again.
-- **`request-stale`** — the press was not acted on within 10 minutes because the service was down or busy, so nothing was typed: a late request could land while you were using the session. Press again.
+- **`request-stale`** — the press, or the note the session wrote, was not acted on within 10
+  minutes: the service was down or busy, or the session went idle only after that. No fresh
+  session was started and nothing more is typed, because a late hand-over could land while you
+  were using the session. If the press was stale, nothing was typed; if the note was, the
+  request had been typed and the note is removed. Press again.
 - **`note-unwritten`** — the session wrote no note within 10 minutes of being asked. Look at its
   pane: it may have refused, or be asking you something. Press again when it is idle.
 - **`note-refused`** — what the session left at the note's name is not a note (a link, a
