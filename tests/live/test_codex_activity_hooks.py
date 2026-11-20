@@ -6,10 +6,12 @@ write the owner's ``~/.codex/hooks.json``, persisted hook trust, or the service'
 spool. ``--dangerously-bypass-hook-trust`` is constrained to this vetted, generated hook
 definition; it is never a direction to trust the owner's configuration.
 
-Codex reads only the owner's existing ``auth.json`` through a temporary owner-only symlink.
-The test never opens, copies, serializes, logs, or modifies that credential; tracing the
-installed CLI confirmed it opens the file read-only. This preserves the ordinary ChatGPT
-Codex entitlement instead of requiring unrelated API billing.
+Codex runs inside `native_isolation.codex_command`'s confinement. There the owner's existing
+``auth.json`` is bound read-only over an empty placeholder in the disposable home, so a token
+refresh cannot replace the owner's file (BL-135). The test never opens, copies, serializes or logs
+that credential. After each turn it asserts that the placeholder is still empty and that the
+owner's file has the inode, size and time it had before. This keeps the ordinary ChatGPT Codex
+entitlement instead of requiring unrelated API billing.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from native_isolation import codex_command, owner_codex_login
 
 from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.adapters.agents.turn_markers import TURNS_DIRECTORY, FileTurnMarkers
@@ -37,7 +40,7 @@ _BLOCKED_OUTPUT = {
 }
 
 
-def _requirements(tmp_path: Path) -> tuple[Path, Path]:
+def _requirements(tmp_path: Path) -> tuple[Path, Path, tuple[str, ...]]:
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
     if shutil.which("codex") is None:
@@ -47,34 +50,38 @@ def _requirements(tmp_path: Path) -> tuple[Path, Path]:
     codex_home = workspace / ".codex"
     codex_home.mkdir(mode=0o700)
     spool = tmp_path / "activity"
-    _link_chatgpt_auth(codex_home)
+    if not owner_codex_login().is_file():
+        pytest.skip("BLOCKED: Codex is not logged in with ChatGPT")
+    if shutil.which("bwrap") is None:
+        pytest.skip("BLOCKED: read-only credential isolation requires Linux bwrap")
     install_agent_hooks(
         codex_home / "hooks.json",
         executable=Path(sys.executable),
         activity_directory=spool,
         provider="codex",
     )
-    return workspace, spool
+    # `tmp_path` is the one writable root: the workspace, its `.codex` home and the spool.
+    command = codex_command(Path(shutil.which("codex")), tmp_path, codex_home)
+    return workspace, spool, command
 
 
-def _link_chatgpt_auth(codex_home: Path) -> None:
-    source_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-    source_auth = source_home / "auth.json"
-    if not source_auth.is_file():
-        pytest.skip("BLOCKED: Codex is not logged in with ChatGPT")
-    os.symlink(source_auth, codex_home / "auth.json")
+def _stat(path: Path) -> tuple[int, int, int]:
+    """Inode, size and mtime: enough to see a file rewritten in place or replaced."""
+    found = path.stat()
+    return found.st_ino, found.st_size, found.st_mtime_ns
 
 
-def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
+def _run_codex(workspace: Path, command: tuple[str, ...], environment: dict[str, str]) -> None:
     runtime_environment = {**os.environ, "CODEX_HOME": str(workspace / ".codex")}
     # This pytest process can itself be a managed Codex turn. Its identity belongs to the
     # parent, not the disposable child used for the negative proof, so make inheritance an
     # explicit opt-in through ``environment`` rather than an accidental second managed turn.
     runtime_environment.pop(SESSION_ID_VARIABLE, None)
     runtime_environment.update(environment)
+    login_before = _stat(owner_codex_login())
     completed = subprocess.run(
         [
-            "codex",
+            *command,
             "exec",
             "--dangerously-bypass-hook-trust",
             "--skip-git-repo-check",
@@ -89,6 +96,12 @@ def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
         timeout=180,
         cwd=workspace,
         env=runtime_environment,
+    )
+    placeholder = workspace / ".codex" / "auth.json"
+    assert not placeholder.is_symlink() and placeholder.is_file(), "the placeholder was replaced"
+    assert placeholder.stat().st_size == 0, "credential placeholder was written"
+    assert _stat(owner_codex_login()) == login_before, (
+        "Codex rewrote the owner's auth.json, or the owner's own Codex refreshed it meanwhile"
     )
     output = f"{completed.stdout}\n{completed.stderr}".lower()
     if completed.returncode != 0:
@@ -107,10 +120,10 @@ def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
 
 @pytest.mark.live_profile
 def test_a_managed_codex_turn_spools_its_own_stop_and_ends_its_marker(tmp_path: Path) -> None:
-    workspace, spool = _requirements(tmp_path)
+    workspace, spool, command = _requirements(tmp_path)
     session_id = SessionId.new()
 
-    _run_codex(workspace, {SESSION_ID_VARIABLE: str(session_id)})
+    _run_codex(workspace, command, {SESSION_ID_VARIABLE: str(session_id)})
 
     activities = drain_activity(spool)
     assert len(activities) == 1, "a managed Codex turn must spool exactly one Stop activity"
@@ -138,9 +151,9 @@ def test_a_managed_codex_turn_spools_its_own_stop_and_ends_its_marker(tmp_path: 
 
 @pytest.mark.live_profile
 def test_an_unmanaged_codex_turn_spools_nothing(tmp_path: Path) -> None:
-    workspace, spool = _requirements(tmp_path)
+    workspace, spool, command = _requirements(tmp_path)
 
-    _run_codex(workspace, {})
+    _run_codex(workspace, command, {})
 
     assert drain_activity(spool) == ()
     assert not spool.exists() or list(spool.iterdir()) == []

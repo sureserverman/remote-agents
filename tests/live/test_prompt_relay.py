@@ -14,7 +14,9 @@ file sets the variable, and reads its skips. Otherwise it skips only for what th
 binary or its credentials -- decided before a pane opens.
 
 Boundaries: a `remote-agents-test-*` socket that is destroyed; a disposable workspace per agent;
-Codex in a disposable `CODEX_HOME` whose `auth.json` is a link to the owner's, never opened here;
+Codex in a disposable `CODEX_HOME` whose `auth.json` is an empty placeholder with the owner's file
+bound read-only over it inside `native_isolation`'s confinement, never opened here and asserted
+unchanged after each test;
 Claude with the owner's own HOME, because a fresh config directory demands an interactive login.
 """
 
@@ -44,6 +46,7 @@ from agent_panes import (
     open_to_composer,
 )
 from codex_home import retire_codex_home, short_codex_home
+from native_isolation import codex_command, owner_codex_login
 
 from remote_agents.adapters.agents.registry import (
     install_agent_hooks,
@@ -124,8 +127,10 @@ def _requirements(agent: str) -> None:
             pytest.skip(f"BLOCKED: executable_missing: {needed}")
     if agent == "claude" and not (Path.home() / ".claude" / ".credentials.json").is_file():
         pytest.skip("BLOCKED: claude is not logged in")
-    if agent == "codex" and not (Path.home() / ".codex" / "auth.json").is_file():
+    if agent == "codex" and not owner_codex_login().is_file():
         pytest.skip("BLOCKED: codex is not logged in with ChatGPT")
+    if agent == "codex" and shutil.which("bwrap") is None:
+        pytest.skip("BLOCKED: read-only credential isolation requires Linux bwrap")
     if agent == "cursor-agent" and not (Path.home() / ".config/cursor/auth.json").is_file():
         pytest.skip("BLOCKED: cursor-agent is not logged in")
 
@@ -134,11 +139,32 @@ def _requirements(agent: str) -> None:
 _CODEX_HOMES: list[Path] = []
 
 
+def _stat(path: Path) -> tuple[int, int, int]:
+    """Inode, size and mtime: enough to see a file rewritten in place or replaced."""
+    found = path.stat()
+    return found.st_ino, found.st_size, found.st_mtime_ns
+
+
 @pytest.fixture(autouse=True)
 def _codex_homes_are_retired():
+    """Retires each Codex home after its test, once its login is shown untouched (BL-135)."""
+    login = owner_codex_login()
+    login_before = _stat(login) if login.is_file() else None
     yield
-    while _CODEX_HOMES:
-        retire_codex_home(_CODEX_HOMES.pop())
+    try:
+        for home in _CODEX_HOMES:
+            placeholder = home / "auth.json"
+            assert not placeholder.is_symlink() and placeholder.stat().st_size == 0, (
+                "credential placeholder was written"
+            )
+        if _CODEX_HOMES:
+            assert _stat(login) == login_before, (
+                "Codex rewrote the owner's auth.json, "
+                "or the owner's own Codex refreshed it meanwhile"
+            )
+    finally:
+        while _CODEX_HOMES:
+            retire_codex_home(_CODEX_HOMES.pop())
 
 
 def _open_pane(
@@ -178,7 +204,9 @@ def _open_pane(
     if agent == "codex":
         codex_home = short_codex_home()
         _CODEX_HOMES.append(codex_home)
-        os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
+        # The owner's login bound read-only over an empty placeholder (BL-135). The workspace's
+        # parent is the writable root: the workspace, the spool and the relay's locks.
+        command = list(codex_command(Path(shutil.which("codex")), workspace.parent, codex_home))
         # The model nudge is hidden because an account near its weekly limit raises it after
         # every turn, and the relay rightly refuses a dialog (measured 2026-09-25, Codex 0.155.1).
         (codex_home / "config.toml").write_text(

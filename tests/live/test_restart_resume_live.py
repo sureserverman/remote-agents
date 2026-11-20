@@ -72,7 +72,7 @@ import pytest
 import yaml
 from agent_panes import answer_hook_review
 from codex_home import managed_daemons, retire_codex_home, short_codex_home, stop_codex_home
-from native_isolation import claude_command, codex_command, sharing_daemon
+from native_isolation import claude_command, codex_command, owner_codex_login, sharing_daemon
 
 from remote_agents.adapters.agents.registry import install_agent_hooks, provider_descriptors
 from remote_agents.adapters.agents.thread_binding import thread_of
@@ -148,8 +148,8 @@ def _prerequisites() -> tuple[Path, Path]:
         _blocked(f"executable_missing: {'claude' if claude is None else 'codex'}")
     if not (Path.home() / ".claude" / ".credentials.json").is_file():
         _blocked("claude is not logged in (no ~/.claude/.credentials.json)")
-    if not (Path.home() / ".codex" / "auth.json").is_file():
-        _blocked("codex is not logged in (no ~/.codex/auth.json)")
+    if not owner_codex_login().is_file():
+        _blocked(f"codex is not logged in (no {owner_codex_login()})")
     return claude, codex
 
 

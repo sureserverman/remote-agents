@@ -56,7 +56,7 @@ from pathlib import Path
 import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import _running_from, retire_codex_home, short_codex_home
-from native_isolation import codex_command, live_requested, sharing_daemon
+from native_isolation import codex_command, live_requested, owner_codex_login, sharing_daemon
 from probe_artifact import retained_probe
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
@@ -202,7 +202,7 @@ def drill(
     for needed in ("codex", "tmux", "git", "bwrap"):
         if shutil.which(needed) is None:
             pytest.fail(f"BLOCKED: executable_missing: {needed}", pytrace=False)
-    if not (Path.home() / ".codex" / "auth.json").is_file():
+    if not owner_codex_login().is_file():
         pytest.fail("BLOCKED: codex is not logged in with ChatGPT", pytrace=False)
     if not _VERB.is_file():
         pytest.fail(f"BLOCKED: no installed entry point at {_VERB}", pytrace=False)

@@ -117,7 +117,7 @@ from agent_panes import answer_hook_review
 from codex_home import managed_daemons, retire_codex_home, short_codex_home
 from cross_project_writer import WriterJourney
 from native_checks import NativeChecks
-from native_isolation import claude_command, codex_command, sharing_daemon
+from native_isolation import claude_command, codex_command, owner_codex_login, sharing_daemon
 
 from remote_agents.adapters.agents import codex as codex_provider
 from remote_agents.adapters.agents.codex import descriptor as codex_descriptor
@@ -564,7 +564,7 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
 ) -> None:
     """BL-123 for Codex: the same drive, on a real `codex` (module docstring, the Codex case)."""
     codex = _codex_prerequisites(request.config)
-    login = Path.home() / ".codex" / "auth.json"
+    login = owner_codex_login()
     tmux_directory: Path | None = None
     repo_parent: Path | None = None
     codex_home: Path | None = None
@@ -1318,7 +1318,7 @@ async def _codex_service(
 ) -> AsyncIterator[_CodexService]:
     """Everything a binding case needs, and all of it gone afterwards. Spends no model turn."""
     codex = _codex_prerequisites(config)
-    login = Path.home() / ".codex" / "auth.json"
+    login = owner_codex_login()
     login_before = _stat(login)
     cache = Path.home() / ".cache"
     cache.mkdir(mode=0o700, exist_ok=True)

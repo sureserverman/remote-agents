@@ -114,6 +114,11 @@ def sharing_daemon(command: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(part for part in command if part != "--unshare-pid")
 
 
+def owner_codex_login() -> Path:
+    """The login `codex_command` binds into a drill, which is the file a drill must watch."""
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+
+
 def codex_command(
     executable: Path,
     root: Path,
@@ -124,7 +129,7 @@ def codex_command(
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     home = operator_home or root / "native-home"
     home.mkdir(mode=0o700, exist_ok=True)
-    source = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+    source = owner_codex_login()
     return confined_command(
         executable,
         home=home,

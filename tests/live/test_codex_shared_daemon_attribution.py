@@ -10,9 +10,10 @@ B attaches to it, and a turn in B must drain as B's -- while the daemon itself s
 spends one short Codex turn on the owner's account. Every skip says `BLOCKED:` and why.
 
 Boundaries: a `remote-agents-test-*` tmux socket that is destroyed; one disposable short
-`CODEX_HOME` whose `auth.json` is a link to the owner's, never opened here, and which is retired
-with its daemon in `finally`; a spool under `tmp_path`. The owner's `~/.codex/hooks.json` and the
-service's production spool are never touched.
+`CODEX_HOME`, retired with its daemon in `finally`, whose `auth.json` is an empty placeholder with
+the owner's file bound read-only over it inside `native_isolation`'s confinement (never opened
+here, and asserted unchanged after the turn); a spool under `tmp_path`. The owner's
+`~/.codex/hooks.json` and the service's production spool are never touched.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from pathlib import Path
 import pytest
 from agent_panes import CODEX_OPENING, CODEX_READY, open_to_composer
 from codex_home import retire_codex_home, short_codex_home
+from native_isolation import codex_command, owner_codex_login, sharing_daemon
 
 from remote_agents.adapters.agents.hook_identity import FileHookRoster
 from remote_agents.adapters.agents.registry import install_agent_hooks
@@ -47,13 +49,19 @@ def _tmux(socket: str, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _open(socket: str, session_id: SessionId, workspace: Path, codex_home: Path) -> str:
+def _open(
+    socket: str,
+    session_id: SessionId,
+    workspace: Path,
+    codex_home: Path,
+    command: tuple[str, ...],
+) -> str:
     """A Codex pane carrying `session_id` as a managed pane would, opened to its composer."""
     _tmux(
         socket, "new-session", "-d", "-s", f"ra-{session_id}", "-x", "160", "-y", "40",
         "-c", str(workspace),
         "-e", f"{SESSION_ID_VARIABLE}={session_id}", "-e", f"CODEX_HOME={codex_home}",
-        "codex",
+        *command,
     )  # fmt: skip
     pane = _tmux(socket, "list-panes", "-t", f"=ra-{session_id}:", "-F", "#{pane_id}").stdout
     pane = pane.strip()
@@ -89,6 +97,22 @@ def _daemon_sessions(codex_home: Path) -> set[str]:
     return found
 
 
+def _stat(path: Path) -> tuple[int, int, int]:
+    """Inode, size and mtime: enough to see a file rewritten in place or replaced."""
+    found = path.stat()
+    return found.st_ino, found.st_size, found.st_mtime_ns
+
+
+def _login_untouched(codex_home: Path, login: Path, before: tuple[int, int, int]) -> None:
+    placeholder = codex_home / "auth.json"
+    assert not placeholder.is_symlink() and placeholder.stat().st_size == 0, (
+        "credential placeholder was written"
+    )
+    assert _stat(login) == before, (
+        "Codex rewrote the owner's auth.json, or the owner's own Codex refreshed it meanwhile"
+    )
+
+
 def _finished(spool: Path, seconds: float = 180.0) -> list[AgentActivity]:
     deadline = time.monotonic() + seconds
     drained: list[AgentActivity] = []
@@ -113,11 +137,13 @@ def _written(path: Path, seconds: float = 10.0) -> str:
 def test_a_turn_in_the_second_pane_is_filed_under_the_second_session(tmp_path: Path) -> None:
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
-    for needed in ("codex", "tmux"):
+    for needed in ("codex", "tmux", "bwrap"):
         if shutil.which(needed) is None:
             pytest.skip(f"BLOCKED: executable_missing: {needed}")
-    if not (Path.home() / ".codex" / "auth.json").is_file():
+    login = owner_codex_login()
+    if not login.is_file():
         pytest.skip("BLOCKED: codex is not logged in with ChatGPT")
+    login_before = _stat(login)
 
     socket = f"remote-agents-test-attribution-{SessionId.new().value.hex}"
     spool = tmp_path / "spool"
@@ -129,7 +155,9 @@ def test_a_turn_in_the_second_pane_is_filed_under_the_second_session(tmp_path: P
     first, second = SessionId.new(), SessionId.new()
     codex_home = short_codex_home()
     try:
-        os.symlink(Path.home() / ".codex" / "auth.json", codex_home / "auth.json")
+        # Without a PID namespace, as the owner's panes run: pane B must find pane A's daemon.
+        # `tmp_path` is the writable root: the workspaces, the spool and the payload copy.
+        command = sharing_daemon(codex_command(Path(shutil.which("codex")), tmp_path, codex_home))
         (codex_home / "config.toml").write_text(
             'approval_policy = "on-request"\nsandbox_mode = "read-only"\n'
             "[notice]\nhide_rate_limit_model_nudge = true\n",
@@ -151,10 +179,10 @@ def test_a_turn_in_the_second_pane_is_filed_under_the_second_session(tmp_path: P
         roster = FileHookRoster(spool)
         sessions = [RosterSession(str(first), workspaces["a"], datetime.now(UTC))]
         roster.write("codex", sessions)
-        _open(socket, first, workspaces["a"], codex_home)
+        _open(socket, first, workspaces["a"], codex_home, command)
         sessions.append(RosterSession(str(second), workspaces["b"], datetime.now(UTC)))
         roster.write("codex", sessions)
-        pane = _open(socket, second, workspaces["b"], codex_home)
+        pane = _open(socket, second, workspaces["b"], codex_home, command)
 
         # The incident's precondition, re-measured rather than assumed: the daemon both panes
         # use carries the first pane's session, and only that one.
@@ -175,4 +203,9 @@ def test_a_turn_in_the_second_pane_is_filed_under_the_second_session(tmp_path: P
         try:
             _tmux(socket, "kill-server")
         finally:
-            retire_codex_home(codex_home)
+            try:
+                # Checked however the drill ended: a drill that failed partway is the one most
+                # likely to have touched the login (BL-135).
+                _login_untouched(codex_home, login, login_before)
+            finally:
+                retire_codex_home(codex_home)

@@ -39,6 +39,7 @@ from agent_panes import (
     open_to_composer,
 )
 from codex_home import retire_codex_home, short_codex_home
+from native_isolation import codex_command, owner_codex_login
 
 from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
@@ -191,7 +192,9 @@ def test_the_hook_payload_field_names_match_the_installed_agent() -> None:
 # (`docs/acceptance-2026-08-29-codex-activity-detail.md`).
 #
 # Boundaries, the same ones both drills held: a disposable agent home, the owner's credential
-# reached only through a symlink that is never opened here, hook and directory trust granted
+# never opened here (Codex's is bound read-only over an empty placeholder inside
+# `native_isolation`'s confinement, and asserted unchanged after the turn), hook and directory
+# trust granted
 # inside the disposable home through the TUI's own prompts (never `--dangerously-bypass-hook-
 # trust`), a `remote-agents-test-*` tmux socket that is destroyed, and a spool made by the test.
 
@@ -269,6 +272,12 @@ def _spooled_ask(spool: Path) -> AgentActivity | None:
     return None
 
 
+def _stat(path: Path) -> tuple[int, int, int]:
+    """Inode, size and mtime: enough to see a file rewritten in place or replaced."""
+    found = path.stat()
+    return found.st_ino, found.st_size, found.st_mtime_ns
+
+
 def _live_pane_requirements(executable: str) -> None:
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
@@ -281,17 +290,22 @@ def _live_pane_requirements(executable: str) -> None:
 def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: Path) -> None:
     """One escalation in a real 0.154 pane, one record, and the command is in it."""
     _live_pane_requirements("codex")
-    owner_auth = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+    if shutil.which("bwrap") is None:
+        pytest.skip("BLOCKED: read-only credential isolation requires Linux bwrap")
+    owner_auth = owner_codex_login()
     if not owner_auth.is_file():
         pytest.skip("BLOCKED: Codex is not logged in with ChatGPT")
+    login_before = _stat(owner_auth)
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     codex_home = short_codex_home()
     spool = tmp_path / "activity"
-    # Never opened, copied or serialized here -- only linked, so the ordinary ChatGPT
-    # entitlement is used instead of separate API billing.
-    os.symlink(owner_auth, codex_home / "auth.json")
+    # Never opened, copied or serialized here: bound read-only over an empty placeholder in the
+    # home, so the ordinary ChatGPT entitlement is used instead of separate API billing, and a
+    # token refresh cannot replace the owner's file (BL-135). `tmp_path` is the writable root:
+    # the workspace, the spool and the probe the turn is asked to write.
+    command = codex_command(Path(shutil.which("codex")), tmp_path, codex_home)
     # Hidden for the reason `test_prompt_relay._open_pane` gives: near the weekly limit Codex
     # raises this model nudge after every turn.
     (codex_home / "config.toml").write_text(
@@ -322,7 +336,7 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
             f"CODEX_HOME={codex_home}",
             "-e",
             f"{SESSION_ID_VARIABLE}={SessionId.new()}",
-            "codex",
+            *command,
         )
         # Directory and hook trust are granted inside this disposable home only; Codex
         # persists both per home, so the owner's trust state is untouched.
@@ -346,9 +360,21 @@ def test_a_real_codex_approval_spools_the_command_it_is_asking_about(tmp_path: P
         try:
             _tmux("kill-server")
         finally:
-            # Whatever the kill did (`_tmux` can time out): the daemon outlives the panes
-            # (BL-133).
-            retire_codex_home(codex_home)
+            try:
+                # Checked however the drill ended: a drill that failed partway is the one most
+                # likely to have touched the login (BL-135).
+                placeholder = codex_home / "auth.json"
+                assert not placeholder.is_symlink() and placeholder.stat().st_size == 0, (
+                    "credential placeholder was written"
+                )
+                assert _stat(owner_auth) == login_before, (
+                    "Codex rewrote the owner's auth.json, "
+                    "or the owner's own Codex refreshed it meanwhile"
+                )
+            finally:
+                # Whatever the kill did (`_tmux` can time out): the daemon outlives the panes
+                # (BL-133).
+                retire_codex_home(codex_home)
 
 
 @pytest.mark.live_profile
