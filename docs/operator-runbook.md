@@ -807,15 +807,20 @@ detail. It is offered on a running `claude` or `codex` session with no rollover 
 the auto-rollover switch says**: your press is the consent for this one rollover. OpenCode and
 Cursor sessions do not offer it.
 
-1. Once the session is idle, the service types one fixed request into it: *Write a handoff note
-   for a fresh session to `<root>/.claude/handoffs/<id>.note.md` … Write only that file, then
-   stop.* The row reads *rollover with a note · waiting for this session to be idle*, then
+1. Once the session is idle, the service makes a folder for this one rollover in the
+   session's folder, `.remote-agents-note-<id>/` (git ignores it), and types one fixed
+   request: *Write a handoff note for a fresh session to
+   `<root>/.remote-agents-note-<id>/note.md` … Write only that file, then stop.* Not under
+   `.claude/`: Claude asks before it writes there. The row reads *rollover with a note · waiting for this session to be idle*, then
    *… waiting for the session's note*.
 2. Once the note is there and the session is idle again, a fresh session of the same agent
    starts in the same folder (through the usual trust and permission steps) and is typed one
    fixed message: *Read `<path>` and continue the work it describes.*
 3. When that fresh session finishes its first turn, the old one is stopped gracefully, only onto
-   an idle composer. The row reads *continued as #N*; the note file is removed.
+   an idle composer. The row reads *continued as #N*; the note's folder is removed, as it is
+   when the rollover fails or is cancelled. A note the session writes after a failure or a
+   cancel is removed on the next pass. Anything else the agent left in the folder stays, with
+   the folder's `.gitignore`, for you to look at.
 
 The service types only those two sentences. Neither holds a word the agent wrote, and each is
 typed at most once. **Cancel rollover** before the request is typed means nothing is typed.

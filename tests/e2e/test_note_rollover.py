@@ -171,7 +171,7 @@ async def test_a_note_rollover_on_real_tmux(tmp_path: Path, mode: str, short_pat
             kind=RolloverKind.NOTE,
         )
         assert asked is not None
-        note = project / ".claude" / "handoffs" / f"{asked.id}.note.md"
+        note = project / f".remote-agents-note-{asked.id}"
 
         want = {
             "write": RolloverState.COMPLETED,
@@ -221,7 +221,8 @@ async def test_a_note_rollover_on_real_tmux(tmp_path: Path, mode: str, short_pat
                 assert row.failure_code == "adoption-timeout"
                 assert predecessor.session_id in managed, "both panes are alive"
                 assert states[predecessor.session_id] is SessionState.RUNNING
-        assert not note.exists(), "the note file is removed when the rollover ends"
+        assert not note.exists(), "the note's folder is removed when the rollover ends"
+        assert not (project / ".claude").exists(), "nothing is made under .claude/"
     finally:
         for session_id in launched:
             try:

@@ -454,7 +454,7 @@ class SQLiteRolloverStore:
         target: RolloverTarget | None = None,
         kind: RolloverKind = RolloverKind.WORKFLOW,
     ) -> Rollover | None:
-        # A note rollover's id names its note file (`<root>/.claude/handoffs/<id>.note.md`),
+        # A note rollover's id names its note's folder (`<root>/.remote-agents-note-<id>/`),
         # so it is short, fixed-shape and path-safe; a workflow's keeps its historical shape.
         rollover_id = f"n-{token_hex(10)}" if kind is RolloverKind.NOTE else uuid4().hex
         stamp = _stored(at)

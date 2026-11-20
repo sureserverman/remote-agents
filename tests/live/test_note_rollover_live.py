@@ -9,7 +9,7 @@ its first turn. The owner's press goes through `Backend.rollovers.press`, the ca
 surfaces make. The pass in `serve` then asks the idle agent for a note, waits for it, starts a
 successor where the session works and types it the note's path, and stops the old session once
 the successor has finished its first turn. Asserted: the rollover COMPLETED; the predecessor
-ENDED by the pass's stop; and the successor's first answer states the fact (OD-4).
+ENDED by the pass's stop; and the successor, asked for the fact, states it (OD-4).
 
 **What is real.** `claude` and `codex`, each under the drill homes `test_rollover_live.py`
 builds (private HOME, the owner's login bound read-only, DEC-145); tmux; the service's
@@ -18,9 +18,10 @@ finished turn reaches the store the way a hook's record does.
 
 **What the drill adds.** The agents' activity hooks, installed in the drill home and pointing
 at the drill's spool (`install_agent_hooks`), because adoption is read from a finished turn.
-Claude's drill settings set `permissions.defaultMode = "acceptEdits"`, as permissive as the
-owner's own host default (`auto`), so writing the note raises no approval in a home that holds
-none of the owner's settings. Codex runs `workspace-write` with approval `never`, as
+Claude's drill settings set `permissions.defaultMode = "auto"`, the owner's own host default
+(OD-15): under `acceptEdits` the successor stopped on a shell-command approval while it checked
+its work (2026-11-20), and a home that holds none of the owner's settings would otherwise ask.
+Codex runs `workspace-write` with approval `never`, as
 `test_rollover_live.py` builds it. A Codex hook review is answered only with the owner's
 approval (`REMOTE_AGENTS_LIVE_HOOK_TRUST=owner-approved`, this plan's OD-9).
 """
@@ -180,9 +181,17 @@ async def _note_drive(harness, paths: ProductionPaths, connection, repo: Path, p
 
     records = {item.session_id: item for item in await sessions.list_sessions()}
     assert records[predecessor].state is SessionState.ENDED, diagnosis
+    # Asked, not hoped for: whether a model restates a fact unasked is its own choice (Codex
+    # 0.171.0 answered "I have the project code word available" on 2026-11-20). The question is
+    # typed once the successor's adopting turn is over, so the answer comes from the note.
+    await _type(harness, successor, "What is the project's code word? Reply with only the word.")
+    asked_at = time.monotonic()
     screen = await harness.terminal.capture(successor)
-    assert fact in screen, f"the successor's first answer does not state {fact}:\n{screen}"
-    assert not (repo / ".claude" / "handoffs" / f"{rollover.id}.note.md").exists()
+    while screen.count(fact) < 1 and time.monotonic() - asked_at < _FIRST_TURN_SECONDS:
+        await asyncio.sleep(_POLL_SECONDS)
+        screen = await harness.terminal.capture(successor)
+    assert fact in screen, f"the successor, asked, does not state {fact}:\n{screen}"
+    assert not list(repo.glob(".remote-agents-note-*")), "a note folder was left behind"
     return fact
 
 
@@ -211,7 +220,7 @@ async def test_rollover_with_a_note_on_a_real_claude(
         activity = ProductionPaths.for_home(home).activity_directory
         settings = tmp_path / "claude-settings.json"
         settings.write_text(
-            json.dumps({"permissions": {"defaultMode": "acceptEdits"}}, indent=2) + "\n",
+            json.dumps({"permissions": {"defaultMode": "auto"}}, indent=2) + "\n",
             encoding="utf-8",
         )
         native = claude_command(claude, tmp_path / "native-claude-home", home, repo)

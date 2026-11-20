@@ -221,27 +221,34 @@ qualification remains an independent final gate.
 - **Steps:**
   1. The press writes one REQUESTED `rollovers` row of kind `note`, id `n-<20 hex>`. A second
      press, of either rollover, writes none.
-  2. Once the session's pane is IDLE, the pass makes `<root>/.claude/handoffs/` (with its
-     `.gitignore` holding `*`), records `note requested` in the store's own conditional
-     statement, then types `NOTE_REQUEST` holding the note's path through the guarded send.
-  3. When `<id>.note.md` is a regular file of this user's, reached without a link, of 1 byte to
-     32 KiB, and the pane is IDLE again, the row moves to HANDOFF_READY.
+  2. Once the session's pane is IDLE, the pass makes the rollover's own folder,
+     `<root>/.remote-agents-note-<id>/`, with a `.gitignore` holding `*` (OD-13; never under
+     `.claude/`, OD-12), records `note requested` in the store's own conditional statement,
+     then types `NOTE_REQUEST` holding the note's path through the guarded send.
+  3. When `note.md` in that folder is a regular file of this user's, reached without a link, of
+     1 byte to 32 KiB, and the pane is IDLE again, the row moves to HANDOFF_READY.
   4. A successor starts where the session works (same project, profile and folder), through the
      trust hold, the thread binding and the permission wait. It is typed
      `NOTE_FIRST_MESSAGE` holding the note's path, once; `first message typed` is recorded
      before the keys.
   5. A finished turn the successor reports at or after that record is its adoption:
      SUCCESSOR_ACCEPTED, then the graceful, idle-only stop of the old session.
-- **Postconditions:** COMPLETED; the rows show the lineage (`continued as #N`); the note file is
-  gone. Short of it: `predecessor-not-idle` (not idle within 10 minutes of the press, or a note
+- **Postconditions:** COMPLETED; the rows show the lineage (`continued as #N`); the note's
+  folder is gone. Short of it: `predecessor-not-idle` (not idle within 10 minutes of the press, or a note
   written by a session that never went idle again), `note-unwritten` (no note within
   10 minutes of the asking), `note-refused` (something at the note's name that is not a note),
   `not-typed`, `adoption-timeout` (no finished turn within 30 minutes). Each failure sends one
   notice and keeps the old session running.
-- **Side effects:** One `rollovers` row and its history; the note file, removed at every
-  terminal state; one successor session on success. Never `request.json`.
+- **Side effects:** One `rollovers` row and its history; the note's folder, removed at every
+  terminal state and again on each later pass while the session runs (only its own names: a
+  folder the agent left more in keeps the rest and its `.gitignore`); one successor session on
+  success. Never `request.json`, and nothing under `.claude/`.
 - **Invariants:** The service types only its two fixed sentences, and no byte of either comes
   from the session or the agent — the note's words are never typed. Nothing is typed into a
   pane that is not idle. Each sentence is typed at most once, across restarts. "Cancel
   rollover" before the request is typed means nothing is typed. The old session is never
   stopped before its successor's finished turn.
+- **Last verified:** 2026-11-20 on branch `backlog-sweep` (Sub-plan 5 Task 2.6): unit tests of
+  the pass and the note folder, the whole flow on real tmux with fake agents, and one live
+  rollover each on Claude Code 2.1.329 (`auto` mode) and Codex 0.171.0, the fresh session
+  stating the fact the old one was told.

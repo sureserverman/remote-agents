@@ -342,7 +342,7 @@ class RolloverPass:
         #: order in which a shutdown cannot spend a rollover.
         self._operation = operation
         #: The profiles whose sessions may roll over with a note (their verticals'
-        #: `note_rollover`), and the note files themselves. Without `notes` no note rollover
+        #: `note_rollover`), and each one's note folder. Without `notes` no note rollover
         #: is ever asked for: its rows fail `not-rollable`.
         self._note_rollable = note_rollable
         self._notes = notes
@@ -816,8 +816,8 @@ class RolloverPass:
             # control character or a backtick into the typed request is never typed.
             await self._fail(rollover, seen, NO_HANDOFF_ROOT, "the note's path cannot be typed")
             return
-        if not self._notes.prepare(root):
-            await self._fail(rollover, seen, NO_HANDOFF_ROOT, "the handoff folder")
+        if not self._notes.prepare(root, rollover.id):
+            await self._fail(rollover, seen, NO_HANDOFF_ROOT, "the note's folder")
             return
         # Recorded before the keys, so a restart part-way never types it twice (DEC-004). A
         # cancel that landed since this pass read the row refuses the record in the store's

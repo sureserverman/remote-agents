@@ -160,8 +160,13 @@ class NoteRig:
         (row,) = self.store._select("1 = 1", ())
         return row
 
+    def note_folder(self, rollover: Rollover) -> Path:
+        """The rollover's own folder (OD-13): outside `.claude/`, which Claude asks before
+        writing into (OD-12), and inside the session's folder, which Codex's sandbox writes."""
+        return self.root / f".remote-agents-note-{rollover.id}"
+
     def note_path(self, rollover: Rollover) -> Path:
-        return self.root / ".claude" / "handoffs" / f"{rollover.id}.note.md"
+        return self.note_folder(rollover) / "note.md"
 
     def expected_request(self, rollover: Rollover) -> str:
         return NOTE_REQUEST.format(path=self.note_path(rollover))
@@ -183,9 +188,10 @@ async def test_the_pass_types_the_fixed_request_with_its_own_path_once(rig: Note
 
     assert rig.sends == [(rig.predecessor, rig.expected_request(asked))]
     assert (await rig.row()).state is RolloverState.REQUESTED
-    folder = rig.root / ".claude" / "handoffs"
+    folder = rig.note_folder(asked)
     assert folder.is_dir()
     assert (folder / ".gitignore").read_text() == "*\n"
+    assert not (rig.root / ".claude").exists(), "nothing is made under .claude/"
 
 
 @pytest.mark.parametrize(
@@ -403,7 +409,7 @@ async def test_the_note_file_is_removed_when_the_rollover_ends(rig: NoteRig) -> 
     await rig.run()
 
     assert (await rig.row()).state is RolloverState.FAILED
-    assert not rig.note_path(asked).exists()
+    assert not rig.note_folder(asked).exists()
 
 
 async def test_a_profile_not_declaring_note_rollover_fails_not_rollable(tmp_path: Path) -> None:
@@ -484,7 +490,7 @@ async def test_a_cancelled_note_rollover_of_a_note_only_profile_loses_its_note(
 
     await rig.run()
 
-    assert not rig.note_path(asked).exists()
+    assert not rig.note_folder(asked).exists()
 
 
 @pytest.mark.parametrize("name", ["tv`set", "tv\x1bset", "tv\nset"])
@@ -633,7 +639,7 @@ async def test_the_predecessor_stops_only_after_the_successor_finishes_a_turn(
     row = await rig.row()
     assert row.state is RolloverState.COMPLETED
     assert await rig.store.continued_as(rig.predecessor) == rig.successor
-    assert not rig.note_path(asked).exists()
+    assert not rig.note_folder(asked).exists()
 
 
 async def test_a_turn_finished_before_the_first_message_does_not_count(
@@ -673,7 +679,7 @@ async def test_no_finished_turn_within_the_patience_fails_and_keeps_the_predeces
     assert row.state is RolloverState.FAILED and row.failure_code == "adoption-timeout"
     assert rig.sessions[rig.predecessor].state is SessionState.RUNNING
     assert rig.stops == []
-    assert not rig.note_path(asked).exists()
+    assert not rig.note_folder(asked).exists()
 
 
 async def test_an_untrusted_successor_holds_and_is_typed_once_trusted(
@@ -712,7 +718,7 @@ async def test_the_note_is_removed_when_the_rollover_is_cancelled(
     await rig.run()
 
     assert (await rig.row()).state is RolloverState.CANCELLED
-    assert not rig.note_path(asked).exists()
+    assert not rig.note_folder(asked).exists()
     assert rig.launches == []
 
 
@@ -766,3 +772,59 @@ async def test_an_adopting_note_rollover_nothing_was_typed_into_fails_at_once(
     assert row.state is RolloverState.FAILED and row.failure_code == "not-typed"
     assert rig.stops == []
     assert rig.sends[-1][0] == rig.predecessor, "nothing was typed into the successor"
+
+
+# Task 2.6 -- the note's own folder (OD-12, OD-13) -------------------------------------
+
+
+async def test_a_link_at_the_note_folders_name_is_refused_and_nothing_is_typed(
+    rig: NoteRig, tmp_path: Path
+) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    asked = await rig.press()
+    os.symlink(elsewhere, rig.note_folder(asked))
+
+    await rig.run()
+
+    row = await rig.row()
+    assert row.state is RolloverState.FAILED and row.failure_code == "no-handoff-root"
+    assert rig.sends == []
+    assert list(elsewhere.iterdir()) == [], "nothing was written through the link"
+    assert rig.note_folder(asked).is_symlink(), "the link is left, not followed or removed"
+
+
+async def test_a_folder_the_agent_left_more_in_is_emptied_of_ours_only(rig: NoteRig) -> None:
+    """Only the names the service made or asked for go; anything else the agent wrote there is
+    the owner's to look at, so the folder stays with it."""
+    asked = await rig.press()
+    await rig.run()
+    _write(rig.note_path(asked), b"a note\n")
+    _write(rig.note_folder(asked) / "scratch.txt", b"the agent's own\n")
+    rig.not_idle.add(rig.predecessor)
+    rig.later(NOTE_PATIENCE)
+
+    await rig.run()
+
+    assert (await rig.row()).state is RolloverState.FAILED
+    assert sorted(p.name for p in rig.note_folder(asked).iterdir()) == [".gitignore", "scratch.txt"]
+
+
+async def test_a_note_written_after_the_rollover_ended_is_removed_on_a_later_pass(
+    rig: NoteRig,
+) -> None:
+    """A failed or cancelled note rollover keeps its session running, and the agent may still be
+    writing: a note it writes after the clean-up is removed again by a later pass, so no folder
+    stays in the project without its `.gitignore`."""
+    asked = await rig.press()
+    await rig.run()
+    rig.later(NOTE_PATIENCE)
+    await rig.run()
+    assert (await rig.row()).failure_code == NOTE_UNWRITTEN
+    assert not rig.note_folder(asked).exists()
+
+    rig.note_folder(asked).mkdir()  # the agent's late Write makes the parent itself
+    _write(rig.note_path(asked), b"a late note\n")
+    await rig.run()
+
+    assert not rig.note_folder(asked).exists()
