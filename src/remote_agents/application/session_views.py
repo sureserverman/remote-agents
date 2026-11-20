@@ -38,7 +38,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.projects import ProjectIdentity
-from remote_agents.domain.rollover import TERMINAL, RolloverState
+from remote_agents.domain.rollover import TERMINAL, RolloverKind, RolloverState
 from remote_agents.ports.agent_usage import (
     AgentLimits,
     AgentUsage,
@@ -49,6 +49,7 @@ from remote_agents.ports.agent_usage import (
 )
 from remote_agents.ports.git_checkout import GitSummary
 from remote_agents.ports.rollover_store import (
+    NOTE_ASKED,
     REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
@@ -242,6 +243,12 @@ so a state added without a decision raises on the first row that carries it."""
 _WAITING_NOTE = "rollover pending · waiting for another session's request"
 """REQUESTED, held back: the checkout's one `request.json` is another session's until it ends."""
 
+_NOTE_IDLE_NOTE = "rollover with a note · waiting for this session to be idle"
+"""REQUESTED, kind `note`: the request for a note goes in once this session's pane is idle."""
+
+_NOTE_ASKED_NOTE = "rollover with a note · waiting for the session's note"
+"""REQUESTED, kind `note`, asked: the agent was asked for its note and has not written it."""
+
 _TRUST_HOLD_NOTE = "starting successor · waiting for folder trust"
 """SUCCESSOR_STARTING, held: the successor is up on its folder-trust question (DEC-125)."""
 
@@ -293,6 +300,8 @@ def _rollover_failure_reason(code: str) -> str:
         "id-mismatch": "handoff identity did not match",
         "request-unanswered": "workflow did not answer the request in time",
         "request-lost": "workflow request is no longer present",
+        "note-unwritten": "no handoff note was written in time",
+        "note-refused": "the handoff note was not a plain file",
     }.get(code, code.replace("-", " "))
 
 
@@ -379,7 +388,14 @@ async def rollover_marks(
                 holds[key] = "rollover held · original destination needs owner resolution"
             if state in {RolloverState.FAILED, RolloverState.STOP_FAILED} and latest.failure_code:
                 failures[key] = _rollover_failure_reason(latest.failure_code)
-        if state is RolloverState.REQUESTED and latest is not None:
+        if (
+            state is RolloverState.REQUESTED
+            and latest is not None
+            and latest.kind is RolloverKind.NOTE
+        ):
+            asked = any(event.detail == NOTE_ASKED for event in history(latest.id))
+            holds[key] = _NOTE_ASKED_NOTE if asked else _NOTE_IDLE_NOTE
+        elif state is RolloverState.REQUESTED and latest is not None:
             details = [event.detail or "" for event in history(latest.id)]
             if any(d.startswith("waiting:") for d in details) and REQUEST_WRITTEN not in details:
                 waiting.add(str(record.session_id))

@@ -261,7 +261,30 @@ class SQLiteRolloverStore:
             )
         return True
 
-    async def note(self, rollover_id: str, detail: str, *, at: datetime) -> None:
+    async def note(
+        self,
+        rollover_id: str,
+        detail: str,
+        *,
+        at: datetime,
+        expected_state: RolloverState | None = None,
+    ) -> None:
+        if expected_state is not None:
+            with self._connection:
+                # One statement: the state test and the append cannot be split by another
+                # writer's move, as a read followed by an insert could be.
+                cursor = self._connection.execute(
+                    "INSERT INTO rollover_events("
+                    "rollover_id, from_state, to_state, failure_code, detail, created_at)"
+                    " SELECT rollover_id, state, state, NULL, ?, ? FROM rollovers"
+                    " WHERE rollover_id = ? AND state = ?",
+                    (detail, _stored(at), rollover_id, expected_state.value),
+                )
+            if cursor.rowcount != 1:
+                if await self.get(rollover_id) is None:
+                    raise LookupError(f"no rollover {rollover_id}")
+                raise IllegalRolloverMove(f"rollover {rollover_id} is not {expected_state.value}")
+            return
         with self._connection:
             row = self._connection.execute(
                 "SELECT state FROM rollovers WHERE rollover_id = ?", (rollover_id,)

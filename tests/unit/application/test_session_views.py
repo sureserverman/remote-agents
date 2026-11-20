@@ -1768,3 +1768,32 @@ def test_the_mark_follows_the_rollover_note() -> None:
     note = session_row_parts(_numbered(5), at_83, mark, mark_at=80).note
 
     assert note == "continued from #4 · context 83% - roll over?"
+
+
+async def test_a_note_rollover_says_what_it_waits_for(
+    rollover_store: SQLiteRolloverStore,
+) -> None:
+    """Never "waiting for workflow boundary": a note rollover waits for an idle session, then
+    for its note (BL-119)."""
+    from remote_agents.domain.rollover import RolloverKind
+    from remote_agents.ports.rollover_store import NOTE_ASKED
+
+    first, second = _numbered(1), _numbered(2)
+    for record in (first, second):
+        await rollover_store.request(
+            record.session_id,
+            project_id=ProjectId("demo"),
+            profile_id=ProfileId("claude"),
+            at=_ROLL_AT,
+            kind=RolloverKind.NOTE,
+        )
+    asked = await rollover_store.latest_for(second.session_id)
+    assert asked is not None
+    await rollover_store.note(asked.id, NOTE_ASKED, at=_ROLL_AT)
+
+    marks = await rollover_marks(RolloverBook(rollover_store), (first, second))
+
+    assert _notes((first, second), marks) == {
+        1: "rollover with a note · waiting for this session to be idle",
+        2: "rollover with a note · waiting for the session's note",
+    }

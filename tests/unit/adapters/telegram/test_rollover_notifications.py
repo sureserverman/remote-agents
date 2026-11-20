@@ -209,3 +209,33 @@ def test_a_permission_failed_rollover_is_not_shown_as_its_code() -> None:
 
     assert PERMISSIONS_FAILED not in text
     assert PERMISSIONS_FAILED in _WHY
+
+
+def test_a_note_rollover_that_could_not_ask_names_the_session_and_no_successor() -> None:
+    """A note rollover types into the predecessor, before any successor exists (BL-119)."""
+    from dataclasses import replace
+
+    from remote_agents.domain.rollover import RolloverKind
+
+    report = _report(RolloverState.FAILED, "not-typed", detail="composing")
+    report = RolloverReport(
+        replace(report.rollover, kind=RolloverKind.NOTE, handoff_id=None, reason="owner"),
+        report.predecessor,
+        None,
+    )
+
+    text = rollover_message(report, project_name="remote-agents")
+
+    assert "note" in text and "successor" not in text
+    assert "predecessor preserved" in text
+
+
+def test_a_note_that_was_never_written_is_said_with_its_patience() -> None:
+    from remote_agents.application.rollover import NOTE_PATIENCE
+
+    text = rollover_message(
+        _report(RolloverState.FAILED, "note-unwritten"), project_name="remote-agents"
+    )
+
+    assert f"{int(NOTE_PATIENCE.total_seconds() // 60)} minutes" in text
+    assert "note" in text

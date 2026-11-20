@@ -38,11 +38,12 @@ from remote_agents.application.notification_policy import rollover_told
 from remote_agents.application.rollover import (
     ADOPTION_PATIENCE,
     NOT_IDLE_PATIENCE,
+    NOTE_PATIENCE,
     REQUEST_PATIENCE,
     TRUST_PATIENCE,
     RolloverReport,
 )
-from remote_agents.domain.rollover import RolloverState
+from remote_agents.domain.rollover import RolloverKind, RolloverState
 from remote_agents.ports.expiring_notices import ExpiringNoticeStore
 
 _LOG = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ _MINUTES_IDLE = int(NOT_IDLE_PATIENCE.total_seconds() // 60)
 _MINUTES_ADOPT = int(ADOPTION_PATIENCE.total_seconds() // 60)
 _HOURS_ASKED = int(REQUEST_PATIENCE.total_seconds() // 3600)
 _HOURS_TRUST = int(TRUST_PATIENCE.total_seconds() // 3600)
+_MINUTES_NOTE = int(NOTE_PATIENCE.total_seconds() // 60)
 
 #: Why a rollover failed, in words. A code missing here is shown as itself.
 _WHY = {
@@ -85,6 +87,17 @@ _WHY = {
     "request-unwritten": "the request could not be handed to the workflow",
     "request-lost": "the request was gone before the workflow answered it",
     "request-unanswered": f"the workflow did not answer the request within {_HOURS_ASKED} hours",
+    "note-unwritten": f"the session wrote no handoff note within {_MINUTES_NOTE} minutes",
+    "note-refused": "what the session left as its handoff note is not a plain note file",
+}
+
+#: A note rollover's own words where its step differs from a workflow's (BL-119): its request
+#: is typed into the session itself, before any successor exists.
+_WHY_NOTE = {
+    "not-typed": "the request for a handoff note was not confirmed typed into the session",
+    "predecessor-not-idle": (
+        f"the session was not idle for {_MINUTES_IDLE} minutes, before or after its note"
+    ),
 }
 
 #: Why the stop of a rollover's predecessor did not go through. No duration: the not-idle
@@ -139,13 +152,14 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
             f"Rollover stop failed: {session} — {why}{kept}. Its successor has taken over: "
             "stop this session when it is done, or force stop it"
         )
-    why = _WHY.get(code, escape(code) or "it did not complete")
+    words = _WHY_NOTE.get(code) if rollover.kind is RolloverKind.NOTE else None
+    why = words or _WHY.get(code, escape(code) or "it did not complete")
     if code in ("not-typed", "permissions-failed") and rollover.failure_detail:
         why = f"{why} ({escape(rollover.failure_detail)})"
     text = f"Rollover failed: {session} — {why}"
     if code not in _PREDECESSOR_NOT_KEPT:
         text = f"{text}; predecessor preserved"
-    if code in _SUCCESSOR_LEFT_OPEN:
+    if code in _SUCCESSOR_LEFT_OPEN and rollover.successor_session_id is not None:
         number = "" if report.successor is None else f" #{report.successor.display.sequence}"
         text = f"{text}. Its successor{number} is still open: stop it if it is not needed"
     return text

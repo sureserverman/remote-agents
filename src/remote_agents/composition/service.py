@@ -42,6 +42,7 @@ from remote_agents.adapters.tmux.profiles import bind_thread_line
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.workflow.destinations import destination_branch
 from remote_agents.adapters.workflow.handoff_envelopes import FileHandoffEnvelopes
+from remote_agents.adapters.workflow.handoff_notes import FileHandoffNotes
 from remote_agents.adapters.workflow.roots import acceptable_root, handoff_root
 from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import CLOSE_TIMEOUT_SECONDS, DRAIN_TIMEOUT_SECONDS
@@ -1235,6 +1236,7 @@ def build_rollover_pass(
     enabled: Callable[[], Awaitable[bool]],
     project_paths: Mapping[ProjectId, Path],
     adopt_templates: Mapping[ProfileId, str],
+    note_rollable: frozenset[ProfileId] = frozenset(),
     notify: Callable[[RolloverReport], Awaitable[None]] | None = None,
     operation: Callable[[], AbstractAsyncContextManager[object]] = nullcontext,
     worktrees: WorktreeStore | None = None,
@@ -1302,6 +1304,9 @@ def build_rollover_pass(
         rollovers,
         FileHandoffEnvelopes(),
         adopt_templates=adopt_templates,
+        # The owner's "Rollover with a note" (BL-119): which profiles may, and their notes.
+        note_rollable=note_rollable,
+        notes=FileHandoffNotes(),
         sessions=sessions_seen,
         handoff_root=lambda project: handoff_root(project_paths.get(project)),
         worktree_roots=worktree_roots,

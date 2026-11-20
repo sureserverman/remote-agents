@@ -37,6 +37,13 @@ TRUSTED_WAITING = "trusted: waiting for an idle predecessor"
 predecessor working (DEC-125). Its time starts the wait for idle; a row reads it to say so."""
 
 
+NOTE_ASKED = "note requested"
+"""The history detail a note rollover's pass records *before* typing its request (BL-119):
+present, the request is never typed again (DEC-004), and its time starts the note's
+patience. A row reads it to say the rollover waits for the note rather than for an idle
+session."""
+
+
 class IllegalRolloverMove(ValueError):
     """An `advance` the domain matrix does not allow; nothing was written."""
 
@@ -232,9 +239,21 @@ class RolloverStore(Protocol):
         """
         ...
 
-    async def note(self, rollover_id: str, detail: str, *, at: datetime) -> None:
+    async def note(
+        self,
+        rollover_id: str,
+        detail: str,
+        *,
+        at: datetime,
+        expected_state: RolloverState | None = None,
+    ) -> None:
         """Append a history row recording something that happened without a move -- a restart
-        finding the rollover where it stands. Nothing else changes; `LookupError` for no row."""
+        finding the rollover where it stands. Nothing else changes; `LookupError` for no row.
+
+        With `expected_state`, the row is appended only while the rollover is in it, judged in
+        the same transaction; otherwise `IllegalRolloverMove` and nothing is written. That is
+        what a record-before-act needs when another writer (the owner's cancel) may move the
+        rollover between the caller's read and its record."""
         ...
 
     async def get(self, rollover_id: str) -> Rollover | None: ...

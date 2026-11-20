@@ -44,6 +44,9 @@ code it is recorded under:
   workflow answered it; it is never written again (DEC-004)
 - `FAILED: request-unanswered` -- no `ready` answered the owner's request within
   `REQUEST_PATIENCE` of asking (DEC-119)
+- `FAILED: note-unwritten` -- a note rollover's session wrote no note within `NOTE_PATIENCE`
+  of being asked; `FAILED: note-refused` -- what it left at the note's name is not a note (a
+  link, a directory, empty, over 32 KiB, another user's)
 - `STOP_FAILED` -- the graceful stop was not sent or did not verify; its typed cause is the
   code: `predecessor-not-idle` when the pane was not idle under the stop's own key lock or for
   `NOT_IDLE_PATIENCE` before it, `stop-unconfirmed` when a restart found the stop in flight.
@@ -93,6 +96,7 @@ from remote_agents.domain.rollover import (
     SUCCESSOR_UNKNOWN,
     TERMINAL,
     RecoveryFacts,
+    RolloverKind,
     RolloverState,
     may_stop_predecessor,
     recovery_action,
@@ -103,7 +107,9 @@ from remote_agents.ports.handoff_envelopes import (
     HandoffEnvelopes,
     HandoffEvent,
 )
+from remote_agents.ports.handoff_notes import HandoffNotes, NoteReading
 from remote_agents.ports.rollover_store import (
+    NOTE_ASKED,
     REQUEST_WRITTEN,
     TRUST_HOLD,
     TRUSTED_WAITING,
@@ -174,6 +180,20 @@ NO_HANDOFF_ROOT = "no-handoff-root"
 REQUEST_UNWRITTEN = "request-unwritten"
 REQUEST_LOST = "request-lost"
 REQUEST_UNANSWERED = "request-unanswered"
+NOTE_UNWRITTEN = "note-unwritten"
+NOTE_REFUSED = "note-refused"
+
+NOTE_PATIENCE = timedelta(minutes=10)
+"""How long a note rollover waits for the agent's note, counted from the typing (BL-119)."""
+
+NOTE_REQUEST = (
+    "Write a handoff note for a fresh session to `{path}`: what this session was doing, what is"
+    " done, what is next, and what the next session must not repeat. Write only that file,"
+    " then stop."
+)
+"""The one text a note rollover types into the predecessor, after the owner's press (OD-2,
+amending DEC-099). Its only field is the note's path, which the service builds from its own
+root and the rollover's own id: no byte of it comes from the session or the agent."""
 
 #: What a booting agent shows on its way to an idle composer, so the template waits it out.
 _BOOTING = frozenset(
@@ -275,6 +295,8 @@ class RolloverPass:
         handoff_versions: Callable[[SessionId], Awaitable[tuple[int, ...]]] | None = None,
         continuation_permissions: Callable[[SessionRecord], Awaitable[PermissionPreset | None]]
         | None = None,
+        note_rollable: frozenset[ProfileId] = frozenset(),
+        notes: HandoffNotes | None = None,
     ) -> None:
         self._resolve_legacy_destination = resolve_legacy_destination
         self._handoff_versions = handoff_versions
@@ -312,7 +334,13 @@ class RolloverPass:
         #: the act to finish (BL-130). Persisted states never move back, so this is the only
         #: order in which a shutdown cannot spend a rollover.
         self._operation = operation
+        #: The profiles whose sessions may roll over with a note (their verticals'
+        #: `note_rollover`), and the note files themselves. Without `notes` no note rollover
+        #: is ever asked for: its rows fail `not-rollable`.
+        self._note_rollable = note_rollable
+        self._notes = notes
         self._recovered = False
+        self._notes_recovered = False
 
     @property
     def adopt_templates(self) -> Mapping[ProfileId, str]:
@@ -322,14 +350,16 @@ class RolloverPass:
     async def run_once(self) -> None:
         """Walk every rollover one step, each from what is persisted now.
 
-        With the switch off nothing is opened, launched, typed or stopped, and no row is
-        written; the pass only withdraws requests no open rollover stands behind.
+        With the switch off no workflow rollover is opened, launched, typed or stopped, and
+        none of their rows is written; the pass walks only note rollovers, which the owner's
+        own press asked for, and withdraws requests no open rollover stands behind.
         """
         seen = await self._look()
-        if await self._enabled():
+        enabled = await self._enabled()
+        if enabled:
             if not self._recovered:
-                await self._note_restart(seen)
-                self._recovered = True
+                await self._note_restart(seen, notes=not self._notes_recovered)
+                self._recovered = self._notes_recovered = True
             frozen_roots = [
                 r.source_root
                 for r in await self._store.open_rollovers()
@@ -347,25 +377,32 @@ class RolloverPass:
                     _LOG.exception(
                         "handoff envelopes in %s could not be read; tried next pass", root
                     )
-            for rollover in await self._store.open_rollovers():
-                try:
-                    await self._step(rollover, seen)
-                except IllegalRolloverMove:
-                    # Another writer moved it since it was read (the owner's cancel); its move
-                    # stands, and the next pass reads where it now is.
-                    _LOG.info("rollover %s moved under this pass; left as it is", rollover.id)
-                except MutationsDraining:
-                    # The service is stopping and the gate is shut. Nothing was persisted for
-                    # this step, and every later rollover would meet the same gate.
-                    _LOG.debug("the rollover pass met the shutdown drain; resumed next start")
-                    break
-                except Exception:
-                    # One rollover's fault costs that rollover this pass, never the others'.
-                    # It is not marked failed: what went wrong is unknown, and every step is
-                    # taken again from what is persisted.
-                    _LOG.exception(
-                        "rollover %s could not be walked; it is tried next pass", rollover.id
-                    )
+        elif not self._notes_recovered:
+            await self._note_restart(seen, workflows=False)
+            self._notes_recovered = True
+        # A note rollover is the owner's press, which is its own consent for that one rollover
+        # (OD-2): it is walked whatever the switch says. A workflow rollover only with it on.
+        for rollover in await self._store.open_rollovers():
+            if not enabled and rollover.kind is not RolloverKind.NOTE:
+                continue
+            try:
+                await self._step(rollover, seen)
+            except IllegalRolloverMove:
+                # Another writer moved it since it was read (the owner's cancel); its move
+                # stands, and the next pass reads where it now is.
+                _LOG.info("rollover %s moved under this pass; left as it is", rollover.id)
+            except MutationsDraining:
+                # The service is stopping and the gate is shut. Nothing was persisted for
+                # this step, and every later rollover would meet the same gate.
+                _LOG.debug("the rollover pass met the shutdown drain; resumed next start")
+                break
+            except Exception:
+                # One rollover's fault costs that rollover this pass, never the others'.
+                # It is not marked failed: what went wrong is unknown, and every step is
+                # taken again from what is persisted.
+                _LOG.exception(
+                    "rollover %s could not be walked; it is tried next pass", rollover.id
+                )
         await self._withdraw_stale_requests(seen)
 
     async def _looks_idle(self, session_id: SessionId) -> bool:
@@ -377,11 +414,15 @@ class RolloverPass:
             _LOG.exception("could not look at %s; read as not idle", session_id)
             return False
 
-    async def _note_restart(self, seen: _Seen) -> None:
+    async def _note_restart(
+        self, seen: _Seen, *, workflows: bool = True, notes: bool = True
+    ) -> None:
         """This pass is new, so every rollover already open was left by one that is gone: say
         so on each, with what the restart table makes of it (brief §26), before it is walked.
         The walk itself agrees with the table; the row is what lets the audit see a restart."""
         for rollover in await self._store.open_rollovers():
+            if not (notes if rollover.kind is RolloverKind.NOTE else workflows):
+                continue
             facts = RecoveryFacts(
                 has_successor_id=rollover.successor_session_id is not None,
                 successor_alive=seen.up(rollover.successor_session_id),
@@ -405,7 +446,9 @@ class RolloverPass:
         roots: dict[SessionId, Path] = {}
         defaults: dict[SessionId, Path] = {}
         for record in sessions.values():
-            if record.profile_id not in self._rollable:
+            if record.profile_id not in self._rollable and record.profile_id not in (
+                self._note_rollable
+            ):
                 continue
             if record.session_id in bound:
                 root = bound[record.session_id]
@@ -614,6 +657,11 @@ class RolloverPass:
             except DestinationRefused as error:
                 await self._fail(rollover, seen, error.code)
                 return
+        if rollover.kind is RolloverKind.NOTE:
+            match rollover.state:
+                case _S.REQUESTED:
+                    await self._ask_for_note(rollover, seen)
+            return
         match rollover.state:
             case _S.REQUESTED:
                 await self._signal(rollover, seen)
@@ -682,10 +730,96 @@ class RolloverPass:
             # the file removed or replaced by someone else. Never written twice (DEC-004).
             await self._fail(rollover, seen, REQUEST_LOST)
 
+    async def _ask_for_note(self, rollover: Rollover, seen: _Seen) -> None:
+        """The owner asked for a rollover with a note: once the agent is idle, type it
+        `NOTE_REQUEST` once, recorded first (DEC-004); then wait for its note and an idle
+        agent, within `NOTE_PATIENCE` of the typing, and hand the rollover to a successor.
+
+        Nothing is typed into a session that is not idle -- busy, composing, on a dialog or on
+        a screen nothing recognises -- and one not idle for `NOT_IDLE_PATIENCE` of the press
+        is given up. No request is ever written for the workflow: the note is this kind's own
+        channel, and `request.json` stays the workflow's.
+        """
+        predecessor = seen.sessions.get(rollover.predecessor_session_id)
+        if predecessor is None or predecessor.state is not SessionState.RUNNING:
+            await self._fail(rollover, seen, PREDECESSOR_GONE)
+            return
+        if predecessor.profile_id not in self._note_rollable or self._notes is None:
+            await self._fail(rollover, seen, NOT_ROLLABLE)
+            return
+        root = seen.root_of(rollover)
+        if root is None:
+            await self._fail(rollover, seen, NO_HANDOFF_ROOT)
+            return
+        if rollover.source_root is None:
+            rollover = await self._store.freeze(rollover.id, root, None, at=self._now())
+        asked_at = next(
+            (e.created_at for e in await self._store.events(rollover.id) if e.detail == NOTE_ASKED),
+            None,
+        )
+        if asked_at is None:
+            await self._type_note_request(rollover, seen, root)
+            return
+        reading = self._notes.read(root, rollover.id)
+        if reading is NoteReading.WRITTEN and await self._looks_idle(
+            rollover.predecessor_session_id
+        ):
+            await self._store.advance(
+                rollover.id,
+                _S.HANDOFF_READY,
+                at=self._now(),
+                detail="note written",
+                expected_from=_S.REQUESTED,
+            )
+        elif self._now() - asked_at >= NOTE_PATIENCE:
+            # Said as what was found: no note, a note that is not one, or a note written by a
+            # session that never went idle again.
+            code = {
+                NoteReading.ABSENT: NOTE_UNWRITTEN,
+                NoteReading.REFUSED: NOTE_REFUSED,
+                NoteReading.WRITTEN: PREDECESSOR_NOT_IDLE,
+            }[reading]
+            await self._fail(rollover, seen, code)
+
+    async def _type_note_request(self, rollover: Rollover, seen: _Seen, root: Path) -> None:
+        assert self._notes is not None  # checked by the caller
+        if not await self._looks_idle(rollover.predecessor_session_id):
+            if self._now() - rollover.requested_at >= NOT_IDLE_PATIENCE:
+                await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
+            return
+        path = self._notes.note_path(root, rollover.id)
+        if path is None or not _typable(str(path)):
+            # A root a writer reported is a folder name the session chose: one that would put a
+            # control character or a backtick into the typed request is never typed.
+            await self._fail(rollover, seen, NO_HANDOFF_ROOT, "the note's path cannot be typed")
+            return
+        if not self._notes.prepare(root):
+            await self._fail(rollover, seen, NO_HANDOFF_ROOT, "the handoff folder")
+            return
+        # Recorded before the keys, so a restart part-way never types it twice (DEC-004). A
+        # cancel that landed since this pass read the row refuses the record in the store's
+        # own statement (`IllegalRolloverMove`, which the walk logs): nothing is typed.
+        await self._store.note(rollover.id, NOTE_ASKED, at=self._now(), expected_state=_S.REQUESTED)
+        try:
+            delivery = await self._send(rollover.predecessor_session_id, _note_request(path))
+        except Exception:
+            _LOG.exception("typing the note request into %s failed partway", rollover.id)
+            await self._fail(rollover, seen, NOT_TYPED, DeliveryVerdict.UNCONFIRMED.value)
+            return
+        verdict = delivery_verdict(delivery)
+        if verdict is not DeliveryVerdict.SENT:
+            reason = delivery.reason.value if delivery.reason is not None else verdict.value
+            await self._fail(rollover, seen, NOT_TYPED, reason)
+
     async def _consume_finished(self, rollover: Rollover, seen: _Seen) -> None:
         """Only a recorded, still outstanding v2 request may finish without a successor."""
         root = rollover.source_root
-        if root is None or rollover.reason != "owner" or self._handoff_versions is None:
+        if (
+            root is None
+            or rollover.reason != "owner"
+            or rollover.kind is not RolloverKind.WORKFLOW
+            or self._handoff_versions is None
+        ):
             return
         if 2 not in await self._handoff_versions(rollover.predecessor_session_id):
             return
@@ -726,7 +860,11 @@ class RolloverPass:
         checkout, and each owner-asked rollover holds it from its write until it ends, so a
         later one waits rather than overwriting it."""
         for other in await self._store.open_rollovers():
-            if other.reason == "owner" and seen.root_of(other) == root:
+            if (
+                other.reason == "owner"
+                and other.kind is RolloverKind.WORKFLOW
+                and seen.root_of(other) == root
+            ):
                 return other
         return None
 
@@ -1185,6 +1323,11 @@ class RolloverPass:
         root = seen.root_of(rollover)
         if root is None:
             return
+        if rollover.kind is RolloverKind.NOTE:
+            # A note rollover wrote no request and holds no envelope: only its note goes.
+            if self._notes is not None:
+                self._notes.discard(root, rollover.id)
+            return
         if rollover.handoff_id is not None:
             self._envelopes.discard(root, rollover.handoff_id)
         if any(
@@ -1212,7 +1355,10 @@ class RolloverPass:
         move and its clean-up -- leaves none behind."""
         open_for = {r.predecessor_session_id for r in await self._store.open_rollovers()}
         for record in seen.sessions.values():
-            if record.profile_id not in self._rollable or record.session_id in open_for:
+            if record.session_id in open_for or (
+                record.profile_id not in self._rollable
+                and record.profile_id not in self._note_rollable
+            ):
                 continue
             try:
                 latest = await self._store.latest_for(record.session_id, include_cancelled=True)
@@ -1229,6 +1375,17 @@ class RolloverPass:
                 _LOG.exception(
                     "request cleanup for %s postponed to the next pass", record.session_id
                 )
+
+
+def _typable(text: str) -> bool:
+    """Whether `text` can sit inside the typed request as it is: printable, one line, and no
+    backtick to close the request's own quoting."""
+    return text.isprintable() and "`" not in text
+
+
+def _note_request(path: Path) -> str:
+    """`NOTE_REQUEST` with the note's path, the one field the service fills in."""
+    return NOTE_REQUEST.format(path=path)
 
 
 def _request_id(rollover: Rollover) -> str:

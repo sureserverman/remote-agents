@@ -16,6 +16,7 @@ from remote_agents.adapters.agents.registry import (
     profile_reported_kinds,
     profile_trust_dialogs,
     profiles_keeping_a_draft,
+    profiles_that_roll_over_with_a_note,
     profiles_watched_by_title,
     profiles_with_finished_events,
     provider_descriptors,
@@ -385,7 +386,8 @@ def _private_boundary(
         limit_stop_outcomes=limit_stops,
         # The rollover pass (DEC-115), built beside the loop that runs it. Wired only where the
         # backend has sessions, the switch and the rollover rows, which production always does;
-        # the switch, read afresh each pass, is what keeps it idle until the owner turns it on.
+        # the switch, read afresh each pass, keeps workflow rollovers idle until the owner turns
+        # it on. A note rollover is walked whatever it says: the owner's press asked for it.
         thread_binder=thread_binder,
         binding_notifier=boundary.binding_notifier,
         permission_apply=permission_apply,
@@ -403,6 +405,7 @@ def _private_boundary(
                 enabled=backend.auto_rollover.read,
                 project_paths=projects.paths,
                 adopt_templates=adopt_templates(descriptors),
+                note_rollable=profiles_that_roll_over_with_a_note(descriptors),
                 notify=(
                     None
                     if boundary.rollover_notifier is None
