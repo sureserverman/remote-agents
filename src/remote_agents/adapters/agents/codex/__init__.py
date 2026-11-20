@@ -161,4 +161,7 @@ def descriptor() -> ProviderDescriptor:
         # staged-planning's Codex planning plugin, reached as a `$` skill mention:
         # Codex declares no command menu, so a `/` command would be refused unsent.
         adopt_template="$planning:executing-plans --adopt-handoff {handoff_id}",
+        # Asked to write a handoff note at a path, then to read one (BL-119); measured by
+        # Sub-plan 5 Task 2.6 on a real session.
+        note_rollover=True,
     )

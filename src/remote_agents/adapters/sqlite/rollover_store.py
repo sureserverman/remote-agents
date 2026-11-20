@@ -14,7 +14,13 @@ from uuid import uuid4
 
 from remote_agents.adapters.sqlite.rollover_targets import decode, encode
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.domain.rollover import NEEDS_SUCCESSOR, TERMINAL, RolloverState, is_legal
+from remote_agents.domain.rollover import (
+    NEEDS_SUCCESSOR,
+    TERMINAL,
+    RolloverKind,
+    RolloverState,
+    is_legal,
+)
 from remote_agents.ports.rollover_store import (
     REQUEST_WRITTEN,
     TRUST_HOLD,
@@ -27,7 +33,7 @@ from remote_agents.ports.rollover_store import (
 _COLUMNS = (
     "rollover_id, handoff_id, predecessor_session_id, successor_session_id, project_id,"
     " profile_id, reason, plan, state, failure_code, failure_detail, requested_at, updated_at,"
-    " source_root, target_json"
+    " source_root, target_json, kind"
 )
 _OPEN = "state NOT IN ({})".format(", ".join(f"'{state.value}'" for state in sorted(TERMINAL)))
 _HOLDING = (RolloverState.FAILED, RolloverState.STOP_FAILED, RolloverState.WORKFLOW_FINISHED)
@@ -415,6 +421,7 @@ class SQLiteRolloverStore:
         at: datetime,
         source_root: Path | None = None,
         target: RolloverTarget | None = None,
+        kind: RolloverKind = RolloverKind.WORKFLOW,
     ) -> Rollover | None:
         rollover_id = uuid4().hex
         stamp = _stored(at)
@@ -422,7 +429,7 @@ class SQLiteRolloverStore:
             with self._connection:
                 self._connection.execute(
                     f"INSERT INTO rollovers({_COLUMNS})"
-                    " VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)",
+                    " VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)",
                     (
                         rollover_id,
                         handoff_id,
@@ -436,6 +443,7 @@ class SQLiteRolloverStore:
                         stamp,
                         None if source_root is None else str(source_root),
                         encode(target),
+                        kind.value,
                     ),
                 )
                 self._append(rollover_id, None, state, None, None, stamp)
@@ -544,6 +552,7 @@ def _rollover(row: tuple) -> Rollover:
         updated_at,
         source_root,
         target_json,
+        kind,
     ) = row
     return Rollover(
         id=rollover_id,
@@ -561,6 +570,7 @@ def _rollover(row: tuple) -> Rollover:
         updated_at=datetime.fromisoformat(updated_at),
         source_root=None if source_root is None else Path(source_root),
         target=decode(target_json),
+        kind=RolloverKind(kind),
     )
 
 

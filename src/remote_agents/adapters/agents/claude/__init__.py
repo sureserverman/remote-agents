@@ -161,4 +161,7 @@ def descriptor(
         limit_screen=LIMIT_SCREEN,
         # The planning plugin is a Claude Code plugin, reached as a `/` command.
         adopt_template="/planning:executing-plans --adopt-handoff {handoff_id}",
+        # Asked to write a handoff note at a path, then to read one (BL-119); measured by
+        # Sub-plan 5 Task 2.6 on a real session.
+        note_rollover=True,
     )

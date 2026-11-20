@@ -522,6 +522,16 @@ class ProviderDescriptor:
     strings do, so it is typed rather than loose like its capability neighbours.
     """
 
+    note_rollover: bool = False
+    """Whether this provider's sessions may roll over with a note: the agent is asked to write a
+    handoff note and a fresh session is asked to read it (BL-119, DEC-122).
+
+    A flag, not a capability: `False` is the declared answer, never DEC-061's absence, so it
+    admits no `None`, as `reserved_keys` admits none. Claude and Codex declare `True`; a
+    provider whose agent was never measured writing the note where asked declares `False`, and
+    neither surface offers the action on its sessions.
+    """
+
 
 def capability_fields() -> tuple[str, ...]:
     """Which of this record's fields are capabilities, as opposed to identity.

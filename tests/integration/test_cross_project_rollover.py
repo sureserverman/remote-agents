@@ -831,20 +831,40 @@ async def test_schema24_preserves_populated_legacy_state_history_order_and_const
     connection = open_database(tmp_path / "old.sqlite3", migrations=MIGRATIONS[:23])
     predecessor = SessionId.new()
     store = SQLiteRolloverStore(connection)
-    row = await store.request(
-        predecessor,
-        project_id=ProjectId("orchard"),
-        profile_id=ProfileId("codex"),
-        at=datetime.now(UTC),
-    )
-    await store.freeze(row.id, tmp_path, None, at=row.updated_at)
-    await store.record_request(row.id, at=row.updated_at)
+    # Seeded as schema 23's SQL, not through the store: today's store writes columns a later
+    # migration adds (`kind`, migration 27), so it cannot write a schema-23 file. The rows are
+    # what `request`, `freeze` and `record_request` wrote at schema 23.
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f+00:00")
+    with connection:
+        connection.execute(
+            "INSERT INTO rollovers(rollover_id, handoff_id, predecessor_session_id,"
+            " successor_session_id, project_id, profile_id, reason, plan, state, failure_code,"
+            " failure_detail, requested_at, updated_at, source_root, target_json)"
+            " VALUES ('legacy', NULL, ?, NULL, 'orchard', 'codex', 'owner', NULL, 'requested',"
+            " NULL, NULL, ?, ?, ?, NULL)",
+            (str(predecessor), stamp, stamp, str(tmp_path)),
+        )
+        for from_state, detail in (
+            (None, None),
+            ("requested", "continuation destination frozen"),
+            ("requested", "request written"),
+        ):
+            connection.execute(
+                "INSERT INTO rollover_events(rollover_id, from_state, to_state, failure_code,"
+                " detail, created_at) VALUES ('legacy', ?, 'requested', NULL, ?, ?)",
+                (from_state, detail, stamp),
+            )
     before = [tuple(r) for r in connection.execute("SELECT rowid, * FROM rollovers")]
     events = [tuple(r) for r in connection.execute("SELECT * FROM rollover_events")]
     apply_migrations(connection)
-    assert [tuple(r) for r in connection.execute("SELECT rowid, * FROM rollovers")] == before
+    after = [tuple(r) for r in connection.execute("SELECT rowid, * FROM rollovers")]
+    # Migration 27 appends `kind`, backfilled `workflow`; every column before it is unchanged.
+    assert [r[: len(before[0])] for r in after] == before
+    assert [r[len(before[0]) :] for r in after] == [("workflow",)]
     assert [tuple(r) for r in connection.execute("SELECT * FROM rollover_events")] == events
     assert not connection.execute("PRAGMA foreign_key_check").fetchall()
+    row = await store.get("legacy")
+    assert row is not None
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         connection.execute("UPDATE rollover_events SET detail='changed'")
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):

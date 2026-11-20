@@ -19,7 +19,7 @@ from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import PermissionPreset
-from remote_agents.domain.rollover import RolloverState
+from remote_agents.domain.rollover import RolloverKind, RolloverState
 from remote_agents.ports.handoff_envelopes import HandoffDestination
 
 REQUEST_WRITTEN = "request written"
@@ -125,6 +125,9 @@ class Rollover:
     updated_at: datetime
     source_root: Path | None = None
     target: RolloverTarget | None = None
+    kind: RolloverKind = RolloverKind.WORKFLOW
+    """`note` for the owner's plan-less press; every row stored before migration 27 is a
+    `workflow` one."""
 
 
 @dataclass(frozen=True, slots=True)

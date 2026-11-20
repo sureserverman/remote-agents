@@ -589,6 +589,16 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        27,
+        # What opened a rollover: a plan's handoff (`workflow`) or the owner's plan-less press
+        # (`note`). Every row before this one is a workflow rollover, so the default backfills
+        # it, and older code that never names the column keeps reading and writing (OD-6).
+        """
+        ALTER TABLE rollovers ADD COLUMN kind TEXT NOT NULL DEFAULT 'workflow'
+            CHECK (kind IN ('workflow', 'note'));
+        """,
+    ),
 )
 """Migration 14 takes the surface's bookkeeping out of the watched store.
 

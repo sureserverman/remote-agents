@@ -121,4 +121,6 @@ def descriptor(
         # No handoff writer is ported to Cursor (engineering-skills DEC-045), so nothing could
         # adopt a handoff: its sessions never roll over (BL-123).
         adopt_template=None,
+        # Never measured writing a handoff note where asked (BL-119), so not offered.
+        note_rollover=False,
     )

@@ -69,6 +69,11 @@ import typing
 #: `2026-11-18-backlog-sweep-sub-01-codex-sandbox-plan.md` (Stage 1 gate, BL-147, DEC-140),
 #: which grew the capability half: `daemon` is the provider's turn-running process outside the
 #: pane, whose AppArmor label `doctor` reads. A real `None`: only Codex runs turns in a daemon.
+#: It moved 17 -> 18 on 2026-11-20 by the plan
+#: `2026-11-18-backlog-sweep-sub-05-context-and-planless-rollover-plan.md` (Task 2.1, BL-119),
+#: which grew neither half: `note_rollover` says whether a provider's sessions may roll over with
+#: a note. A fourth category, the flag, pinned in `test_note_rollover_is_declared.py`: a plain
+#: `bool` defaulting to `False`, because "not offered" is a declared answer, not an absence.
 _IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
     "permission_presets",
@@ -86,6 +91,7 @@ _CAPABILITY_FIELDS = (
     "action_required_title",
 )
 _RESERVATION_FIELDS = ("reserved_keys",)
+_FLAG_FIELDS = ("note_rollover",)
 
 
 def _descriptor_fields() -> tuple[str, ...]:
@@ -101,7 +107,12 @@ def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
     A thirteenth is a decision.
     """
     fields = _descriptor_fields()
-    expected = len(_IDENTITY_FIELDS) + len(_CAPABILITY_FIELDS) + len(_RESERVATION_FIELDS)
+    expected = (
+        len(_IDENTITY_FIELDS)
+        + len(_CAPABILITY_FIELDS)
+        + len(_RESERVATION_FIELDS)
+        + len(_FLAG_FIELDS)
+    )
     assert len(fields) == expected, (
         f"`ProviderDescriptor` now declares {len(fields)} fields, not {expected}. That may "
         "be fine — but every field is something a frontend reads as declared rather than "
@@ -112,7 +123,9 @@ def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
         "the identity fields must come first and keep their order: all are required, and a "
         "required field declared after a defaulted one is a dataclass the interpreter refuses"
     )
-    assert set(fields[len(_IDENTITY_FIELDS) :]) == set(_CAPABILITY_FIELDS + _RESERVATION_FIELDS)
+    assert set(fields[len(_IDENTITY_FIELDS) :]) == set(
+        _CAPABILITY_FIELDS + _RESERVATION_FIELDS + _FLAG_FIELDS
+    )
 
 
 def test_no_identity_field_is_optional() -> None:

@@ -30,6 +30,18 @@ class RolloverState(StrEnum):
     WORKFLOW_FINISHED = "workflow_finished"
 
 
+class RolloverKind(StrEnum):
+    """What opened a rollover; persisted, so values are stable strings.
+
+    `workflow`: a plan's handoff, answered by the planning workflow's `ready` envelope.
+    `note`: the owner's press on a session that runs no plan; the agent writes a note and the
+    successor reads it. Both share the state matrix below.
+    """
+
+    WORKFLOW = "workflow"
+    NOTE = "note"
+
+
 SUCCESSOR_UNKNOWN = "successor-unknown"
 """Failure code when a restart finds a launch in flight with no recorded successor."""
 
