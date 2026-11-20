@@ -776,10 +776,12 @@ def test_the_layout_hooks_reapply_the_layout_on_attach_and_on_resize() -> None:
 
     hooks = console_layout_hook_args(60, (("%5", 31),))
 
+    # Guarded: on a folded (zoomed) console the layout would unzoom it, so it is skipped there.
     command = (
+        'if-shell -F "#{?window_zoomed_flag,,1}" "'
         "set-window-option -t ra-console: main-pane-width 60% ; "
         "select-layout -t ra-console: main-vertical ; "
-        "resize-pane -t %5 -y 31%"
+        'resize-pane -t %5 -y 31%"'
     )
     assert hooks == (
         ("set-hook", "-t", "ra-console:", "client-attached[0]", command),

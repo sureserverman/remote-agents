@@ -1448,6 +1448,12 @@ def console_layout_args(main_percent: int, column: Sequence[tuple[str, int]]):
     )
 
 
+#: True (non-empty) only while the target's window is not zoomed -- a folded console is zoomed,
+#: and every `resize-pane` or `select-layout` unzooms it. The guard of `pane_height_args` and
+#: of the layout hooks.
+_UNZOOMED = "#{?window_zoomed_flag,,1}"
+
+
 def pane_height_args(pane_id: str, rows: int) -> tuple[str, ...]:
     """Return the argv suffix resizing one decoded pane to *rows* rows (`resize-pane -y`), but
     only while its window is not zoomed.
@@ -1469,7 +1475,7 @@ def pane_height_args(pane_id: str, rows: int) -> tuple[str, ...]:
         "-F",
         "-t",
         target,
-        "#{?window_zoomed_flag,,1}",
+        _UNZOOMED,
         f"resize-pane -t {target} -y {rows}",
     )
 
@@ -1489,9 +1495,14 @@ def console_layout_hook_args(
     nothing but `%` and digits reaches the hook's command string (DEC-001). The cost: a pane
     the owner resized by hand goes back to the layout on the next resize.
     """
-    command = " ; ".join(
+    layout = " ; ".join(
         " ".join(arguments) for arguments in console_layout_args(main_percent, column)
     )
+    # Not on a folded console. `select-layout` and `resize-pane` unzoom the window (tmux 3.4,
+    # measured 2026-11-20), so a terminal resize or an attach while folded used to undo the
+    # fold behind a record still saying folded; the unfold slides to the window's proportions
+    # itself. `if-shell -F` tests a format and runs no shell, and the layout holds no `"`.
+    command = f'if-shell -F "{_UNZOOMED}" "{layout}"'
     # `window-resized`, not `client-resized`: measured on 3.4, the client hook runs before the
     # window takes the client's new size, and the proportional rescale after it wins (69/30 at
     # 100 columns where the layout says 59/40). The window hook runs once the size is final.
