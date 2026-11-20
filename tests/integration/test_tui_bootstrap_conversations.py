@@ -368,6 +368,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # status-line hop keeps (DEC-146). Called by the service after each reconciliation;
         # a declared field for `close_usage_readers`' reason, and no surface renders it.
         "forget_usage_records",
+        # Each session's last finished-turn words, one store read per listing (BL-122); both
+        # surfaces draw it as `agent said: ...`, and a host without it draws no such line.
+        "last_words",
         "max_label_length",
     }
 

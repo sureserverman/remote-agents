@@ -1949,3 +1949,40 @@ async def test_no_hint_row_names_the_session_function_keys() -> None:
 
 async def _true() -> bool:
     return True
+
+
+# --- Sub-plan 5 Task 1.3: the selected row's last words, in the pane's subtitle --------------
+
+
+async def test_the_pane_subtitle_says_what_the_selected_session_s_agent_said() -> None:
+    """The console's list has one line per row, so the selected row's words go below it."""
+    reads: list[tuple[str, ...]] = []
+
+    async def last_words(session_ids):
+        reads.append(tuple(session_ids))
+        return {str(_SESSION): "Tests pass; pushed the branch"}
+
+    records = (_record(), _record(_OTHER, "other"))
+    app = SessionsPane(_context(records, last_words=last_words))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 0
+        await pilot.pause()
+        first = str(choices.border_subtitle)
+        choices.highlighted = 1
+        await pilot.pause()
+        second = str(choices.border_subtitle)
+
+    assert first == "agent said: Tests pass; pushed the branch"
+    assert second == ""
+    # One read for the whole listing, never one per row or per cursor move.
+    assert reads and all(len(read) == 2 for read in reads)
+
+
+async def test_without_a_reader_the_pane_subtitle_stays_empty() -> None:
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert not str(choices.border_subtitle or "")

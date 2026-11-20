@@ -32,6 +32,7 @@ from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
+from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.database import watched_paths
 from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
 from remote_agents.adapters.sqlite.permission_bindings import SQLitePermissionBindings
@@ -650,6 +651,8 @@ def compose_backend(
         limits=_limits_reader(provider_usage),
         close_usage_readers=provider_usage.aclose,
         forget_usage_records=_usage_record_sweep(backend_store, provider_usage),
+        # The feed's own store, on the same connection: one query answers a whole listing.
+        last_words=SQLiteActivityStore(connection).last_words,
         # Over the same connection as the session store: schedules are domain rows, so a change
         # wakes the store watcher on both surfaces (DEC-090). Which profiles exist, and whether
         # each can take a `/` command, is the send's own fold of the descriptors (DEC-070,

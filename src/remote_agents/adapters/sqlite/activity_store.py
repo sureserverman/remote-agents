@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from remote_agents.ports.agent_activity import (
@@ -162,6 +163,36 @@ class SQLiteActivityStore:
             return ActivityKind(row[0])
         except ValueError:
             return None
+
+    async def last_words(self, session_ids: Sequence[str]) -> dict[str, str]:
+        """Each session's newest finished-turn words the agent itself reported, in one query.
+
+        A finished turn is a `COMPLETED` row; only `REPORTED` ones count, because an inferred
+        row is this service's guess and the line these feed is the agent's own claim (BL-122).
+        A later question or limit stop does not hide the last finished turn's words. Rows with
+        no words are skipped, and a session with none is absent from the answer. The detail
+        was bounded to one line at the drain (DEC-037), so nothing here truncates it.
+        """
+        wanted = tuple(dict.fromkeys(session_ids))
+        if not wanted:
+            return {}
+        marks = ",".join("?" * len(wanted))
+        rows = self._connection.execute(
+            f"""
+            SELECT activity.session_id, activity.detail
+            FROM agent_activity AS activity
+            JOIN (
+                SELECT session_id, MAX(activity_id) AS newest
+                FROM agent_activity
+                WHERE session_id IN ({marks})
+                    AND kind = ? AND confidence = ?
+                    AND detail IS NOT NULL AND detail != ''
+                GROUP BY session_id
+            ) AS latest ON activity.activity_id = latest.newest
+            """,  # noqa: S608 -- only `?` placeholders are interpolated, one per session id
+            (*wanted, ActivityKind.COMPLETED.value, ActivityConfidence.REPORTED.value),
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
 
     async def newest_stop_detail(self, session_id: str) -> str | None:
         """The words of the session's newest recorded limit stop, or `None` with none."""

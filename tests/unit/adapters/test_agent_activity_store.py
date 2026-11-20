@@ -218,3 +218,56 @@ async def test_a_session_s_newest_stop_detail_is_its_last_stop_s_words(store) ->
         )
     )
     assert await store.newest_stop_detail(session) == "at 11:38 PM"
+
+
+# --- Sub-plan 5 Task 1.3: each session's last words, in one read ------------------------------
+
+
+def _said(session: str, kind: ActivityKind, detail: str | None, confidence=None) -> AgentActivity:
+    return AgentActivity(
+        session,
+        kind,
+        detail,
+        datetime.now(UTC),
+        confidence or ActivityConfidence.REPORTED,
+    )
+
+
+async def test_last_words_are_the_newest_reported_finished_turn_per_session(store) -> None:
+    await store.append(_said("a", ActivityKind.COMPLETED, "first turn done"))
+    await store.append(_said("a", ActivityKind.COMPLETED, "Tests pass; pushed the branch"))
+    # A later question does not erase what the last finished turn said.
+    await store.append(_said("a", ActivityKind.NEEDS_ANSWER, "push to main?"))
+    await store.append(_said("b", ActivityKind.NEEDS_ANSWER, "which branch?"))
+    await store.append(_said("c", ActivityKind.COMPLETED, "guessed", ActivityConfidence.INFERRED))
+    await store.append(_said("d", ActivityKind.COMPLETED, None))
+    await store.append(_said("e", ActivityKind.COMPLETED, ""))
+    await store.append(_said("f", ActivityKind.LIMIT_REACHED, "limit hit"))
+
+    words = await store.last_words(("a", "b", "c", "d", "e", "f", "never-ran"))
+
+    assert words == {"a": "Tests pass; pushed the branch"}
+
+
+async def test_last_words_is_one_query_for_twenty_sessions(store) -> None:
+    for index in range(20):
+        await store.append(_said(f"s{index}", ActivityKind.COMPLETED, f"turn {index}"))
+    statements: list[str] = []
+    store._connection.set_trace_callback(statements.append)
+    try:
+        words = await store.last_words(tuple(f"s{index}" for index in range(20)))
+    finally:
+        store._connection.set_trace_callback(None)
+
+    assert words == {f"s{index}": f"turn {index}" for index in range(20)}
+    assert len([sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]) == 1
+
+
+async def test_last_words_of_no_sessions_reads_nothing(store) -> None:
+    statements: list[str] = []
+    store._connection.set_trace_callback(statements.append)
+    try:
+        assert await store.last_words(()) == {}
+    finally:
+        store._connection.set_trace_callback(None)
+    assert statements == []

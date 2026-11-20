@@ -1621,3 +1621,51 @@ async def test_a_trusted_successor_no_longer_sends_the_owner_to_its_trust_dialog
     marks = await rollover_marks(RolloverBook(rollover_store), listed)
 
     assert _notes((predecessor,), marks) == {1: line}
+
+
+# --- Sub-plan 5 Task 1.3: the agent's last words (BL-122) -------------------------------------
+
+
+async def test_agent_said_labels_each_session_s_words_in_one_read() -> None:
+    from remote_agents.application.session_views import agent_said
+
+    calls: list[tuple[str, ...]] = []
+
+    async def last_words(session_ids):
+        calls.append(tuple(session_ids))
+        return {"s3": "Tests pass; pushed the branch", "s7": "  done  "}
+
+    sessions = tuple(f"s{index}" for index in range(20))
+    lines = await agent_said(last_words, sessions)
+
+    assert lines == {"s3": "agent said: Tests pass; pushed the branch", "s7": "agent said: done"}
+    assert calls == [sessions]
+
+
+async def test_agent_said_without_a_reader_or_sessions_reads_nothing() -> None:
+    from remote_agents.application.session_views import agent_said
+
+    calls: list[object] = []
+
+    async def last_words(session_ids):
+        calls.append(session_ids)
+        return {}
+
+    assert await agent_said(None, ("s1",)) == {}
+    assert await agent_said(last_words, ()) == {}
+    assert calls == []
+
+
+async def test_agent_said_draws_no_line_for_blank_words() -> None:
+    from remote_agents.application.session_views import agent_said
+
+    async def last_words(session_ids):
+        return {"s1": "   ", "s2": ""}
+
+    assert await agent_said(last_words, ("s1", "s2")) == {}
+
+
+def test_the_agent_said_line_keeps_the_agent_s_words_on_one_line() -> None:
+    from remote_agents.application.session_views import agent_said_line
+
+    assert agent_said_line("first\nsecond") == "agent said: first second"

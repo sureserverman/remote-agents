@@ -20,7 +20,7 @@ and the Textual side still hands its rows to a widget.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import Enum
@@ -726,6 +726,38 @@ async def listed_sessions(sessions: _ListReadableSessions) -> tuple[SessionRecor
     """
     await sessions.refresh_readiness()
     return only_listed(await sessions.list_sessions())
+
+
+AGENT_SAID_LABEL = "agent said"
+"""The label on the agent's last words: they are its claim about its own turn, not a fact
+this service measured, and the label keeps the two apart on both surfaces (BL-122, OD-3)."""
+
+
+class _LastWords(Protocol):
+    def __call__(self, session_ids: Sequence[str]) -> Awaitable[Mapping[str, str]]: ...
+
+
+def agent_said_line(words: str) -> str:
+    """`agent said: <words>`, on one line whatever the words carried."""
+    return f"{AGENT_SAID_LABEL}: {' '.join(words.split())}"
+
+
+async def agent_said(last_words: _LastWords | None, session_ids: Sequence[str]) -> dict[str, str]:
+    """Each listed session's `agent said:` line, from one read of the feed for all of them.
+
+    The words are the newest finished turn the agent reported (the feed's `last_words`, which
+    skips inferred rows and questions). A session with no such turn, or only blank words, has
+    no line -- the surfaces then draw nothing rather than an empty label. No reader, or no
+    sessions, reads nothing. Both surfaces draw what this returns, in these words (DEC-091).
+    """
+    if last_words is None or not session_ids:
+        return {}
+    words = await last_words(tuple(session_ids))
+    return {
+        session: agent_said_line(said)
+        for session, said in words.items()
+        if isinstance(said, str) and said.strip()
+    }
 
 
 def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:

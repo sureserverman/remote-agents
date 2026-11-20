@@ -114,6 +114,7 @@ from remote_agents.application.session_views import (
     RolloverMark,
     SessionGit,
     SessionRowParts,
+    agent_said,
     listed_sessions,
     only_listed,
     project_name,
@@ -584,6 +585,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: (`refresh_rollover_marks`) and drawn by every screen that draws session rows, so the
         #: rows themselves stay pure functions of what they are handed (DEC-091).
         self._rollover_marks: dict[str, RolloverMark] = {}
+        #: Each listed session's `agent said:` line, re-read with the rollover marks -- one
+        #: feed read per listing (BL-122) -- and drawn where a row has room for a second line.
+        self._agent_said: dict[str, str] = {}
         self._catalogue = context.backend.catalogue
         #: Which of the two orders the projects list is in. Read once, from the file the
         #: composition root pointed at, and total in every failure -- an unreadable
@@ -2576,13 +2580,27 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             None if read is None else read.summary,
         )
 
+    def agent_said_for(self, session_id: object) -> str | None:
+        """The session's `agent said:` line, as the last listing read it, or None."""
+        return self._agent_said.get(str(session_id))
+
     async def refresh_rollover_marks(self, records: Iterable[SessionRecord]) -> None:
         """Re-read the listed sessions' rollovers through `Backend.rollovers` (DEC-046).
 
         Total like the context read: a rollover read that fails costs the notes, never the
-        list. Rebuilt rather than updated, so a rollover that ended stops being drawn.
+        list. Rebuilt rather than updated, so a rollover that ended stops being drawn. The
+        agents' last words are re-read here too, in one read for the same records, so every
+        list read refreshes both and nothing else has to remember to.
         """
         backend = self._services.backend
+        records = tuple(records)
+        try:
+            self._agent_said = await agent_said(
+                backend.last_words, [str(record.session_id) for record in records]
+            )
+        except Exception:
+            _LOG.debug("the agents' last words could not be read", exc_info=True)
+            self._agent_said = {}
         try:
             self._rollover_marks = await rollover_marks(
                 backend.rollovers, records, sessions=backend.sessions, catalogue=self._catalogue

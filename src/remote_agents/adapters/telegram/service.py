@@ -193,6 +193,7 @@ from remote_agents.application.session_views import (
     ScheduleLine,
     SessionGit,
     StateGroup,
+    agent_said,
     fire_words,
     git_line,
     group_counts,
@@ -2730,6 +2731,7 @@ class PrivateBotBoundary:
             _LOG.debug("the session rollover marks could not be read", exc_info=True)
             rollovers = {}
         gits = await self._git_reads(shown)
+        said = await self._agent_said(shown)
         for group in StateGroup:
             members = [record for record in shown if session_row_parts(record).group is group]
             if not members:
@@ -2744,9 +2746,12 @@ class PrivateBotBoundary:
                 # The sequence sits *outside* the bold, so the eye lands on the name and
                 # finds the number beside it, and the state line is monospace so the gauges
                 # of neighbouring rows line up.
+                words = said.get(str(record.session_id))
                 lines.append(
                     f"<b>{escape(parts.identity)}</b> #{parts.sequence}\n"
                     f"<code>{escape(second)}</code>"
+                    # The agent's claim under the row's measured line, never inside it.
+                    + ("" if words is None else f"\n{escape(words)}")
                 )
                 # The agent's mark between the state and the sequence: the state group is
                 # what the eye scans first, and the mark answers "which of these two is
@@ -3199,11 +3204,15 @@ class PrivateBotBoundary:
             f"\n<code>{label.ljust(_FACT_LABEL_WIDTH)} {escape(value)}</code>"
             for label, value in facts
         )
+        # The agent's own words after the measured facts, outside their `<code>` block and
+        # under their own label: a claim, not a fact (BL-122). Escaped like every line here.
+        said = (await self._agent_said((record,))).get(str(record.session_id))
+        said_line = "" if said is None else f"\n{escape(said)}"
         return self._message(
             f"<b>{escape(parts.identity)}</b> #{parts.sequence}\n"
             f"<code>{state_emoji(record.state)} {escape(parts.state)} · {parts.age}</code>\n"
             f"{_state_explanation(record.state, record.orphan_provenance)}"
-            f"{fact_lines}",
+            f"{fact_lines}{said_line}",
             tuple(buttons),
             back=self._sessions_back(),
             back_label=_BACK_TO_SESSIONS,
@@ -3553,6 +3562,19 @@ class PrivateBotBoundary:
         except Exception:
             logging.getLogger(__name__).debug("usage read failed", exc_info=True)
             return ()
+
+    async def _agent_said(self, records: Sequence[SessionRecord]) -> dict[str, str]:
+        """The `agent said:` line of each record that has one, from one read for them all.
+
+        `_usage_lines`'s trade made again: the line is a decoration, and a feed that cannot be
+        read costs the line, never the screen."""
+        try:
+            return await agent_said(
+                self.backend.last_words, [str(record.session_id) for record in records]
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("the agent's last words failed", exc_info=True)
+            return {}
 
     async def _git_read(self, record: SessionRecord) -> SessionGit | None:
         """One session's git summary, or nothing -- never a screen lost to a git read.

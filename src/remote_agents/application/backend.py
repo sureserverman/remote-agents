@@ -39,7 +39,7 @@ at composition time rather than being a field here.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from remote_agents.application.permission_presets import PermissionChange, PermissionSettings
@@ -197,6 +197,14 @@ class Backend:
     on its own way out — the service in the `finally` that reclaims the host control, the
     terminal as its app unmounts — bounded there, because an unbounded await on the way out
     is a hang that orphans the very child it was reclaiming.
+    """
+
+    last_words: Callable[[Sequence[str]], Awaitable[Mapping[str, str]]] | None = None
+    """Each session's newest finished-turn words its agent reported, for many sessions at once.
+
+    The feed's own store answers it in one query for a whole listing (BL-122), and both
+    surfaces draw it through `session_views.agent_said` as `agent said: ...`. `None` draws no
+    such line anywhere.
     """
 
     forget_usage_records: Callable[[], Awaitable[None]] | None = None

@@ -60,7 +60,7 @@ from remote_agents.application.session_actions import (
     remote_control_target,
     rollover_outcome,
 )
-from remote_agents.application.session_views import SessionGit, git_line
+from remote_agents.application.session_views import SessionGit, agent_said, git_line
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.state_events import StoreChanged, Unsubscribe
@@ -1203,6 +1203,26 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         self._draw_rows(records, keep_cursor=keep_cursor, rest_on_nothing=rest_on_nothing)
         self._publish_selection(self.highlighted_session())
+        self._show_agent_said()
+
+    #: Whether this list says the selected row's `agent said:` line in its bottom border. Only
+    #: the console's pane: its rows have no second line, and the subtitle is the one place under
+    #: the cursor with room (BL-122). The bot draws the line under every row instead.
+    shows_agent_said = False
+
+    def _show_agent_said(self) -> None:
+        """The highlighted session's `agent said:` line in the list's subtitle, or nothing.
+
+        Read from the app's cache, which the last list read filled in one feed read, so a
+        cursor move costs no read at all."""
+        if not self.shows_agent_said:
+            return
+        found = self.query("#choices")
+        if not found:
+            return
+        key = self.highlighted_session()
+        line = None if key is None else self.tui.agent_said_for(key)
+        self.set_pane_subtitle(found.first(OptionList), line or "")
 
     def _newest_arrival(
         self, records: tuple[SessionRecord, ...], previously_drawn: frozenset[str]
@@ -1261,6 +1281,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         self._repaint_marker()
         self._publish_selection(self.highlighted_session())
+        self._show_agent_said()
 
     def _replace_prompts(self, choices: OptionList, width: int | None) -> None:
         """Re-render every drawn row at `width` and swap the prompts the list already holds.
@@ -1630,6 +1651,7 @@ class SessionsPaneScreen(SessionsScreen):
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
     listing_hint = "enter open · d detail · p projects · F12 from inside an agent"
     frames_body_on_console = True
+    shows_agent_said = True
     offers_projects_key = True
     empty_status = (
         "No managed sessions on this host. Launching one starts it here. "
@@ -1997,6 +2019,7 @@ class SessionDetailScreen(ChoiceScreen):
             return
         rollover = await self._rollover_offer(record)
         git = await self._git_read(record)
+        said = await self._agent_said(record)
         if not self.showing:
             return
         # The name goes to the header and the state's meaning to the status line. They were
@@ -2031,10 +2054,22 @@ class SessionDetailScreen(ChoiceScreen):
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
             + permission_fact
         )
-        entries = self.detail_entries(record, rollover, git)
-        # The git row is a fact: the cursor rests on the first row that does something, so
-        # enter on a fresh detail copies the attach command as it always did.
-        self.show_choices(entries, highlight=1 if entries and entries[0][0] == GIT_ENTRY else 0)
+        entries = self.detail_entries(record, rollover, git, said)
+        # The git and agent-said rows are facts: the cursor rests on the first row that does
+        # something, so enter on a fresh detail copies the attach command as it always did.
+        facts = sum(1 for key, _ in entries if key in FACT_ENTRIES)
+        self.show_choices(entries, highlight=facts)
+
+    async def _agent_said(self, record: SessionRecord) -> str | None:
+        """The session's `agent said:` line through `Backend.last_words`, or nothing (BL-122).
+
+        Total, like the git read: a feed read never costs the detail."""
+        try:
+            lines = await agent_said(self.services.backend.last_words, (str(record.session_id),))
+        except Exception:
+            _LOG.debug("the agent's last words could not be read", exc_info=True)
+            return None
+        return lines.get(str(record.session_id))
 
     async def _git_read(self, record: SessionRecord) -> SessionGit | None:
         """The session's git summary through `Backend.git_summary`, or nothing (BL-117).
@@ -2070,6 +2105,7 @@ class SessionDetailScreen(ChoiceScreen):
         record: SessionRecord,
         rollover: tuple[str, ...] = (),
         git: SessionGit | None = None,
+        said: str | None = None,
     ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
@@ -2090,6 +2126,10 @@ class SessionDetailScreen(ChoiceScreen):
         # The git line first: a fact, not an action -- choosing it does nothing -- and the
         # bot's `git` fact in the same words (`session_views.git_line`, DEC-091).
         entries: list[tuple[str, str]] = list(git_entries(git))
+        # Then the agent's own words, under their label (BL-122): the bot draws the same line
+        # after its facts. A fact row too; choosing it does nothing.
+        if said is not None:
+            entries.append((AGENT_SAID_ENTRY, said))
         entries.append(("attach", "Copy attach"))
         if self.services.backend.capture is not None:
             entries.append(("inspect", "Inspect output"))
@@ -2824,6 +2864,12 @@ def capture_for_pane(captured: str, redactions: tuple[str, ...]) -> str:
 
 GIT_ENTRY = "\x00git"
 """The detail's git row: a fact, not an action, so a sentinel id the row keys refuse."""
+
+AGENT_SAID_ENTRY = "\x00said"
+"""The detail's `agent said:` row: the agent's claim, a fact row like `GIT_ENTRY`."""
+
+FACT_ENTRIES = frozenset({GIT_ENTRY, AGENT_SAID_ENTRY})
+"""The detail's rows that state something and do nothing; they lead, and the cursor skips them."""
 
 
 def git_entries(read: SessionGit | None) -> tuple[tuple[str, str], ...]:
