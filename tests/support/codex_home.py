@@ -17,15 +17,27 @@ import signal
 import stat
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import cache
 from pathlib import Path
 
 _OWNED_HOMES: dict[Path, tuple[int, int]] = {}
 
+#: Who made a home: `<pid> <start ticks> <home's minimum start ticks> <boot id>`. Written once by
+#: `short_codex_home()` and read by `reap_abandoned_homes()` in a later session.
+_OWNER_FILE = ".owner"
+
+#: A home with no readable owner is a legacy one, or one caught between `mkdtemp` and its owner
+#: file. Only age tells those apart, and a running Codex writes into its home all the time.
+_UNCLAIMED_AGE = 24 * 60 * 60
+
 
 def _boot_ticks() -> int:
     return int(float(Path("/proc/uptime").read_text().split()[0]) * os.sysconf("SC_CLK_TCK"))
+
+
+def _boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
 
 def short_codex_home() -> Path:
@@ -37,6 +49,21 @@ def short_codex_home() -> Path:
     home.chmod(0o700)
     descriptor = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     _OWNED_HOMES[home] = (descriptor, minimum_start)
+    try:
+        owner = os.open(
+            _OWNER_FILE,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=descriptor,
+        )
+        with os.fdopen(owner, "w") as written:
+            started = _parent_and_start(os.getpid())[1]
+            written.write(f"{os.getpid()} {started} {minimum_start} {_boot_id()}\n")
+    except BaseException:
+        # Nothing has run from it yet, so nothing can attest it: the caller never got a home.
+        shutil.rmtree(home, ignore_errors=True)
+        os.close(_OWNED_HOMES.pop(home)[0])
+        raise
     return home
 
 
@@ -236,3 +263,107 @@ def retire_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> 
     stop_codex_home(home, stop=stop)
     shutil.rmtree(home)
     os.close(_OWNED_HOMES.pop(home)[0])
+
+
+def _recorded_owner(descriptor: int) -> tuple[int, int, int, str] | None:
+    """The owner a home's `.owner` names, or None when it is absent, not ours or not readable."""
+    try:
+        opened = os.open(_OWNER_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+    except OSError:
+        return None
+    try:
+        details = os.fstat(opened)
+        if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid():
+            return None
+        pid, started, minimum, boot = os.read(opened, 256).decode().split()
+        return int(pid), int(started), int(minimum), boot
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(opened)
+
+
+def _alive(pid: int, started: int) -> bool:
+    try:
+        return _parent_and_start(pid)[1] == started
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def reap_abandoned_homes(candidates: Iterable[Path] | None = None) -> list[Path]:
+    """Remove the drill homes whose drill died before its own clean-up; return those removed.
+
+    A drill killed mid-run never reaches `retire_codex_home`, and its Codex daemon outlives it,
+    still logged in (BL-133). The test session's controller calls this once at start
+    (`tests/conftest.py`). It looks at `/tmp/ra-cx-*`, or only at `candidates`.
+
+    A home is a candidate only as `short_codex_home()` makes one: a real folder, not a link, of
+    this uid, mode 0700 exactly, directly in `/tmp`. Then:
+
+    - its `.owner` names a live process (same pid, same start time, same boot): left alone;
+    - it names a dead one: the processes attesting the home are stopped by the ownership rule
+      above, and then it is removed;
+    - it has no readable `.owner`: removed only when untouched for 24 hours with nothing
+      attesting it, since a home a few microseconds old has no owner file yet either.
+
+    The owner's start ticks bound the scan, as at retirement, so a process older than the home is
+    never read. A home from an earlier boot, or one with no owner file, has no such bound: every
+    process of this uid is read, and one whose environment nobody can read keeps the home. On a
+    desktop that is the usual case (ssh-agent and sd-pam are such processes), so those two kinds
+    are best effort and mostly kept; tmpfiles' `D /tmp` empties `/tmp` at boot on this host
+    anyway. Any doubt or error keeps the home, and the next session tries again.
+
+    The owner is looked up in this process's pid namespace. `short_codex_home()` runs in pytest
+    on the host, never inside a drill's confinement, so the two always share one.
+    """
+    if not Path("/proc/uptime").is_file():
+        return []
+    removed: list[Path] = []
+    homes = sorted(Path("/tmp").glob("ra-cx-*")) if candidates is None else list(candidates)
+    for home in homes:
+        if home in _OWNED_HOMES:
+            continue
+        try:
+            if _reaped(home):
+                removed.append(home)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return removed
+
+
+def _reaped(home: Path) -> bool:
+    """Reap one candidate home by the rules of `reap_abandoned_homes`; whether it was removed."""
+    details = home.lstat()
+    if (
+        not stat.S_ISDIR(details.st_mode)
+        or details.st_uid != os.getuid()
+        or stat.S_IMODE(details.st_mode) != 0o700
+        or home.parent != Path("/tmp")
+        or not home.name.startswith("ra-cx-")
+        or home != home.resolve()
+    ):
+        return False
+    descriptor: int | None = os.open(
+        home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    try:
+        opened = os.fstat(descriptor)
+        owner = _recorded_owner(descriptor)
+        this_boot = owner is not None and owner[3] == _boot_id()
+        if (
+            (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino)
+            or (this_boot and _alive(owner[0], owner[1]))
+            or (owner is None and time.time() - details.st_mtime < _UNCLAIMED_AGE)
+        ):
+            return False
+        _OWNED_HOMES[home], descriptor = (descriptor, owner[2] if this_boot else 0), None
+        if owner is None and _running_from(home):
+            return False
+        retire_codex_home(home)
+        return True
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        claim = _OWNED_HOMES.pop(home, None)
+        if claim is not None:
+            os.close(claim[0])

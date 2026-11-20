@@ -505,3 +505,304 @@ def test_a_detached_helper_of_this_run_still_refuses(monkeypatch: pytest.MonkeyP
     finally:
         shutil.rmtree(home)
         os.close(codex_home._OWNED_HOMES.pop(home)[0])
+
+
+# A drill killed before its own `finally` leaves its home and its daemon (BL-133). The next
+# test session's controller reaps such a home: `short_codex_home()` records who owns it, and
+# `reap_abandoned_homes()` removes one whose owner is dead, stopping what attests it first.
+
+
+def _dead_pid() -> int:
+    """The pid of a shell that has exited and been waited for."""
+    return int(subprocess.run(["sh", "-c", "echo $$"], capture_output=True, text=True).stdout)
+
+
+def _unreadable_processes_are_apps(monkeypatch) -> None:
+    """A home with no start bound reads every process of this uid, and the desktop has a few whose
+    environment nobody can read (ssh-agent, sd-pam). Those make the sweep keep the home, which
+    `test_a_home_that_cannot_be_attested_is_kept` pins; the tests that use this one are about the
+    age and boot rules, so they declare such processes foreign."""
+    import codex_home
+
+    monkeypatch.setattr(codex_home, "_started_by_an_older_app", lambda *_: True)
+
+
+def _abandoned(home: Path, owner: str | None) -> Path:
+    """Make a home of this run look like another session's: its owner rewritten or removed, and
+    this process's claim on it released, as a later session would find it."""
+    import codex_home
+
+    if owner is None:
+        (home / ".owner").unlink()
+    else:
+        (home / ".owner").write_text(owner)
+    os.close(codex_home._OWNED_HOMES.pop(home)[0])
+    return home
+
+
+def _recorded(home: Path) -> list[str]:
+    return (home / ".owner").read_text().split()
+
+
+def _boot_id() -> str:
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def test_a_new_home_records_its_owner_pid_start_and_boot():
+    home = short_codex_home()
+    try:
+        pid, started, minimum, boot = _recorded(home)
+        own_start = int(Path(f"/proc/{os.getpid()}/stat").read_text().rsplit(")", 1)[1].split()[19])
+        assert (int(pid), int(started), boot) == (os.getpid(), own_start, _boot_id())
+        assert int(minimum) >= own_start
+        assert (home / ".owner").stat().st_mode & 0o777 == 0o600
+    finally:
+        retire_codex_home(home)
+
+
+def test_a_home_whose_owner_died_is_removed_with_the_process_attesting_it():
+    from codex_home import reap_abandoned_homes
+
+    home = short_codex_home()
+    _, _, minimum, boot = _recorded(home)
+    daemon, pid = child(home, detached=True)
+    _abandoned(home, f"{_dead_pid()} 1 {minimum} {boot}\n")
+    try:
+        assert reap_abandoned_homes([home]) == [home]
+        assert not home.exists()
+        assert not Path(f"/proc/{pid}").exists() or _is_zombie(pid)
+    finally:
+        stop_child(daemon, pid)
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def _is_zombie(pid: int) -> bool:
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] in {"Z", "X"}
+    except FileNotFoundError:
+        return True
+
+
+def test_a_reused_pid_is_not_the_owner():
+    from codex_home import reap_abandoned_homes
+
+    home = short_codex_home()
+    pid, started, minimum, boot = _recorded(home)
+    _abandoned(home, f"{pid} {int(started) + 1} {minimum} {boot}\n")
+    try:
+        assert reap_abandoned_homes([home]) == [home]
+        assert not home.exists()
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_a_home_from_an_earlier_boot_has_a_dead_owner(monkeypatch):
+    from codex_home import reap_abandoned_homes
+
+    _unreadable_processes_are_apps(monkeypatch)
+    home = short_codex_home()
+    pid, started, minimum, _ = _recorded(home)
+    _abandoned(home, f"{pid} {started} {minimum} 00000000-0000-4000-8000-000000000000\n")
+    try:
+        assert reap_abandoned_homes([home]) == [home]
+        assert not home.exists()
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def test_a_home_whose_owner_lives_is_left_with_its_process(monkeypatch):
+    import codex_home
+    from codex_home import reap_abandoned_homes
+
+    home = short_codex_home()
+    process, pid = child(home)
+    _abandoned(home, (home / ".owner").read_text())
+    asked, alive = [], codex_home._alive
+    monkeypatch.setattr(codex_home, "_alive", lambda *owner: asked.append(owner) or alive(*owner))
+    try:
+        assert reap_abandoned_homes([home]) == []
+        assert asked == [(os.getpid(), int(_recorded(home)[1]))], "the owner was never checked"
+        assert home.is_dir()
+        assert process.poll() is None
+        assert (home / ".owner").is_file()
+    finally:
+        stop_child(process, pid)
+        shutil.rmtree(home)
+
+
+def test_a_home_with_no_owner_is_removed_only_when_old_and_unattested(monkeypatch):
+    from codex_home import reap_abandoned_homes
+
+    _unreadable_processes_are_apps(monkeypatch)
+    young = _abandoned(short_codex_home(), None)
+    old = _abandoned(short_codex_home(), None)
+    attested = _abandoned(short_codex_home(), None)
+    day_ago = time.time() - 25 * 60 * 60
+    for home in (old, attested):
+        os.utime(home, (day_ago, day_ago))
+    process, pid = child(attested)
+    os.utime(attested, (day_ago, day_ago))
+    try:
+        assert reap_abandoned_homes([young, old, attested]) == [old]
+        assert young.is_dir() and attested.is_dir() and not old.exists()
+        assert process.poll() is None
+    finally:
+        stop_child(process, pid)
+        for home in (young, old, attested):
+            shutil.rmtree(home, ignore_errors=True)
+
+
+def test_a_home_that_cannot_be_attested_is_kept(monkeypatch):
+    """An unreadable process is a doubt, and a doubt keeps the home: the session still starts."""
+    import codex_home
+    from codex_home import reap_abandoned_homes
+
+    home = short_codex_home()
+    _, _, minimum, boot = _recorded(home)
+    _abandoned(home, f"{_dead_pid()} 1 {minimum} {boot}\n")
+
+    def unreadable(*_):
+        raise RuntimeError("process ownership could not be read; fixture home retained")
+
+    monkeypatch.setattr(codex_home, "_running_from", unreadable)
+    try:
+        assert reap_abandoned_homes([home]) == []
+        assert home.is_dir()
+        assert home not in codex_home._OWNED_HOMES
+    finally:
+        shutil.rmtree(home)
+
+
+@pytest.mark.parametrize("shape", ["link", "mode", "uid", "name"])
+def test_a_folder_that_is_not_a_private_drill_home_is_never_touched(shape, monkeypatch):
+    from codex_home import reap_abandoned_homes
+
+    home = short_codex_home()
+    _, _, minimum, boot = _recorded(home)
+    _abandoned(home, f"{_dead_pid()} 1 {minimum} {boot}\n")
+    target = home
+    if shape == "link":
+        target = Path(tempfile.mktemp(prefix="ra-cx-link-", dir="/tmp"))
+        target.symlink_to(home)
+    elif shape == "mode":
+        home.chmod(0o750)
+    elif shape == "uid":
+        real = os.getuid()
+        monkeypatch.setattr(os, "getuid", lambda: real + 1)
+    else:
+        target = home.with_name("not-" + home.name)
+        home.rename(target)
+    try:
+        assert reap_abandoned_homes([target]) == []
+        monkeypatch.undo()
+        assert target.exists() or target.is_symlink()
+        assert (target / ".owner").is_file()
+    finally:
+        monkeypatch.undo()
+        if target.is_symlink():
+            target.unlink()
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(target, ignore_errors=True)
+
+
+@pytest.mark.parametrize("controller", [True, False])
+def test_only_the_controlling_session_reaps(controller, tmp_path):
+    """The controller reaps once at session start; a pytest a test runs in a child, which
+    inherits the socket-owner marker, reaps nothing (an xdist worker returns on the same line)."""
+    home = short_codex_home()
+    _, _, minimum, boot = _recorded(home)
+    _abandoned(home, f"{_dead_pid()} 1 {minimum} {boot}\n")
+    # Restricted to this home by a plugin loaded before the conftest imports the sweep: unbounded,
+    # the child would reap a sibling xdist worker's made-up abandoned home mid-test.
+    (tmp_path / "only_this_home.py").write_text(
+        "import codex_home\nfrom pathlib import Path\n"
+        "_sweep = codex_home.reap_abandoned_homes\n"
+        f"codex_home.reap_abandoned_homes = lambda candidates=None: _sweep([Path({str(home)!r})])\n"
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), os.environ.get("PYTHONPATH")))
+    )
+    if controller:
+        environment.pop("REMOTE_AGENTS_TEST_SOCKET_OWNER", None)
+    else:
+        environment["REMOTE_AGENTS_TEST_SOCKET_OWNER"] = str(os.getpid())
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:xdist",
+                "-p",
+                "no:randomly",
+                "-p",
+                "only_this_home",
+                f"{__file__}::test_replaced_home_is_not_authorized_for_cleanup",
+            ],
+            env=environment,
+            capture_output=True,
+            check=True,
+            timeout=120,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+        assert home.exists() is not controller
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def _unreadable_sleeper() -> tuple[subprocess.Popen, int]:
+    """A process of this uid whose environment nobody can read, as ssh-agent's is."""
+    code = (
+        "import ctypes,time; ctypes.CDLL(None).prctl(4, 0, 0, 0, 0); "
+        "print('ready', flush=True); time.sleep(60)"
+    )
+    process = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    assert process.stdout.readline().strip() == "ready"
+    process.stdout.close()
+    with pytest.raises(PermissionError):
+        Path(f"/proc/{process.pid}/environ").read_bytes()
+    return process, process.pid
+
+
+def test_an_unreadable_process_keeps_only_a_home_with_no_start_bound():
+    """Nothing patched. An unreadable process older than a dead owner's home is never read, so that
+    home goes; a home from an earlier boot has no bound, so the same process keeps it."""
+    from codex_home import reap_abandoned_homes
+
+    process, pid = _unreadable_sleeper()
+    time.sleep(0.1)  # Older than the homes by more than the one tick of slack their bound keeps.
+    bounded, unbounded = short_codex_home(), short_codex_home()
+    _, _, minimum, boot = _recorded(bounded)
+    _abandoned(bounded, f"{_dead_pid()} 1 {minimum} {boot}\n")
+    _abandoned(unbounded, f"{_dead_pid()} 1 {minimum} 00000000-0000-4000-8000-000000000000\n")
+    try:
+        assert reap_abandoned_homes([bounded, unbounded]) == [bounded]
+        assert unbounded.is_dir() and not bounded.exists()
+        assert process.poll() is None
+    finally:
+        stop_child(process, pid)
+        shutil.rmtree(bounded, ignore_errors=True)
+        shutil.rmtree(unbounded, ignore_errors=True)
+
+
+def test_a_sweep_that_fails_lets_the_session_start(monkeypatch, capsys):
+    import conftest
+
+    monkeypatch.delenv("REMOTE_AGENTS_TEST_SOCKET_OWNER", raising=False)
+    monkeypatch.setattr(conftest, "_test_sockets", set)
+    monkeypatch.setattr(
+        conftest, "reap_abandoned_homes", lambda: (_ for _ in ()).throw(KeyError("boom"))
+    )
+
+    class Config:
+        pass
+
+    class Session:
+        config = Config()
+
+    conftest.pytest_sessionstart(Session())
+    assert "drill-home sweep failed, homes kept" in capsys.readouterr().err

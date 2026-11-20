@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import live_network_gate
 import pytest
+from codex_home import reap_abandoned_homes
 
 _TEST_SOCKET_PREFIX = "remote-agents-test-"
 
@@ -82,6 +84,14 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         if not _server_answers(socket):
             socket.unlink(missing_ok=True)
     session.config._remote_agents_sockets_before = _test_sockets()
+    # A Codex drill killed before its own `finally` leaves its home and its logged-in daemon
+    # (BL-133). Reaped here, so once per run: workers and child pytests returned above.
+    # `reap_abandoned_homes` spares a home whose recorded owner is alive. A failure here must not
+    # stop the run, whose own teardown is already armed above.
+    try:
+        reap_abandoned_homes()
+    except Exception as error:  # noqa: BLE001 - the sweep is best effort; the run is not
+        sys.stderr.write(f"remote-agents: drill-home sweep failed, homes kept: {error!r}\n")
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
