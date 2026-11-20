@@ -902,6 +902,14 @@ class SessionService:
         """
         return await self._terminal.trust_state(session_id)
 
+    async def owner_dialog(self, session_id: SessionId) -> str | None:
+        """The name of a dialog only the owner may answer on this session's pane, or None.
+
+        Read-only and unlocked, like `trust_state` above, and for its reason. The surfaces say
+        `waits on <it> - answer it in its pane` and offer nothing to press (BL-146).
+        """
+        return await self._terminal.owner_dialog(session_id)
+
     async def answer_trust(self, command: AnswerTrustCommand) -> TrustAnswer:
         """Answer the folder-trust question once, for a session whose dialog can be read.
 

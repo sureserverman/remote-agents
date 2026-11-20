@@ -34,7 +34,7 @@ from remote_agents.adapters.telegram.presenters import (
 )
 from remote_agents.application.notification_policy import REFUSALS_BEFORE_ABANDONING
 from remote_agents.application.session_actions import state_word
-from remote_agents.application.session_views import listed_in_sessions
+from remote_agents.application.session_views import listed_in_sessions, owner_dialog
 from remote_agents.domain.models import SessionRecord, SessionState
 from remote_agents.domain.trust import answerable
 from remote_agents.ports.trust_notifications import (
@@ -228,6 +228,10 @@ class TrustNotifier:
         #: lost the set and never written a row -- sends a second copy. One extra message in a
         #: narrow window, never silence, which is the direction to fail in.
         self._asked_on_screen: set[str] = set()
+        #: Sessions whose question went out while a dialog only the owner may answer was up,
+        #: so it carries no answers (BL-146). Kept so a half-delivered one is finished without
+        #: its keyboard, rather than given the folder answers on the retry.
+        self._unanswerable: set[str] = set()
 
     def note_asked_on_screen(self, session_id: object) -> None:
         """The bot rendered the question itself, so this pass must not send it again."""
@@ -301,6 +305,8 @@ class TrustNotifier:
                 raised.append(key)
             else:
                 self._settle_raises.pop(key, None)
+                # A later question for this session is asked afresh, with its answers.
+                self._unanswerable.discard(key)
                 settled += 1
         # The same clause as the ask's: a raise is a strike only when something else got
         # through this pass, so an outage spends nothing (DEC-049).
@@ -341,9 +347,14 @@ class TrustNotifier:
             standing = await self._store.standing_for(record.session_id)
             if standing is not None and not standing.settled:
                 return
+            # A dialog only the owner may answer, up instead of the folder question (BL-146):
+            # the message says so and gets no buttons, because nothing here presses on it --
+            # a trust answer or a decline would read no folder question and press nothing.
+            waits = await owner_dialog(self._sessions, record)
             try:
                 message_id = await self._view.send_apart(
-                    self._bot, {"text": _question_text(record), "parse_mode": ParseMode.HTML}
+                    self._bot,
+                    {"text": _question_text(record, waits), "parse_mode": ParseMode.HTML},
                 )
             except (BadRequest, TelegramError):
                 return _REFUSED
@@ -353,10 +364,15 @@ class TrustNotifier:
             # for "never asked" on the next pass -- which would send a second copy of a
             # question the owner is already looking at.
             self._incomplete[key] = message_id
+            if waits is not None:
+                self._unanswerable.add(key)
         try:
             await self._store.remember(
                 record.session_id, chat_id=self._view.chat_id, message_id=message_id
             )
+            if key in self._unanswerable:
+                self._incomplete.pop(key, None)
+                return _DELIVERED
             await self._attach_answers(
                 record,
                 message_id,
@@ -366,7 +382,10 @@ class TrustNotifier:
                 # outlives its own read, so a capture taken here would pin the button to an
                 # observation already stale when it was minted. The press is protected where it
                 # can actually be protected: `answer_trust` re-reads the pane before sending
-                # anything, and reports a refusal as a refusal (BL-053, `TrustAnswer`).
+                # anything, and reports a refusal as a refusal (BL-053, `TrustAnswer`). The one
+                # pane read before the send (`owner_dialog`, BL-146) can only *withhold* the
+                # answers, never offer one, and takes no capture for an agent that declares no
+                # dialog only the owner may answer.
                 answerable=answerable(record.profile_id, self._trust_dialogs),
             )
         except Exception:
@@ -494,6 +513,12 @@ def _settled_headline(record: SessionRecord) -> str:
     )
 
 
-def _question_text(record: SessionRecord) -> str:
-    """The question's words alone, for the send that precedes the keyboard."""
+def _question_text(record: SessionRecord, waits: str | None = None) -> str:
+    """The question's words alone, for the send that precedes the keyboard.
+
+    With `waits` (a dialog only the owner may answer is up, BL-146) the agent is not asking
+    about the folder, so the message says what it waits on instead, and carries no answers.
+    """
+    if waits is not None:
+        return f"{_HEADLINE}\n{escape(record.display.rendered)}\n{escape(waits)}"
     return render_trust_question(record, answerable=False, decline="c1_" + "0" * 20).text

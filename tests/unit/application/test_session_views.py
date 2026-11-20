@@ -18,6 +18,7 @@ pinned directly, so the contract file is free to claim only what it checks.
 from __future__ import annotations
 
 import pathlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -1828,3 +1829,69 @@ async def test_a_note_successor_reading_the_note_says_so(
     await rollover_store.note(asked.id, NOTE_FIRST_TYPED, at=_ROLL_AT)
     marks = await rollover_marks(RolloverBook(rollover_store), (predecessor, successor))
     assert _notes((predecessor,), marks) == {1: "rollover with a note · successor reading the note"}
+
+
+# --- Sub-plan 5 Task 3.1: a dialog only the owner may answer (BL-146) ------------------------
+
+
+def test_the_owner_dialog_line_names_the_dialog_and_who_answers_it() -> None:
+    from remote_agents.application.session_views import owner_dialog_line
+
+    assert owner_dialog_line("a hook review") == "waits on a hook review - answer it in its pane"
+
+
+@pytest.mark.parametrize(
+    ("state", "read"),
+    [
+        (SessionState.STARTING, True),
+        (SessionState.UNTRUSTED, True),
+        (SessionState.RUNNING, True),
+        (SessionState.ENDED, False),
+        (SessionState.FAILED, False),
+        (SessionState.STOP_REQUESTED, False),
+    ],
+)
+async def test_only_a_live_started_session_is_read_for_an_owner_dialog(
+    state: SessionState, read: bool
+) -> None:
+    from remote_agents.application.session_views import owner_dialog
+
+    asked: list[object] = []
+
+    class _Sessions:
+        async def owner_dialog(self, session_id):
+            asked.append(session_id)
+            return "a hook review"
+
+    record = replace(_owner_dialog_record(), state=state)
+    line = await owner_dialog(_Sessions(), record)
+
+    assert (line is not None) is read
+    assert bool(asked) is read
+
+
+async def test_a_failing_or_empty_owner_dialog_read_draws_nothing() -> None:
+    from remote_agents.application.session_views import owner_dialog
+
+    class _Raising:
+        async def owner_dialog(self, session_id):
+            raise RuntimeError("tmux went away")
+
+    class _Blank:
+        async def owner_dialog(self, session_id):
+            return "  "
+
+    assert await owner_dialog(_Raising(), _owner_dialog_record()) is None
+    assert await owner_dialog(_Blank(), _owner_dialog_record()) is None
+    assert await owner_dialog(None, _owner_dialog_record()) is None
+
+
+def _owner_dialog_record() -> SessionRecord:
+    return SessionRecord(
+        SessionId.new(),
+        ProjectId("opaque-editor"),
+        ProfileId("codex"),
+        SessionDisplayIdentity("opaque-editor", "codex", "regular", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )

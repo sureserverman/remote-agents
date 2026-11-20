@@ -35,17 +35,20 @@ def _declared_wordings() -> dict[str, set[str]]:
     """Every string a vertical declares about its own dialog, by profile."""
     from remote_agents.adapters.agents.registry import provider_descriptors
 
-    wordings = {}
+    wordings: dict[str, set[str]] = {}
     for descriptor in provider_descriptors():
         dialog = descriptor.trust_dialog
-        if dialog is None:
-            continue
-        wordings[str(descriptor.profile_id)] = {
-            dialog.question,
-            dialog.affirmative,
-            dialog.negative,
-            dialog.identifies_by,
-        }
+        if dialog is not None:
+            wordings.setdefault(str(descriptor.profile_id), set()).update(
+                {dialog.question, dialog.affirmative, dialog.negative, dialog.identifies_by}
+            )
+        # A dialog only the owner may answer, and what the surfaces call it (BL-146): the
+        # shared sentence is `session_views.owner_dialog_line`, the dialog's name is not.
+        owner = descriptor.composer.owner_dialogs if descriptor.composer is not None else ()
+        for found in owner:
+            wordings.setdefault(str(descriptor.profile_id), set()).update(
+                {found.marker, found.names}
+            )
     return wordings
 
 
@@ -102,3 +105,17 @@ def test_the_parser_holds_no_agent_specific_string_of_its_own() -> None:
     assert not (constants & declared), (
         f"the trust parser spells an agent's own dialog again: {sorted(constants & declared)}"
     )
+
+
+def test_every_owner_dialog_is_also_a_dialog_the_relay_refuses() -> None:
+    """Named apart for the surfaces, and still never typed into (BL-146, DEC-099)."""
+    from remote_agents.adapters.agents.registry import provider_descriptors
+
+    declared = 0
+    for descriptor in provider_descriptors():
+        composer = descriptor.composer
+        for found in composer.owner_dialogs if composer is not None else ():
+            declared += 1
+            assert found.marker in composer.dialogs, (descriptor.profile_id, found.marker)
+            assert found.names.strip() == found.names and found.names, descriptor.profile_id
+    assert declared, "no vertical declares an owner dialog; this check would pass vacuously"

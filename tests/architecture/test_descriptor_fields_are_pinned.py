@@ -74,6 +74,9 @@ import typing
 #: which grew neither half: `note_rollover` says whether a provider's sessions may roll over with
 #: a note. A fourth category, the flag, pinned in `test_note_rollover_is_declared.py`: a plain
 #: `bool` defaulting to `False`, because "not offered" is a declared answer, not an absence.
+#: It did not move on 2026-11-20 for the same plan's Task 3.1 (BL-146): `owner_dialogs`, the
+#: dialogs only the owner may answer, is a field of `ComposerScreen`, beside the `dialogs` each
+#: of them must also be; it is pinned in `test_dialog_wordings_live_in_their_verticals.py`.
 _IDENTITY_FIELDS = ("profile_id", "glyph", "name")
 _CAPABILITY_FIELDS = (
     "permission_presets",

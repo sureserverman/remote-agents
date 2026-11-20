@@ -15,7 +15,7 @@ from enum import Enum
 
 from remote_agents.adapters.tmux.trust import classify_trust_capture
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
+from remote_agents.ports.provider_descriptor import ComposerScreen, OwnerDialog, ProviderDescriptor
 from remote_agents.ports.terminal import PromptReason
 
 
@@ -156,6 +156,27 @@ def dialog_on_screen(capture: str, descriptor: ProviderDescriptor) -> bool:
     """
     declared = descriptor.composer
     return declared is not None and _found(declared.dialogs, _normalised(capture))
+
+
+def owner_dialog(capture: str, descriptor: ProviderDescriptor) -> OwnerDialog | None:
+    """The dialog only the owner may answer that is on the screen, if the agent declares one.
+
+    Read like `dialog_on_screen`, on the normalised capture, and only with this agent's own
+    declarations: another agent's screen is never read with these patterns (BL-146). A look,
+    never an act -- nothing is pressed on what this finds.
+    """
+    declared = descriptor.composer
+    if declared is None or not declared.owner_dialogs:
+        return None
+    screen = _normalised(capture)
+    return next(
+        (
+            dialog
+            for dialog in declared.owner_dialogs
+            if re.search(dialog.marker, screen, re.MULTILINE)
+        ),
+        None,
+    )
 
 
 def in_shell_mode(capture: str, descriptor: ProviderDescriptor) -> bool:

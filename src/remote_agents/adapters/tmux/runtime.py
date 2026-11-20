@@ -23,6 +23,7 @@ from remote_agents.adapters.tmux.composer import (
     enter_refusal,
     in_shell_mode,
     marker_is_young,
+    owner_dialog,
     prompt_refusal,
     shell_line_refusal,
     stale_shell_line,
@@ -1526,6 +1527,31 @@ class TmuxTerminal:
         ):
             return RemoteControlState.UNKNOWN
         return _remote_control_state(await self._gateway.capture(session_id))
+
+    async def owner_dialog(self, session_id: SessionId) -> str | None:
+        """What the dialog on this pane is called, when only the owner may answer it (BL-146).
+
+        A look, never an act, and unlocked like `trust_state`: nothing is pressed on what this
+        finds, by this or by any caller. None for a pane that is gone or not live, for an agent
+        that declares no owner dialog (no capture is taken for it), and for a screen showing
+        none -- a folder-trust question among them, which keeps its own row.
+        """
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return None
+        descriptor = self._composers.get(str(observation.profile_id))
+        if (
+            descriptor is None
+            or descriptor.composer is None
+            or not descriptor.composer.owner_dialogs
+        ):
+            return None
+        try:
+            capture = await self._gateway.capture(session_id)
+        except (TerminalTargetMissing, RuntimeError):
+            return None
+        found = owner_dialog(capture, descriptor)
+        return None if found is None else found.names
 
     async def trust_state(self, session_id: SessionId) -> TrustState:
         """Report whether this pane is sitting on the folder-trust question.

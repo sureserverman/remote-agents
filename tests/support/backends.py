@@ -163,6 +163,11 @@ class SessionUseCaseDouble:
         del session_id
         return TrustState.UNKNOWN
 
+    async def owner_dialog(self, session_id: object) -> None:
+        """No dialog only the owner can answer: a double draws no `waits on` line."""
+        del session_id
+        return None
+
     async def permission_state(self, session_id: object) -> None:
         """No state row: a session from before presets were applied on the daemon."""
         del session_id

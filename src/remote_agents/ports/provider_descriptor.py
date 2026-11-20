@@ -89,6 +89,19 @@ class TrustDialog:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnerDialog:
+    """A dialog only the owner may answer, and what the surfaces call it (BL-146).
+
+    Values only, declared in the agent's own vertical (DEC-070), so no shared module spells an
+    agent's dialog. `marker` is a pattern (multiline) read on the screen like `dialogs`;
+    `names` is the noun phrase the surfaces put in `waits on <names> - answer it in its pane`.
+    """
+
+    marker: str
+    names: str
+
+
+@dataclass(frozen=True, slots=True)
 class ComposerScreen:
     """How one agent draws its composer, busy state and dialogs, so a capture can be classified.
 
@@ -130,6 +143,12 @@ class ComposerScreen:
     dialogs: tuple[str, ...] = ()
     """Patterns (multiline) any of which means a dialog is up. Checked before anything else: a
     dialog can be drawn over a composer that is still on screen."""
+    owner_dialogs: tuple[OwnerDialog, ...] = ()
+    """The dialogs only the owner may answer, each also one of `dialogs` (BL-146).
+
+    The service names one on both surfaces and presses no key on it: no trust answer, no
+    decline, no typed message. Codex's "Hooks need review" is one, because trusting hooks lets
+    them run outside the sandbox. Empty for an agent where none has been measured."""
     folded: tuple[str, ...] = ()
     """Patterns for the placeholder a long paste is folded into (Claude: `[Pasted text #1]`),
     which stands for the pasted draft when the relay checks what it pasted."""

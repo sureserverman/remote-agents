@@ -19,6 +19,7 @@ from remote_agents.domain.profiles import PermissionPreset
 from remote_agents.ports.provider_descriptor import (
     AgentDaemon,
     ComposerScreen,
+    OwnerDialog,
     ProviderDescriptor,
     TrustDialog,
 )
@@ -149,6 +150,11 @@ def descriptor() -> ProviderDescriptor:
                 r"Approaching rate limits",
                 r"Hooks need review",
             ),
+            # 0.171.0 opens a fresh session on it when its plugin hooks are new or changed
+            # (`dialog_hooks_review_0171.txt`, a real pane, 2026-11-20). Trusting hooks lets them
+            # run outside the sandbox, so only the owner answers it (BL-146): it stays in
+            # `dialogs` above, so nothing is typed into it, and is named here for the surfaces.
+            owner_dialogs=(OwnerDialog(marker=r"Hooks need review", names="a hook review"),),
             # 0.158.0: `/exit` mid-turn prints "Disconnected from this task. Any running work
             # continues." and the app server finished the turn 23 s later (`task_complete`);
             # `Esc` aborted it (`turn_aborted`, reason `interrupted`) and left the composer

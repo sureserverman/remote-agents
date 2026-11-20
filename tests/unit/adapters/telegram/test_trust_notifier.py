@@ -749,3 +749,60 @@ async def test_a_question_asked_again_after_its_settle_was_abandoned_is_settled(
 
     assert second in view.discarded
     assert store.rows[str(_SESSION)]["settled"] is True
+
+
+# --- Sub-plan 5 Task 3.1: a dialog only the owner may answer gets no answers (BL-146) --------
+
+
+class _OwnerDialogSessions(_Sessions):
+    def __init__(self, record, dialog) -> None:
+        super().__init__(record)
+        self.dialog = dialog
+
+    async def owner_dialog(self, session_id):
+        del session_id
+        return self.dialog
+
+
+def _offered(view: _View) -> list[str]:
+    return [
+        button.text
+        for _, arguments in view.amended
+        for row in arguments["reply_markup"].inline_keyboard
+        for button in row
+    ]
+
+
+async def test_a_question_sent_over_a_hook_review_says_so_and_offers_no_trust_row() -> None:
+    sessions = _OwnerDialogSessions(_record(profile="codex"), "a hook review")
+    view = _View()
+
+    await _notifier(sessions, _Store(), view).pass_once()
+
+    assert len(view.sent) == 1
+    assert "waits on a hook review - answer it in its pane" in view.sent[0]["text"]
+    assert "asking whether this folder can be trusted" not in view.sent[0]["text"]
+    assert not any("Trust" in label for label in _offered(view)), _offered(view)
+    assert view.amended == [], "no keyboard is attached: nothing here presses on the dialog"
+
+
+async def test_a_folder_trust_question_on_codex_still_offers_the_trust_row() -> None:
+    sessions = _OwnerDialogSessions(_record(profile="codex"), None)
+    view = _View()
+
+    await _notifier(sessions, _Store(), view).pass_once()
+
+    assert "asking whether this folder can be trusted" in view.sent[0]["text"]
+    assert any("Trust this project" in label for label in _offered(view)), _offered(view)
+
+
+async def test_a_failing_owner_dialog_read_falls_back_to_the_folder_question() -> None:
+    class _Raising(_Sessions):
+        async def owner_dialog(self, session_id):
+            raise RuntimeError("tmux went away")
+
+    view = _View()
+
+    await _notifier(_Raising(_record(profile="codex")), _Store(), view).pass_once()
+
+    assert any("Trust this project" in label for label in _offered(view)), _offered(view)

@@ -204,6 +204,7 @@ from remote_agents.application.session_views import (
     limit_rows,
     listed_sessions,
     only_listed,
+    owner_dialog,
     project_name,
     repeat_words,
     rollover_marks,
@@ -3130,7 +3131,11 @@ class PrivateBotBoundary:
         # only grouping there is -- so answering the question and ending the session must
         # never land in the same row. `test_the_trust_row_never_touches_the_stop_row` pins it.
         answers: list[Button] = []
-        if await self._awaiting_trust(record):
+        # A dialog only the owner may answer is said as a fact below and gets no trust row,
+        # whatever the trust reading says: it is the dialog drawn, and nothing is pressed on it
+        # (BL-146). One pane read, for both.
+        waits = await owner_dialog(self.backend.sessions, record)
+        if waits is None and await self._awaiting_trust(record):
             answers.append(
                 Button(
                     "Trust this project",
@@ -3189,6 +3194,8 @@ class PrivateBotBoundary:
         # boundary (DEC-014), not a judgement about each string's provenance.
         parts = session_row_parts(record)
         facts: list[tuple[str, str]] = []
+        if waits is not None:
+            facts.append(("dialog", waits))
         settings = self.backend.permission_presets
         if settings is not None and record.profile_id in settings.profiles:
             try:
@@ -4733,7 +4740,8 @@ class PrivateBotBoundary:
         agreeing with its sibling rather than a new rule". That is true of **one** of the two
         gates and was read as both. `trust_notifications.py` shares the *state* filter — its
         pass skips any record that is not `UNTRUSTED` — and does **not** share the pane read:
-        it offers Trust on `answerable(profile_id, ...)` alone, with no capture taken at all.
+        it offers Trust on `answerable(profile_id, ...)` alone. Its one pane read, for a dialog
+        only the owner may answer (BL-146), can only withhold the answers, never offer one.
 
         **That asymmetry is correct and deliberate, not a gap to close.** This screen is
         re-rendered on demand, so a capture taken as it draws describes the pane the owner is

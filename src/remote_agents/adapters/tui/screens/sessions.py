@@ -65,6 +65,7 @@ from remote_agents.application.session_views import (
     agent_said,
     context_mark,
     git_line,
+    owner_dialog,
 )
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.domain.profiles import PermissionPreset
@@ -2026,6 +2027,7 @@ class SessionDetailScreen(ChoiceScreen):
         git = await self._git_read(record)
         said = await self._agent_said(record)
         marked = await self._context_mark(record)
+        waits = await owner_dialog(self.services.backend.sessions, record)
         if not self.showing:
             return
         # The name goes to the header and the state's meaning to the status line. They were
@@ -2060,7 +2062,7 @@ class SessionDetailScreen(ChoiceScreen):
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
             + permission_fact
         )
-        entries = self.detail_entries(record, rollover, git, said, marked)
+        entries = self.detail_entries(record, rollover, git, said, marked, waits)
         # The git and agent-said rows are facts: the cursor rests on the first row that does
         # something, so enter on a fresh detail copies the attach command as it always did.
         facts = sum(1 for key, _ in entries if key in FACT_ENTRIES)
@@ -2129,6 +2131,7 @@ class SessionDetailScreen(ChoiceScreen):
         git: SessionGit | None = None,
         said: str | None = None,
         marked: str | None = None,
+        waits: str | None = None,
     ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
@@ -2148,7 +2151,12 @@ class SessionDetailScreen(ChoiceScreen):
         # policy, so this is the only part of the screen a merge would have to touch.
         # The git line first: a fact, not an action -- choosing it does nothing -- and the
         # bot's `git` fact in the same words (`session_views.git_line`, DEC-091).
-        entries: list[tuple[str, str]] = list(git_entries(git))
+        entries: list[tuple[str, str]] = []
+        # First, a dialog only the owner may answer (BL-146): the owner answers it in the pane
+        # this console shows, and nothing here presses on it. A fact row, the bot's `dialog`.
+        if waits is not None:
+            entries.append((OWNER_DIALOG_ENTRY, waits))
+        entries.extend(git_entries(git))
         # Then the agent's own words, under their label (BL-122): the bot draws the same line
         # after its facts. A fact row too; choosing it does nothing.
         if said is not None:
@@ -2897,7 +2905,10 @@ AGENT_SAID_ENTRY = "\x00said"
 CONTEXT_MARK_ENTRY = "\x00mark"
 """The detail's `context N% - roll over?` row: the owner's threshold, a fact row."""
 
-FACT_ENTRIES = frozenset({GIT_ENTRY, AGENT_SAID_ENTRY, CONTEXT_MARK_ENTRY})
+OWNER_DIALOG_ENTRY = "\x00dialog"
+"""The detail's `waits on <dialog> - answer it in its pane` row: a fact row (BL-146)."""
+
+FACT_ENTRIES = frozenset({GIT_ENTRY, AGENT_SAID_ENTRY, CONTEXT_MARK_ENTRY, OWNER_DIALOG_ENTRY})
 """The detail's rows that state something and do nothing; they lead, and the cursor skips them."""
 
 

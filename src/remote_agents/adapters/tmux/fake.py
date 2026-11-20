@@ -37,6 +37,7 @@ class FakeTerminal:
         #: When set, the next `remote_control` press is refused with this reason (BL-109).
         self.remote_control_refusal: RemoteControlRefusal | None = None
         self.trust_states: list[TrustState] = []
+        self.owner_dialogs: dict[str, str] = {}
         self.trust_answers = 0
         self.trust_declines = 0
         #: Every launch this terminal was asked for, as (profile, remote_control) in order.
@@ -169,6 +170,10 @@ class FakeTerminal:
         """
         del session_id
         return self.trust_states.pop(0) if self.trust_states else TrustState.UNKNOWN
+
+    async def owner_dialog(self, session_id: SessionId) -> str | None:
+        """Answer from what the test arms, or None: a fake never invents a dialog."""
+        return self.owner_dialogs.get(str(session_id))
 
     async def answer_trust(self, session_id: SessionId) -> TrustAnswer:
         """A press that lands, because a fake has no dialog it could fail to read.

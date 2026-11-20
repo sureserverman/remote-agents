@@ -20,6 +20,7 @@ and the Textual side still hands its rows to a widget.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -58,6 +59,8 @@ from remote_agents.ports.rollover_store import (
     RolloverEvent,
 )
 from remote_agents.ports.schedules import Once, Repeat, Schedule, When
+
+_LOG = logging.getLogger(__name__)
 
 
 def session_row(record: SessionRecord) -> str:
@@ -784,6 +787,39 @@ async def listed_sessions(sessions: _ListReadableSessions) -> tuple[SessionRecor
     """
     await sessions.refresh_readiness()
     return only_listed(await sessions.list_sessions())
+
+
+OWNER_DIALOG_STATES = frozenset(
+    {SessionState.STARTING, SessionState.UNTRUSTED, SessionState.RUNNING}
+)
+"""The states whose pane is read for a dialog only the owner can answer: a live pane that has
+started, whether or not it is trusted yet. An ended session has no pane to read."""
+
+
+class _OwnerDialogs(Protocol):
+    def owner_dialog(self, session_id: SessionId) -> Awaitable[str | None]: ...
+
+
+def owner_dialog_line(names: str) -> str:
+    """`waits on <names> - answer it in its pane`: the owner's to answer, nothing to press."""
+    return f"waits on {names} - answer it in its pane"
+
+
+async def owner_dialog(sessions: _OwnerDialogs | None, record: SessionRecord) -> str | None:
+    """The line for a dialog only the owner may answer on this session's pane, or None (BL-146).
+
+    The dialog's name is the agent's vertical's (`ComposerScreen.owner_dialogs`, DEC-070); the
+    sentence around it is this one, on both surfaces (DEC-091). Total: a pane read that fails
+    costs only the line, never the detail it is drawn on.
+    """
+    if sessions is None or record.state not in OWNER_DIALOG_STATES:
+        return None
+    try:
+        names = await sessions.owner_dialog(record.session_id)
+    except Exception:
+        _LOG.debug("the owner dialog read failed", exc_info=True)
+        return None
+    return owner_dialog_line(names) if isinstance(names, str) and names.strip() else None
 
 
 AGENT_SAID_LABEL = "agent said"
