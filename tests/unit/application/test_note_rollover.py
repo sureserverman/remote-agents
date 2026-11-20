@@ -69,7 +69,7 @@ def _record(session_id: SessionId, profile=CLAUDE, label: str | None = None) -> 
 
 @dataclass
 class NoteRig:
-    """A real store, a real handoff folder and fakes for the terminal, recording each act."""
+    """A real store, a real note folder and fakes for the terminal, recording each act."""
 
     store: SQLiteRolloverStore
     root: Path
@@ -827,4 +827,67 @@ async def test_a_note_written_after_the_rollover_ended_is_removed_on_a_later_pas
     _write(rig.note_path(asked), b"a late note\n")
     await rig.run()
 
+    assert not rig.note_folder(asked).exists()
+
+
+# Stage 2 gate, round 1 ----------------------------------------------------------------
+
+
+async def test_a_press_older_than_the_patience_is_never_typed_even_onto_an_idle_pane(
+    rig: NoteRig,
+) -> None:
+    """The service down, or the pass wedged, for longer than the press's patience: on its return
+    the pane may be idle, and the owner may have moved on. The press has gone stale; nothing is
+    typed, as a workflow's stale `ready` is never acted on (READY_FRESHNESS)."""
+    await rig.press()
+    rig.later(NOT_IDLE_PATIENCE)
+
+    await rig.run()
+
+    row = await rig.row()
+    assert row.state is RolloverState.FAILED and row.failure_code == "request-stale"
+    assert rig.sends == []
+
+
+async def test_a_hard_linked_note_is_not_accepted(rig: NoteRig, tmp_path: Path) -> None:
+    """A second name for a file elsewhere is not a note the agent wrote for this rollover."""
+    asked = await rig.press()
+    await rig.run()
+    elsewhere = tmp_path / "elsewhere.md"
+    elsewhere.write_bytes(b"someone else's file\n")
+    os.link(elsewhere, rig.note_path(asked))
+
+    await rig.run()
+
+    assert (await rig.row()).state is RolloverState.REQUESTED
+
+
+async def test_a_root_whose_path_is_too_long_to_type_is_refused(tmp_path: Path) -> None:
+    """The root is a folder the session may have reported: its whole path is bounded, as well as
+    its characters, before it is typed."""
+    root = tmp_path
+    for _ in range(4):
+        root = root / ("r" * 150)
+    root.mkdir(parents=True)
+    rig = NoteRig(SQLiteRolloverStore(open_database(tmp_path / "sessions.sqlite3")), root)
+    await rig.press()
+
+    await rig.run()
+
+    assert rig.sends == []
+    assert (await rig.row()).failure_code == "no-handoff-root"
+
+
+async def test_a_note_found_only_after_its_patience_is_not_acted_on(rig: NoteRig) -> None:
+    """The note was written, then the service was down past the note's patience: on its return
+    the session may be in use again, so no successor is started from that stale hand-over."""
+    asked = await rig.press()
+    await rig.run()
+    _write(rig.note_path(asked), b"# Handoff\nDoing X.\n")
+    rig.later(NOTE_PATIENCE)
+
+    await rig.run()
+
+    row = await rig.row()
+    assert row.state is RolloverState.FAILED and row.failure_code == "request-stale"
     assert not rig.note_folder(asked).exists()

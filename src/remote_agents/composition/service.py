@@ -1270,7 +1270,9 @@ def build_rollover_pass(
 
     async def sessions_seen() -> tuple[SessionRecord, ...]:
         records = tuple(await sessions.list_sessions())
-        # With the switch off the pass acts on nothing, so it has no reason to walk the disk.
+        # With the switch off the pass acts on no workflow rollover, so it has no reason to walk
+        # the disk; a note rollover, walked whatever the switch says, starts where its session
+        # works and needs no catalogue.
         if gap is not None and await enabled():
             await gap.close(records)
         return records

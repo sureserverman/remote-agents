@@ -235,7 +235,8 @@ qualification remains an independent final gate.
      SUCCESSOR_ACCEPTED, then the graceful, idle-only stop of the old session.
 - **Postconditions:** COMPLETED; the rows show the lineage (`continued as #N`); the note's
   folder is gone. Short of it: `predecessor-not-idle` (not idle within 10 minutes of the press, or a note
-  written by a session that never went idle again), `note-unwritten` (no note within
+  written by a session that never went idle again), `request-stale` (a press, or a written note,
+  the pass first reached after its patience because it was not running), `note-unwritten` (no note within
   10 minutes of the asking), `note-refused` (something at the note's name that is not a note),
   `not-typed`, `adoption-timeout` (no finished turn within 30 minutes). Each failure sends one
   notice and keeps the old session running.
@@ -243,8 +244,10 @@ qualification remains an independent final gate.
   terminal state and again on each later pass while the session runs (only its own names: a
   folder the agent left more in keeps the rest and its `.gitignore`); one successor session on
   success. Never `request.json`, and nothing under `.claude/`.
-- **Invariants:** The service types only its two fixed sentences, and no byte of either comes
-  from the session or the agent — the note's words are never typed. Nothing is typed into a
+- **Invariants:** The service types only its two fixed sentences, whose one field is the note's
+  path (the session's root, held printable, one line, without a backtick and at most 512
+  characters, and the rollover's id) — the note's words, or anything else an agent wrote, are
+  never typed. Nothing is typed into a
   pane that is not idle. Each sentence is typed at most once, across restarts. "Cancel
   rollover" before the request is typed means nothing is typed. The old session is never
   stopped before its successor's finished turn.

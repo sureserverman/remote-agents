@@ -22,7 +22,7 @@ NOTE_ID = re.compile(r"n-[0-9a-f]{20}")
 
 
 class NoteReading(StrEnum):
-    """What the handoff folder holds for one note rollover."""
+    """What a note rollover's own folder holds."""
 
     ABSENT = "absent"
     """No file at the note's name yet."""

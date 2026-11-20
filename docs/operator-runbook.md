@@ -697,10 +697,12 @@ it and ask for it but never act.
   missing table or key reads as off. A value that is not `true` or `false`, or an unknown key in
   `[rollover]`, is refused when `serve` or the terminal starts (`rollover.auto_rollover must be
   true or false`). Each pass reads the file afresh, so a flip needs no restart, and an edit that
-  breaks the value while running reads as off until it is fixed. With it off, nothing is opened, launched, typed or stopped,
-  and an open rollover waits where it stands. Its patience counts from its last move, so one
-  left waiting long may end `adoption-timeout` or `predecessor-not-idle` when the switch comes
-  back on. Rolling back to 0.58.0 or earlier needs the table deleted first; see
+  breaks the value while running reads as off until it is fixed. With it off, no workflow rollover is opened, launched,
+  typed or stopped, and an open one waits where it stands. Its patience counts from its last
+  move, so one left waiting long may end `adoption-timeout` or `predecessor-not-idle` when the
+  switch comes back on. **A rollover with a note is not governed by the switch**: it runs only
+  on your own press, and it runs whatever the switch says
+  ([Rollover with a note](#rollover-with-a-note)). Rolling back to 0.58.0 or earlier needs the table deleted first; see
   [rollback](#rollback-and-local-recovery).
 - **What starts one.** Only `claude` and `codex` sessions take part: each runs a planning plugin
   that writes handoff envelopes. On both that is staged-planning's planning plugin, which stamps
@@ -819,7 +821,7 @@ Cursor sessions do not offer it.
 3. When that fresh session finishes its first turn, the old one is stopped gracefully, only onto
    an idle composer. The row reads *continued as #N*; the note's folder is removed, as it is
    when the rollover fails or is cancelled. A note the session writes after a failure or a
-   cancel is removed on the next pass. Anything else the agent left in the folder stays, with
+   cancel is removed on the next pass, while that rollover is still the session's latest. Anything else the agent left in the folder stays, with
    the folder's `.gitignore`, for you to look at.
 
 The service types only those two sentences. Neither holds a word the agent wrote, and each is
@@ -829,6 +831,7 @@ Its own failure codes (the old session is kept running in every one, and one not
 
 - **`predecessor-not-idle`** — the session was not idle within 10 minutes of the press, or it
   wrote its note and then never went idle again. Let it finish, then press again.
+- **`request-stale`** — the press was not acted on within 10 minutes because the service was down or busy, so nothing was typed: a late request could land while you were using the session. Press again.
 - **`note-unwritten`** — the session wrote no note within 10 minutes of being asked. Look at its
   pane: it may have refused, or be asking you something. Press again when it is idle.
 - **`note-refused`** — what the session left at the note's name is not a note (a link, a
@@ -2693,6 +2696,7 @@ for the same reason. The *Resume after restart* switch adds it on first use.
 same reason. The *Early limits reset notice* choice adds it on first use. Messages sent before
 the rollback stop deleting themselves; remove those by hand. The database needs nothing either: an older version
 opens it, and its `doctor` reports `database_ready` false, as after any release that migrated.
+**Rolling back below 0.71.0: delete `mark_at` from `[rollover]` first**, for the same reason as the keys above. **And let every note rollover end first** (or cancel it while it waits for its note): an older version reads a `note` row as a workflow rollover, so a requested one could be answered by a plan's handoff and one past it is never carried on. Its `rollovers.kind` column stays, and an older version ignores it. A note folder left behind, `.remote-agents-note-<id>/`, is git-ignored; delete it by hand.
 **Rolling back below 0.65.0 also turns Codex rollover off.** 0.64.1 rolls over Claude sessions only and has no
 `remote-agents session-id`, so a Codex session's handoff writer writes nothing there. Let an open Codex
 rollover finish first: one left open is never carried on. A requested one fails `not-rollable`.

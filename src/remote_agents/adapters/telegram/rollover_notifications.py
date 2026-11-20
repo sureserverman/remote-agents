@@ -89,12 +89,17 @@ _WHY = {
     "request-unanswered": f"the workflow did not answer the request within {_HOURS_ASKED} hours",
     "note-unwritten": f"the session wrote no handoff note within {_MINUTES_NOTE} minutes",
     "note-refused": "what the session left as its handoff note is not a plain note file",
+    "request-stale": (
+        f"the service could not ask the session for its note within {_MINUTES_IDLE} minutes"
+        " of the press, so it asked nothing"
+    ),
 }
 
 #: A note rollover's own words where its step differs from a workflow's (BL-119): its request
 #: is typed into the session itself, before any successor exists. Used only before then.
 _WHY_NOTE = {
     "not-typed": "the request for a handoff note was not confirmed typed into the session",
+    "no-handoff-root": "the note's folder could not be made in the session's folder",
     "predecessor-not-idle": (
         f"the session was not idle for {_MINUTES_IDLE} minutes, before or after its note"
     ),
@@ -156,7 +161,7 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
     asking = rollover.kind is RolloverKind.NOTE and rollover.successor_session_id is None
     words = _WHY_NOTE.get(code) if asking else None
     why = words or _WHY.get(code, escape(code) or "it did not complete")
-    if code in ("not-typed", "permissions-failed") and rollover.failure_detail:
+    if (code in ("not-typed", "permissions-failed") or words) and rollover.failure_detail:
         why = f"{why} ({escape(rollover.failure_detail)})"
     text = f"Rollover failed: {session} — {why}"
     if code not in _PREDECESSOR_NOT_KEPT:

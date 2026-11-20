@@ -306,6 +306,7 @@ def _rollover_failure_reason(code: str) -> str:
         "request-lost": "workflow request is no longer present",
         "note-unwritten": "no handoff note was written in time",
         "note-refused": "the handoff note was not a plain file",
+        "request-stale": "the press went stale before the session was asked",
     }.get(code, code.replace("-", " "))
 
 

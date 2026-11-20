@@ -1,8 +1,13 @@
-"""Turn a workflow's `ready` envelope into one fresh successor, then stop its predecessor.
+"""Turn a workflow's `ready` envelope, or the owner's "Rollover with a note", into one fresh
+successor, then stop its predecessor.
 
 The service runs `RolloverPass.run_once` on a clock of its own, in `serve` only (DEC-115). With
-the `rollover.auto_rollover` switch on, each pass walks every open rollover one step further.
-Only sessions of a `rollable` profile -- one whose plan executor writes envelopes -- take part:
+the `rollover.auto_rollover` switch on, each pass walks every open rollover one step further;
+with it off, only note rollovers (DEC-147), which the owner's own press asked for. Their steps
+are `_ask_for_note` (the note's request, then the note), then the workflow's launch, a fixed
+first message and a finished turn instead of an `accepted` envelope, then the same stop. The
+rest of this note is the workflow's. Only sessions of a `rollable` profile -- one whose plan
+executor writes envelopes -- take part:
 
 - a `ready` envelope naming a RUNNING rollable session opens a rollover at HANDOFF_READY -- if
   it is first seen within `READY_FRESHNESS` of being written; an older one is cleared;
@@ -44,6 +49,8 @@ code it is recorded under:
   workflow answered it; it is never written again (DEC-004)
 - `FAILED: request-unanswered` -- no `ready` answered the owner's request within
   `REQUEST_PATIENCE` of asking (DEC-119)
+- `FAILED: request-stale` -- a note rollover's press found no idle pane to type into within
+  `NOT_IDLE_PATIENCE` because the pass was not running; it is never typed later
 - `FAILED: note-unwritten` -- a note rollover's session wrote no note within `NOTE_PATIENCE`
   of being asked; `FAILED: note-refused` -- what it left at the note's name is not a note (a
   link, a directory, empty, over 32 KiB, another user's)
@@ -183,6 +190,7 @@ REQUEST_LOST = "request-lost"
 REQUEST_UNANSWERED = "request-unanswered"
 NOTE_UNWRITTEN = "note-unwritten"
 NOTE_REFUSED = "note-refused"
+REQUEST_STALE = "request-stale"
 
 NOTE_PATIENCE = timedelta(minutes=10)
 """How long a note rollover waits for the agent's note, counted from the typing (BL-119)."""
@@ -193,8 +201,9 @@ NOTE_REQUEST = (
     " then stop."
 )
 """The one text a note rollover types into the predecessor, after the owner's press (OD-2,
-amending DEC-099). Its only field is the note's path, which the service builds from its own
-root and the rollover's own id: no byte of it comes from the session or the agent."""
+amending DEC-099). Its only field is the note's path, built from the session's root and the
+rollover's own id. The root may be a folder the session reported, so it is held to `_typable`
+(printable, one line, no backtick, bounded); no byte of the text is anything an agent wrote."""
 
 NOTE_FIRST_MESSAGE = "Read `{path}` and continue the work it describes."
 """The one text a note rollover types into its successor: the note's path, never its words
@@ -784,31 +793,37 @@ class RolloverPass:
             await self._type_note_request(rollover, seen, root)
             return
         reading = self._notes.read(root, rollover.id)
-        if reading is NoteReading.WRITTEN and await self._looks_idle(
-            rollover.predecessor_session_id
-        ):
-            await self._store.advance(
-                rollover.id,
-                _S.HANDOFF_READY,
-                at=self._now(),
-                detail="note written",
-                expected_from=_S.REQUESTED,
-            )
-        elif self._now() - asked_at >= NOTE_PATIENCE:
-            # Said as what was found: no note, a note that is not one, or a note written by a
-            # session that never went idle again.
-            code = {
-                NoteReading.ABSENT: NOTE_UNWRITTEN,
-                NoteReading.REFUSED: NOTE_REFUSED,
-                NoteReading.WRITTEN: PREDECESSOR_NOT_IDLE,
-            }[reading]
-            await self._fail(rollover, seen, code)
+        idle = await self._looks_idle(rollover.predecessor_session_id)
+        if self._now() - asked_at < NOTE_PATIENCE:
+            if reading is NoteReading.WRITTEN and idle:
+                await self._store.advance(
+                    rollover.id,
+                    _S.HANDOFF_READY,
+                    at=self._now(),
+                    detail="note written",
+                    expected_from=_S.REQUESTED,
+                )
+            return
+        # Past the patience, nothing is acted on, and the end says what was found: no note, a
+        # note that is not one, a note on a session that never went idle again, or a note first
+        # seen now because the pass was not running -- a hand-over gone stale.
+        code = {
+            NoteReading.ABSENT: NOTE_UNWRITTEN,
+            NoteReading.REFUSED: NOTE_REFUSED,
+            NoteReading.WRITTEN: REQUEST_STALE if idle else PREDECESSOR_NOT_IDLE,
+        }[reading]
+        await self._fail(rollover, seen, code)
 
     async def _type_note_request(self, rollover: Rollover, seen: _Seen, root: Path) -> None:
         assert self._notes is not None  # checked by the caller
-        if not await self._looks_idle(rollover.predecessor_session_id):
-            if self._now() - rollover.requested_at >= NOT_IDLE_PATIENCE:
-                await self._fail(rollover, seen, PREDECESSOR_NOT_IDLE)
+        idle = await self._looks_idle(rollover.predecessor_session_id)
+        if self._now() - rollover.requested_at >= NOT_IDLE_PATIENCE:
+            # The press is the consent for a request typed soon after it. One older than its
+            # patience -- the service down or wedged meanwhile -- is never typed, even onto an
+            # idle pane: the owner may have moved on, as a stale `ready` is never acted on.
+            await self._fail(rollover, seen, REQUEST_STALE if idle else PREDECESSOR_NOT_IDLE)
+            return
+        if not idle:
             return
         path = self._notes.note_path(root, rollover.id)
         if path is None or not _typable(str(path)):
@@ -1458,10 +1473,15 @@ class RolloverPass:
                 )
 
 
+_TYPABLE_PATH = 512
+"""The longest note path typed: a root is a folder a session may have reported, so its length is
+bounded as well as its characters."""
+
+
 def _typable(text: str) -> bool:
-    """Whether `text` can sit inside the typed request as it is: printable, one line, and no
-    backtick to close the request's own quoting."""
-    return text.isprintable() and "`" not in text
+    """Whether `text` can sit inside the typed request as it is: printable, one line, no backtick
+    to close the request's own quoting, and at most `_TYPABLE_PATH` characters."""
+    return len(text) <= _TYPABLE_PATH and text.isprintable() and "`" not in text
 
 
 def _note_first_message(path: Path) -> str:

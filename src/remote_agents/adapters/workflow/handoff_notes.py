@@ -80,6 +80,8 @@ class FileHandoffNotes:
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
+            # One name only: a hard link is a second name for a file written for something else.
+            or info.st_nlink != 1
             or not 0 < info.st_size <= MAX_NOTE_BYTES
         ):
             return NoteReading.REFUSED
