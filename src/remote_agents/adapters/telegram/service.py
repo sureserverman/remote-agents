@@ -59,6 +59,7 @@ from remote_agents.adapters.telegram.presenters import (
     UNIFORM_ROW_WIDTH,
     Button,
     RenderedMessage,
+    bounded_text,
     render_message,
     uniform_keyboard,
 )
@@ -2754,8 +2755,15 @@ class PrivateBotBoundary:
                 lines.append(
                     f"<b>{escape(parts.identity)}</b> #{parts.sequence}\n"
                     f"<code>{escape(second)}</code>"
-                    # The agent's claim under the row's measured line, never inside it.
-                    + ("" if words is None else f"\n{escape(words)}")
+                    # The agent's claim under the row's measured line, never inside it, and cut
+                    # to the row's width: eight rows of the drain's 240-character bound, escaped,
+                    # would pass a message's 4096 units and cost the whole list. The detail
+                    # carries the line whole.
+                    + (
+                        ""
+                        if words is None
+                        else f"\n{escape(bounded_text(words, limit=UNIFORM_ROW_WIDTH))}"
+                    )
                 )
                 # The agent's mark between the state and the sequence: the state group is
                 # what the eye scans first, and the mark answers "which of these two is

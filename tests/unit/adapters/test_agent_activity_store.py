@@ -242,9 +242,12 @@ async def test_last_words_are_the_newest_reported_finished_turn_per_session(stor
     await store.append(_said("c", ActivityKind.COMPLETED, "guessed", ActivityConfidence.INFERRED))
     await store.append(_said("d", ActivityKind.COMPLETED, None))
     await store.append(_said("e", ActivityKind.COMPLETED, ""))
+    # The newest finished turn said nothing: an older turn's words are not shown as its own.
+    await store.append(_said("g", ActivityKind.COMPLETED, "an older turn's words"))
+    await store.append(_said("g", ActivityKind.COMPLETED, "   "))
     await store.append(_said("f", ActivityKind.LIMIT_REACHED, "limit hit"))
 
-    words = await store.last_words(("a", "b", "c", "d", "e", "f", "never-ran"))
+    words = await store.last_words(("a", "b", "c", "d", "e", "f", "g", "never-ran"))
 
     assert words == {"a": "Tests pass; pushed the branch"}
 

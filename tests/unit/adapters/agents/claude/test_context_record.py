@@ -372,3 +372,78 @@ def test_the_production_descriptor_reads_the_record_through_the_limits_switch(
 
     assert usage is not None and usage.context is not None
     assert usage.context.reported_percent == 41.5
+
+
+# --- Stage 1 gate, round 1: never a blocking open, never another user's file --------------------
+
+
+def _within(seconds: float, call):
+    """Run `call` on a thread and fail, rather than hang, if it has not returned in time."""
+    import threading
+
+    answer: list[object] = []
+    worker = threading.Thread(target=lambda: answer.append(call()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), "the read blocked"
+    return answer[0]
+
+
+def test_a_record_that_is_a_fifo_is_refused_without_blocking(
+    tmp_path: Path, workspace: Path
+) -> None:
+    _transcript(tmp_path, workspace)
+    directory = tmp_path / "claude-context"
+    directory.mkdir()
+    os.mkfifo(directory / f"{SESSION}.json")
+
+    context = _within(5, lambda: _context(tmp_path, workspace))
+
+    assert not context.provider_reported
+
+
+def test_a_limits_file_that_is_a_fifo_is_refused_without_blocking(tmp_path: Path) -> None:
+    os.mkfifo(tmp_path / "absent-limits.json")
+
+    limits = _within(5, lambda: _reader(tmp_path).limits())
+
+    assert limits.windows == ()
+
+
+def test_a_record_another_user_owns_is_refused(
+    tmp_path: Path, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _transcript(tmp_path, workspace)
+    _record(tmp_path / "claude-context")
+    real = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: real + 1)
+
+    assert not _context(tmp_path, workspace).provider_reported
+
+
+@pytest.mark.parametrize("session", ["../escape", "-rf", "a\x00b", "a" * 200])
+def test_a_session_id_the_hop_would_refuse_is_never_a_file_name(
+    tmp_path: Path, workspace: Path, session: str
+) -> None:
+    _transcript(tmp_path, workspace)
+
+    assert not _context(tmp_path, workspace, session=session).provider_reported
+
+
+def test_forget_except_collects_an_ended_session_s_abandoned_temporary(tmp_path: Path) -> None:
+    import time
+
+    directory = tmp_path / "claude-context"
+    directory.mkdir()
+    old = directory / ".ended-one.json.deadbeef0000.tmp"
+    fresh = directory / ".live-one.json.cafef00d0000.tmp"
+    for path in (old, fresh):
+        path.write_text("{", encoding="utf-8")
+    stale = time.time() - 2 * 3600
+    os.utime(old, (stale, stale))
+
+    _reader(tmp_path).forget_except(frozenset({"live-one"}))
+
+    assert not old.exists()
+    # Young enough to belong to a hop still writing: left for that hop.
+    assert fresh.exists()

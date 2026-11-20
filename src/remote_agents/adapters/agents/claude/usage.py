@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import stat
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from remote_agents.ports.agent_usage_support import (
     _safe_glob,
     _window,
 )
+from remote_agents.ports.session_identity import safe_session_id
 
 _FUTURE_TOLERANCE = timedelta(seconds=90)
 """How far ahead of this clock a recording may be dated before it is a wrong clock, not news.
@@ -54,6 +56,40 @@ current one: an idle session falls back to the estimate, hedged as before (BL-11
 
 _CONTEXT_RECORD_MAX_BYTES = 4096
 """A record is three numbers; anything larger was not written by the hop and is not read."""
+
+_LIMITS_RECORD_MAX_BYTES = 1 << 20
+"""The hop's limits record is a few hundred bytes; a megabyte is not one, whatever it holds."""
+
+_ABANDONED_TEMPORARY_SECONDS = 3600.0
+"""The hop's own bound (`statusline._ABANDONED_AFTER_SECONDS`) for a temporary nobody owns."""
+
+
+def _regular_file_bytes(path: Path, *, limit: int, follow: bool, own: bool = False) -> bytes | None:
+    """The bytes of a regular file of at most `limit` bytes, or None for anything else.
+
+    Opened non-blocking, so a FIFO or a device answers at once and is refused by `fstat`
+    rather than parking the thread that opened it; `follow=False` refuses a link at the last
+    component; `own=True` also refuses a file another user owns. Every failure is None.
+    """
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    if not follow:
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except (OSError, ValueError):
+        return None
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_size > limit:
+            return None
+        if own and status.st_uid != os.getuid():
+            return None
+        return os.read(descriptor, limit + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
 
 _STALE_LIMIT_AGE = timedelta(minutes=30)
 """How old the hop's recording may be before its numbers stop being shown.
@@ -178,27 +214,22 @@ class ClaudeUsageReader:
         or a time outside the freshness bound. The id is the file's name, so it is used only as
         the composition's own record of the session, never from a pane.
         """
-        if self._context_directory is None or not session_id:
-            return None
-        if "/" in session_id or session_id.startswith("."):
+        # The hop's own rule for the id it names the file after, so the two ends agree.
+        if self._context_directory is None or safe_session_id(session_id) is None:
             return None
         try:
             if self._context_directory.is_symlink():
                 return None
-            descriptor = os.open(
-                self._context_directory / f"{session_id}.json", os.O_RDONLY | os.O_NOFOLLOW
-            )
         except OSError:
             return None
-        try:
-            status = os.fstat(descriptor)
-            if not stat.S_ISREG(status.st_mode) or status.st_size > _CONTEXT_RECORD_MAX_BYTES:
-                return None
-            raw = os.read(descriptor, _CONTEXT_RECORD_MAX_BYTES + 1)
-        except OSError:
+        raw = _regular_file_bytes(
+            self._context_directory / f"{session_id}.json",
+            limit=_CONTEXT_RECORD_MAX_BYTES,
+            follow=False,
+            own=True,
+        )
+        if raw is None:
             return None
-        finally:
-            os.close(descriptor)
         document = _loads(raw.decode("utf-8", errors="replace"))
         if not isinstance(document, dict):
             return None
@@ -225,8 +256,10 @@ class ClaudeUsageReader:
         """Remove every session's record but the kept sessions'; quiet, and never via a link.
 
         Called once the service knows which sessions are still live, so an ended session's
-        record goes with it (DEC-146). Only `<id>.json` regular files are this reader's to
-        remove: the hop's in-flight temporaries are dotted and collected by the hop.
+        record goes with it (DEC-146). Only `<id>.json` files are this reader's to remove, plus
+        a hop's dotted temporary older than the hop's own one-hour bound: a hop killed between
+        its open and its rename leaves one, and only a later hop *for the same session*
+        collects it, which an ended session never runs.
         """
         directory = self._context_directory
         if directory is None:
@@ -237,8 +270,18 @@ class ClaudeUsageReader:
             entries = list(os.scandir(directory))
         except OSError:
             return
+        stale_before = time.time() - _ABANDONED_TEMPORARY_SECONDS
         for entry in entries:
             name = entry.name
+            if name.startswith(".") and name.endswith(".tmp") and ".json." in name:
+                try:
+                    if entry.is_file(follow_symlinks=False) and (
+                        entry.stat(follow_symlinks=False).st_mtime < stale_before
+                    ):
+                        os.unlink(entry.path)
+                except OSError:
+                    pass
+                continue
             if name.startswith(".") or not name.endswith(".json"):
                 continue
             if name.removesuffix(".json") in kept:
@@ -291,11 +334,12 @@ class ClaudeUsageReader:
         """
         if self._limits_path is None:
             return (), None, None
-        try:
-            text = self._limits_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        # Never a blocking open: a FIFO or a device at this path would park the reader's
+        # thread before any check ran. A regular file of a sane size only.
+        raw = _regular_file_bytes(self._limits_path, limit=_LIMITS_RECORD_MAX_BYTES, follow=True)
+        if raw is None:
             return (), None, None
-        document = _loads(text)
+        document = _loads(raw.decode("utf-8", errors="replace"))
         if not isinstance(document, dict):
             return (), None, None
         observed = _instant(document.get("recorded_at"))

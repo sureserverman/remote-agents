@@ -395,6 +395,9 @@ def _context_payload(**context_window: object) -> bytes:
                 "total_output_tokens": 9000,
                 "current_usage": {"input_tokens": 12, "cache_read_input_tokens": 414988},
                 "remaining_percentage": 58.5,
+                # A real size by default, so a test about the id, the directory or a failure is
+                # refused for its own reason and never only for a missing size.
+                "context_window_size": 1_000_000,
                 **context_window,
             },
         }
@@ -487,20 +490,17 @@ def test_no_context_is_recorded_when_the_payload_has_no_context_window(tmp_path:
     assert not _context_file(tmp_path).exists()
 
 
-def test_a_window_size_that_is_not_a_positive_integer_is_recorded_as_null(
-    tmp_path: Path,
-) -> None:
+def test_a_record_without_a_usable_window_size_is_not_written(tmp_path: Path) -> None:
+    """The reader shows the percentage against the size; without one it would discard it."""
     from remote_agents.statusline import record_context
 
-    for size in ("1000000", -5, 0, True, 1.5, None):
+    for size in ("1000000", -5, 0, True, 1.5, None, 10**12):
         record_context(
             _context_payload(used_percentage=12, context_window_size=size),
             tmp_path,
             {"REMOTE_AGENTS_SESSION_ID": _SESSION},
         )
-        document = json.loads(_context_file(tmp_path).read_text(encoding="utf-8"))
-        assert document["used_percentage"] == 12
-        assert document["context_window_size"] is None, size
+        assert not _context_file(tmp_path).exists(), size
 
 
 def test_a_missing_state_directory_gets_no_context_directory(tmp_path: Path) -> None:
@@ -631,7 +631,9 @@ def test_a_stale_context_temporary_is_collected(tmp_path: Path) -> None:
     os.utime(stale, (old, old))
 
     record_context(
-        _context_payload(used_percentage=41.5), tmp_path, {"REMOTE_AGENTS_SESSION_ID": _SESSION}
+        _context_payload(used_percentage=41.5, context_window_size=1_000_000),
+        tmp_path,
+        {"REMOTE_AGENTS_SESSION_ID": _SESSION},
     )
 
     assert not stale.exists()

@@ -49,6 +49,10 @@ LIMITS_FILE_NAME = "claude-limits.json"
 #: `test_claude_context_directory_is_under_the_state_directory_and_named_as_the_hop_writes_it`.
 CONTEXT_DIRECTORY_NAME = "claude-context"
 
+#: The largest context window a record may name. Today's largest is a million tokens; a
+#: hundred million leaves room for growth and keeps a pathological integer off the disk.
+_MAX_WINDOW_TOKENS = 100_000_000
+
 #: How old an abandoned temporary must be before a later hop collects it. Claude Code cancels
 #: an in-flight hop when a newer update arrives, so a temporary between `os.open` and
 #: `os.replace` is a normal casualty, and nothing else owns this directory's litter. An hour
@@ -69,13 +73,14 @@ def _rate_limits(payload: bytes) -> object | None:
     return document["rate_limits"]
 
 
-def _context_window(payload: bytes) -> tuple[float, int | None] | None:
+def _context_window(payload: bytes) -> tuple[float, int] | None:
     """`(used_percentage, context_window_size)`, or `None` when there is no figure to keep.
 
     The percentage must be a real number from 0 to 100: Claude Code sends null before the
     first turn (seen 2026-11-20), and a bool is an `int` to Python but no percentage. The size
-    is kept only as a positive integer and is otherwise null -- the reader has the configured
-    window to fall back on, and a wrong size would mislabel a right percentage.
+    must be a positive integer no larger than `_MAX_WINDOW_TOKENS`: the reader shows the
+    percentage against it, and a record without a usable one is not written at all, since the
+    reader would discard it and fall back to the transcript estimate anyway.
     """
     try:
         document = json.loads(payload)
@@ -92,8 +97,8 @@ def _context_window(payload: bytes) -> tuple[float, int | None] | None:
     if not math.isfinite(figure) or not 0 <= figure <= 100:
         return None
     size = window.get("context_window_size")
-    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
-        size = None
+    if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= _MAX_WINDOW_TOKENS:
+        return None
     return float(figure), size
 
 

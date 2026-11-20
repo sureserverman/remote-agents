@@ -169,8 +169,9 @@ class SQLiteActivityStore:
 
         A finished turn is a `COMPLETED` row; only `REPORTED` ones count, because an inferred
         row is this service's guess and the line these feed is the agent's own claim (BL-122).
-        A later question or limit stop does not hide the last finished turn's words. Rows with
-        no words are skipped, and a session with none is absent from the answer. The detail
+        A later question or limit stop does not hide the last finished turn's words. The newest
+        finished turn is the one read even when it carried no words, so an older turn's words
+        are never shown as the latest: such a session is absent from the answer. The detail
         was bounded to one line at the drain (DEC-037), so nothing here truncates it.
         """
         wanted = tuple(dict.fromkeys(session_ids))
@@ -186,13 +187,12 @@ class SQLiteActivityStore:
                 FROM agent_activity
                 WHERE session_id IN ({marks})
                     AND kind = ? AND confidence = ?
-                    AND detail IS NOT NULL AND detail != ''
                 GROUP BY session_id
             ) AS latest ON activity.activity_id = latest.newest
             """,  # noqa: S608 -- only `?` placeholders are interpolated, one per session id
             (*wanted, ActivityKind.COMPLETED.value, ActivityConfidence.REPORTED.value),
         ).fetchall()
-        return {row[0]: row[1] for row in rows}
+        return {row[0]: row[1] for row in rows if isinstance(row[1], str) and row[1].strip()}
 
     async def newest_stop_detail(self, session_id: str) -> str | None:
         """The words of the session's newest recorded limit stop, or `None` with none."""

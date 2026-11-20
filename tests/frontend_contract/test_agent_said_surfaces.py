@@ -4,6 +4,14 @@ Read off what each surface renders -- the bot's detail and list messages, the lo
 detail rows and the sessions pane's subtitle -- not off the shared builder, as the git line's
 contract does. The words are the agent's claim about its own turn, kept apart from the measured
 facts by their label (OD-3).
+
+**Where each surface draws the list's line, and why they differ.** The bot's list rows are
+two lines each, so the line goes under every row (cut to the row's width; the detail carries it
+whole). The console's sessions pane draws one line per row with columns sized to the pane, so
+the line goes in the pane's subtitle, for the highlighted row only -- the one place under the
+cursor with room. The plain sessions screen of a bare `remote-agents tui` shows it on the
+detail only. Same words, same source, placed by each surface's layout (DEC-033 is about the
+step and the words, not the pixels); recorded here so the difference is a decision, not drift.
 """
 
 from __future__ import annotations
@@ -167,3 +175,34 @@ async def test_a_failing_read_costs_the_line_never_the_screen() -> None:
 
     assert "said" not in _plain(detail.text)
     assert "said" not in _plain(page.text)
+
+
+async def test_a_full_page_of_long_escaped_words_still_fits_one_message() -> None:
+    """Eight rows at the drain's 240-character bound, every character one HTML escape expands,
+    must not pass Telegram's 4096 units: the list is the only way to reach a session."""
+    from remote_agents.adapters.telegram.presenters import UNIFORM_ROW_WIDTH
+
+    records = tuple(_record(f"project-{index}") for index in range(8))
+    worst = '"<&>' * 60
+
+    class _Eight(_Sessions):
+        async def list_sessions(self):
+            return records
+
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            sessions=_Eight(records[0]),
+            last_words=_reader({str(record.session_id): worst for record in records}),
+        ),
+    )
+    page = await boundary._sessions_reply(records=records)
+    lines = [line for line in _plain(page.text).splitlines() if line.startswith("agent said")]
+
+    assert len(lines) == 8
+    assert all(len(line) <= UNIFORM_ROW_WIDTH for line in lines)
+    assert all(line.endswith("…") for line in lines)
+    # The detail keeps the whole line.
+    detail = await boundary._detail_reply(str(records[0].session_id))
+    assert f"agent said: {worst}" in _plain(detail.text)
