@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.activity_spool import _observed_event
-from remote_agents.adapters.agents.claude.hooks import HOOK_LICENCE
+from remote_agents.adapters.agents.claude.hooks import AGENTS_VIEW, HOOK_LICENCE
 from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "claude"
@@ -103,7 +103,10 @@ def test_a_scheduled_wakeup_does_not_pause_the_stop() -> None:
 
 def test_background_work_pauses_only_the_stop() -> None:
     """An ask while a shell runs in the background is still an ask."""
-    payload = {**_fixture("notification.json"), "background_tasks": [_RUNNING_SHELL]}
+    payload = {
+        **_fixture("notification_agent_needs_input.json"),
+        "background_tasks": [_RUNNING_SHELL],
+    }
     observed = _claude(payload)
     assert observed is not None and not observed.paused
 
@@ -113,10 +116,10 @@ def test_background_work_pauses_only_the_stop() -> None:
     [
         ("stop_failure.json", "StopFailure", "rate_limit", None),
         (
-            "notification.json",
+            "notification_agent_needs_input.json",
             "Notification",
-            "permission_prompt",
-            "Claude needs your permission to use Bash",
+            "agent_needs_input",
+            f"{AGENTS_VIEW}: {_fixture('notification_agent_needs_input.json')['message']}",
         ),
     ],
 )
@@ -149,21 +152,24 @@ def test_message_outranks_last_assistant_message_when_both_arrive() -> None:
     """Claude's `detail_fields` are an ordered group: `message` is the event's own wording and wins
     over the trailing assistant line if an upstream payload ever carries both.
     """
-    observed = _claude({**_fixture("notification.json"), "last_assistant_message": "trailing"})
+    payload = _fixture("notification_agent_needs_input.json")
+    observed = _claude({**payload, "last_assistant_message": "trailing"})
 
     assert observed is not None
-    assert observed.detail == "Claude needs your permission to use Bash"
+    assert observed.detail == f"{AGENTS_VIEW}: {payload['message']}"
 
 
 def test_a_punctuated_reason_degrades_to_none_rather_than_reaching_disk() -> None:
     """A discriminating field is an enumerated token, not a sentence: anything outside the
-    unpunctuated documented form is refused by `_plain_token`, and the record still spools
-    -- degraded, never dropped.
+    unpunctuated documented form is refused by `_plain_token`. A `Stop` still spools, degraded,
+    because its meaning does not turn on its reason; a `StopFailure` whose reason is refused
+    means nothing and writes nothing (BL-131).
     """
-    observed = _claude({**_fixture("stop_failure.json"), "error": "rate limit: try later!"})
+    observed = _claude({**_fixture("stop.json"), "error": "rate limit: try later!"})
 
-    assert observed is not None and observed.event == "StopFailure"
+    assert observed is not None and observed.event == "Stop"
     assert observed.reason is None
+    assert _claude({**_fixture("stop_failure.json"), "error": "rate limit: try later!"}) is None
 
 
 def test_an_event_claude_s_licence_does_not_list_writes_nothing() -> None:
@@ -192,7 +198,6 @@ def test_no_claude_payload_field_naming_a_path_prompt_or_foreign_id_reaches_disk
     for name in (
         "stop.json",
         "stop_failure.json",
-        "notification.json",
         "notification_agent_needs_input.json",
     ):
         payload = _fixture(name)
@@ -219,13 +224,11 @@ def test_a_permission_prompt_carries_the_message_claude_sends_with_it() -> None:
     """The measured half, and the one 59 of the owner's 78 rows came from.
 
     `permission_prompt`'s `message` was captured live on 2026-09-06 from this project's own
-    spool — "Claude needs your permission to use Bash" — four times in one session.
+    spool — "Claude needs your permission to use Bash" — four times in one session. Since
+    DEC-098 its `PermissionRequest` twin carries the ask, so it means nothing, and since BL-131
+    a notice that means nothing writes no record rather than one the drain drops.
     """
-    observed = _claude(_fixture("notification.json"))
-
-    assert observed is not None
-    assert observed.reason == "permission_prompt"
-    assert observed.detail == "Claude needs your permission to use Bash"
+    assert _claude(_fixture("notification.json")) is None
 
 
 def test_a_needs_input_notification_carries_the_message_claude_sends_with_it() -> None:
@@ -242,7 +245,7 @@ def test_a_needs_input_notification_carries_the_message_claude_sends_with_it() -
 
     assert observed is not None
     assert observed.reason == "agent_needs_input"
-    assert observed.detail == payload["message"]
+    assert observed.detail == f"{AGENTS_VIEW}: {payload['message']}"
     assert observed.ask is None
 
 
@@ -251,7 +254,8 @@ def test_a_mapped_notification_without_a_message_is_still_a_needs_answer() -> No
 
     The 19 detail-less `needs_answer` rows of 2026-08-20 and 2026-09-06 stay unexplained: the
     measured `agent_needs_input` carries a message. Whatever produced them, a mapped notification
-    with no `message` still becomes a record, with `detail=None` rather than invented words.
+    with no `message` still becomes a record, its detail only the lead that says where it came
+    from (BL-131) rather than invented words.
     """
     payload = {
         key: value
@@ -263,4 +267,4 @@ def test_a_mapped_notification_without_a_message_is_still_a_needs_answer() -> No
 
     assert observed is not None
     assert observed.reason == "agent_needs_input"
-    assert observed.detail is None, "nothing invents words the payload did not carry"
+    assert observed.detail == AGENTS_VIEW, "nothing invents words the payload did not carry"

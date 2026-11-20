@@ -47,7 +47,11 @@ from remote_agents.adapters.agents.turn_markers import (
     FileStartedMarks,
     FileTurnMarkers,
 )
-from remote_agents.ports.agent_activity import bounded_detail_line
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    bounded_detail_line,
+)
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
 from remote_agents.ports.turn_markers import TurnMarkers
@@ -59,14 +63,6 @@ if TYPE_CHECKING:
 
 MAXIMUM_PAYLOAD_BYTES = 32_768
 
-#: The event that starts a turn, and the events that end one (BL-108, DEC-104). Read from the
-#: payload's `hook_event_name`, beside the agent's own `session_id` that the marker keeps as its
-#: owner: a submit's payload also carries the owner's `prompt`, and nothing here reads it.
-#: Claude and Codex both spell `UserPromptSubmit` and `Stop` this way; only
-#: Claude has a `StopFailure` (Codex fires nothing on a failed turn; its licence's `reports`, in
-#: `codex/hooks.py`, says so).
-TURN_STARTED = "UserPromptSubmit"
-TURN_ENDED = frozenset({"Stop", "StopFailure"})
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
@@ -87,6 +83,10 @@ class ObservedAgentEvent:
     reason: str | None
     detail: str | None
     observed_at: datetime
+    kind: ActivityKind
+    """What the event means, from the licence (BL-131): the drain reads this, never `event`."""
+    confidence: ActivityConfidence = ActivityConfidence.REPORTED
+    """Every hook record is the agent's own word; only the title watcher infers."""
     ask: str | None = None
     """Which CLASS of thing the agent is waiting on, as the provider's own token.
 
@@ -123,6 +123,8 @@ class ObservedAgentEvent:
             "observed_at": self.observed_at.isoformat(),
             "ask": self.ask,
             "paused": self.paused,
+            "kind": self.kind.value,
+            "confidence": self.confidence.value,
         }
 
 
@@ -189,11 +191,16 @@ def spool_agent_event(
         # pane inherits the pane's id, and only this tells its hooks from its parent's.
         owner = fields.get("session_id")
         turns = FileTurnMarkers(activity_directory) if markers is None else markers
-        # Looked up where it is needed and no earlier: a submit asks whether it marks a turn,
-        # and a record asks what it may keep. Ending a marker needs neither, so a vertical that
-        # fails to load still lets a finished turn end the one it started.
-        found = licence() if event == TURN_STARTED else None
-        if found is not None and found.starts_turn_marker:
+        # The licence says which event starts a turn and which ends one (BL-131), so it is
+        # looked up before either. Accepted cost: a vertical that fails to load no longer ends
+        # the marker its turn started; the screen read ends it, as DEC-104 allows.
+        found = licence()
+        # Past the session gate, where the licence lookup has loaded the descriptor port anyway.
+        from remote_agents.ports.provider_descriptor import TurnEdge
+
+        entry = found.events.get(event) if found is not None and isinstance(event, str) else None
+        edge = None if entry is None else entry.turn
+        if edge is TurnEdge.STARTS:
             turns.start(session_id, owner=owner if isinstance(owner, str) else None)
             # The turn's owner names its own conversation, kept for the resume after a restart.
             # Only the agent that holds the marker after `start` writes it: a nested agent lands
@@ -207,17 +214,15 @@ def spool_agent_event(
             except Exception:
                 pass
             return 0
-        # Ungated, unlike the start: ending a marker that was never started is a no-op. Guarded
-        # on its own, so a marker that cannot be removed never costs the "finished" record.
-        if event in TURN_ENDED:
+        # Ending a marker that was never started is a no-op. Guarded on its own, so a marker
+        # that cannot be removed never costs the "finished" record.
+        if edge is TurnEdge.ENDS:
             try:
                 turns.end_if_owned_by(session_id, owner)
             except Exception:
                 pass
         if document is None:
             return 0
-        if event != TURN_STARTED:
-            found = licence()
         # The agent's word that it came up, and nothing it said (DEC-135).
         if found is not None and found.started_event is not None and event == found.started_event:
             FileStartedMarks(activity_directory).mark(session_id)
@@ -352,20 +357,33 @@ def _observed(
     if not isinstance(event, str):
         return None
     fields = licence.events.get(event)
-    if fields is None or (fields.kind is None and not fields.kinds_by_reason):
+    if fields is None:
+        return None
+    reason = _first(document, fields.discriminating_fields, _plain_token)
+    # What the event means, from the licence alone (BL-131). No meaning, no record: the drain
+    # would have no kind to give it, and dropped every such record when it decided by name.
+    kind = fields.kind
+    if kind is None and reason is not None:
+        kind = fields.kinds_by_reason.get(reason)
+    if kind is None:
         return None
     if licence.admits is not None and not licence.admits(document):
         return None
+    detail = (
+        _ask_detail(document)
+        if fields.detail_from_tool_input
+        else _first(document, fields.detail_fields, bounded_detail_line)
+    )
+    lead = None if reason is None else fields.detail_lead_by_reason.get(reason)
+    if lead is not None:
+        detail = lead if detail is None else (bounded_detail_line(f"{lead}: {detail}") or lead)
     return ObservedAgentEvent(
         session_id=session_id,
         event=event,
-        reason=_first(document, fields.discriminating_fields, _plain_token),
-        detail=(
-            _ask_detail(document)
-            if fields.detail_from_tool_input
-            else _first(document, fields.detail_fields, bounded_detail_line)
-        ),
+        reason=reason,
+        detail=detail,
         observed_at=moment.astimezone(UTC),
+        kind=kind,
         ask=_first(document, fields.ask_fields, _plain_token),
         paused=licence.paused is not None and licence.paused(document),
     )

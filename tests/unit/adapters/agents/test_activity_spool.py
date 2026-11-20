@@ -116,6 +116,10 @@ def test_a_stop_payload_keeps_only_the_fields_the_notification_needs(tmp_path: P
         # `paused` joined on 2026-10-17 (DEC-129): a boolean the licence decides, never a
         # payload field. `False` because nothing in this payload is still in flight.
         "paused": False,
+        # `kind` and `confidence` joined on 2026-11-20 (BL-131): what the event means, from
+        # the licence, so the drain never reads an event name.
+        "kind": "completed",
+        "confidence": "reported",
     }
 
 
@@ -141,18 +145,12 @@ def test_a_stop_payload_never_spools_the_filesystem_layout_it_carries(tmp_path: 
         (
             {
                 "hook_event_name": "Notification",
-                "notification_type": "permission_prompt",
-                "message": "Claude needs your permission to use Bash",
+                "notification_type": "agent_needs_input",
+                "message": "build needs your input",
             },
             "Notification",
-            "permission_prompt",
-            "Claude needs your permission to use Bash",
-        ),
-        (
-            {"hook_event_name": "SessionEnd", "reason": "logout"},
-            "SessionEnd",
-            "logout",
-            None,
+            "agent_needs_input",
+            "from the agents view: build needs your input",
         ),
     ],
 )
@@ -1065,14 +1063,13 @@ def test_only_claude_and_codex_start_a_marker(provider: str, tmp_path: Path) -> 
     assert list(directory.iterdir()) == []
 
 
-def test_a_licence_that_cannot_load_still_lets_a_finished_turn_end_its_marker(
+def test_a_licence_that_cannot_load_costs_its_turns_end_and_never_the_agent(
     tmp_path: Path,
 ) -> None:
-    """Ending a marker never needed a licence, so a failed lookup must not cost it.
-
-    Found by the close-out second pass: the lookup once ran before the end step, so a vertical
-    that failed to import left a started turn open until the screen read closed it.
-    """
+    """Since BL-131 the licence says which event ends a turn, so a vertical that fails to load
+    leaves its started marker for the screen read to close (DEC-104), and the hook still
+    answers success. The accepted cost of the design (Sub-plan 4, design point 3); until then
+    ending a marker needed no licence."""
     directory = _spool(tmp_path)
     _run(_stream(_SUBMIT_PAYLOAD), directory)
     assert _marker(directory).is_file()
@@ -1082,7 +1079,8 @@ def test_a_licence_that_cannot_load_still_lets_a_finished_turn_end_its_marker(
 
     assert _run(_stream(_STOP_PAYLOAD), directory, licence=broken) == 0
 
-    assert not _marker(directory).exists()
+    assert _marker(directory).is_file()
+    assert _records(directory) == []
 
 
 @pytest.mark.parametrize(
@@ -1517,3 +1515,128 @@ def test_a_finished_turn_of_another_provider_marks_no_conversation(
     assert _run(_stream(_STOP_PAYLOAD), directory, provider=provider) == 0
 
     assert FileConversationMarks(directory).sessions() == ()
+
+
+# --- the meaning travels in the record, and turns follow the licence (BL-131) -------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "kind"),
+    [
+        (_STOP_PAYLOAD, "completed"),
+        ({"hook_event_name": "StopFailure", "error": "rate_limit"}, "limit_reached"),
+        ({"hook_event_name": "StopFailure", "error": "max_output_tokens"}, "output_limit"),
+        (
+            {"hook_event_name": "Notification", "notification_type": "agent_needs_input"},
+            "needs_answer",
+        ),
+        ({"hook_event_name": "PermissionRequest", "tool_name": "Bash"}, "needs_answer"),
+    ],
+)
+def test_a_claude_record_carries_what_its_event_means(
+    payload: dict[str, Any], kind: str, tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+
+    _run(_stream(payload), directory)
+
+    record = _record(directory)
+    assert (record["kind"], record["confidence"]) == (kind, "reported")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"hook_event_name": "StopFailure", "error": "authentication_failed"},
+        {"hook_event_name": "StopFailure"},
+        {"hook_event_name": "Notification", "notification_type": "permission_prompt"},
+        {"hook_event_name": "Notification", "notification_type": "idle_prompt"},
+        {"hook_event_name": "SessionEnd", "reason": "logout"},
+    ],
+)
+def test_an_event_its_licence_gives_no_meaning_writes_no_record(
+    payload: dict[str, Any], tmp_path: Path
+) -> None:
+    """Until BL-131 each of these was spooled and then dropped by the drain."""
+    directory = _spool(tmp_path)
+
+    _run(_stream(payload), directory)
+
+    assert _records(directory) == []
+
+
+def test_the_agents_view_notice_is_led_by_where_it_came_from(tmp_path: Path) -> None:
+    from remote_agents.adapters.agents.claude.hooks import AGENTS_VIEW
+
+    directory = _spool(tmp_path)
+    payload = {
+        "hook_event_name": "Notification",
+        "notification_type": "agent_needs_input",
+        "message": "build needs your input: pick a branch",
+    }
+
+    _run(_stream(payload), directory)
+
+    assert _record(directory)["detail"] == f"{AGENTS_VIEW}: build needs your input: pick a branch"
+
+
+@pytest.mark.parametrize(
+    ("provider", "payload", "kind"),
+    [
+        ("codex", {"hook_event_name": "Stop", "last_assistant_message": "x"}, "completed"),
+        ("opencode", {"hook_event_name": "session.idle"}, "completed"),
+        ("opencode", {"hook_event_name": "permission.asked", "permission": "bash"}, "needs_answer"),
+        ("cursor", {"hook_event_name": "stop", "status": "completed"}, "completed"),
+    ],
+)
+def test_every_provider_writes_its_licences_meaning(
+    provider: str, payload: dict[str, Any], kind: str, tmp_path: Path
+) -> None:
+    directory = _spool(tmp_path)
+
+    _run(_stream(payload), directory, provider=provider)
+
+    assert _record(directory)["kind"] == kind
+
+
+def _invented_licence():
+    """A provider whose events no shared constant names, so only its licence can mark turns."""
+    from types import MappingProxyType
+
+    from remote_agents.ports.agent_activity import ActivityKind, ActivitySource
+    from remote_agents.ports.provider_descriptor import EventLicence, HookLicence, TurnEdge
+
+    return HookLicence(
+        events=MappingProxyType(
+            {
+                "begin.turn": EventLicence(turn=TurnEdge.STARTS),
+                "end.turn": EventLicence(kind=ActivityKind.COMPLETED, turn=TurnEdge.ENDS),
+            }
+        ),
+        source=ActivitySource.HOOK_EXCLUSIVE,
+        reports=frozenset({ActivityKind.COMPLETED}),
+    )
+
+
+def test_a_turn_starts_and_ends_on_the_events_the_licence_names(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    licence = _invented_licence()
+    agent = "f4020001-e712-4832-9fc8-dd28d38d5b8a"
+
+    _run(_as(agent, {"hook_event_name": "begin.turn"}), directory, licence=lambda: licence)
+    assert _marker(directory).is_file()
+    assert _records(directory) == []
+
+    _run(_as(agent, {"hook_event_name": "end.turn"}), directory, licence=lambda: licence)
+    assert not _marker(directory).exists()
+    (written,) = _records(directory)
+    assert json.loads(written.read_text(encoding="utf-8"))["kind"] == "completed"
+
+
+def test_names_another_provider_spells_mark_no_turn_under_this_licence(tmp_path: Path) -> None:
+    directory = _spool(tmp_path)
+    licence = _invented_licence()
+
+    _run(_stream(_SUBMIT_PAYLOAD), directory, licence=lambda: licence)
+
+    assert not (directory / "turns").exists()

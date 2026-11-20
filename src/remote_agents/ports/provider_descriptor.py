@@ -266,9 +266,9 @@ class HookIdentity(Enum):
 class HookLicence:
     """What one provider's activity hook may admit and keep, declared by its vertical (BL-050).
 
-    The spool reads this and names no provider: an event outside `events` -- unless
-    `unlisted_events` says otherwise -- writes nothing, and a provider with no licence at all
-    writes nothing (master call 10). Compared by identity (`eq=False`): it carries mappings and
+    The spool reads this and names no provider: an event outside `events`, or one whose licence
+    gives it no meaning, writes nothing, and a provider with no licence at all writes nothing
+    (master call 10, BL-131). Compared by identity (`eq=False`): it carries mappings and
     a predicate, and each vertical holds exactly one.
     """
 
