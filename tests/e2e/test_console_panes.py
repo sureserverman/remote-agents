@@ -16,6 +16,8 @@ touches `-L remote-agents`, where the owner's live agents are.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import uuid
 from pathlib import Path
 
@@ -263,12 +265,11 @@ def _venv_python() -> str:
 def _fold_script(root: Path) -> Path:
     """What `prefix h` runs here — the production composer, aimed at *this* socket.
 
-    It cannot be `remote_agents console panes`: that verb builds its composer from
-    `_console_composer()`, which is hard-wired to the `remote-agents` socket where the owner's
-    live agents and live console are. A test that pressed the real key would fold the owner's
-    real console. So the key runs the same `toggle_panes()` through the same gateway, with the
-    socket the fixture made — the binding, the argv and the composer are production's; only
-    the server is disposable.
+    Not `remote_agents console panes` itself, though since DEC-144 that verb would follow
+    `$TMUX` to this server: the fixture's composer takes its own lock file and pane commands,
+    and the script builds that composer. So the key runs the same `toggle_panes()` through
+    the same gateway, with the socket the fixture made -- the binding, the argv and the
+    composer are production's; only the server is disposable.
     """
     script = root / "fold.py"
     script.write_text(
@@ -301,6 +302,33 @@ async def _run(*argv: str) -> str:
     if process.returncode != 0:
         raise RuntimeError(f"{argv} failed: {err.decode()}")
     return out.decode()
+
+
+@contextlib.contextmanager
+def _server_home(home: Path):
+    """Start the test server under `home`, which every later child of it inherits.
+
+    A tmux server copies its environment when it starts, and every pane and `run-shell` child
+    it spawns afterwards gets that copy. The pane commands here name `HOME` themselves, but a
+    console-hosted surface re-runs `ensure` and rebuilds a missing pane with production's own
+    command, and its root bindings run `remote-agents console ...` -- neither naming one. So
+    the server is started with the fabricated `HOME`, and `_assert_server_home` proves it.
+    Without this they read and lock the owner's real files (DEC-144's review, round 1).
+    """
+    saved = os.environ.get("HOME")
+    os.environ["HOME"] = str(home)
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = saved
+
+
+async def _assert_server_home(socket: str, home: Path) -> None:
+    shown = (await _run("tmux", "-L", socket, "show-environment", "-g", "HOME")).strip()
+    assert shown == f"HOME={home}", f"the test server runs with {shown!r}, not the fabricated HOME"
 
 
 async def _cpu_seconds(pid: str) -> float:
@@ -372,7 +400,9 @@ async def console_with_surfaces(tmp_path):
         reserved_keys={},
     )
     try:
-        assert await composer.ensure() is True
+        with _server_home(home):
+            assert await composer.ensure() is True
+        await _assert_server_home(console_socket, home)
         await _run(
             "tmux",
             "-L",
@@ -566,6 +596,15 @@ async def test_a_transient_wide_split_then_narrow_leaves_the_sessions_pane_idle(
     assert all(seconds <= 1.0 for seconds in burned), (
         f"the sessions pane kept working after a wide-then-narrow transient: {burned}"
     )
+    # Given rows back first. Its neighbours are console-hosted since DEC-144 and fit their own
+    # heights on every join, so ten joins beneath the limits pane leave this one a row tall --
+    # too short to draw any text, stuck or not. A redraw at a usable height is the proof it is
+    # idle because it is done, and stronger than the old read: a stuck pane would not answer.
+    await _run(*tmux, "resize-pane", "-t", sessions, "-y", "12")
+    for _ in range(20):
+        if _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions):
+            break
+        await asyncio.sleep(0.5)
     assert _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions), (
-        "the sessions pane stopped drawing its own text; it is idle because it is stuck"
+        "the sessions pane did not redraw its own text at a usable height; it is stuck"
     )

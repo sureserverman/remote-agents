@@ -127,7 +127,7 @@ async def _drawn_limits(tmp_path: Path, width: int, height: int) -> list[str]:
         await _run(
             "tmux", "-L", socket, "new-session", "-d", "-s", "tui",
             "-x", str(width), "-y", str(height),
-            "env", f"HOME={home}", str(_PYTHON), "-m", "remote_agents", "tui",
+            "env", "-u", "TMUX", f"HOME={home}", str(_PYTHON), "-m", "remote_agents", "tui",
         )  # fmt: skip
 
         previous: list[list[str]] = []

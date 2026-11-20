@@ -78,6 +78,7 @@ from remote_agents.config import (
 )
 from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.agent_usage import AgentLimits
+from remote_agents.ports.tmux_server import SOCKET_NAME
 from remote_agents.production import ProductionPaths
 
 
@@ -139,6 +140,8 @@ def _private_boundary(
         projects.paths,
         descriptors,
         folder_for=SessionFolders(projects.paths, worktrees.store, worktrees.folders).folder_for,
+        # The service manages the production server whatever `$TMUX` it inherited (DEC-144).
+        socket_name=SOCKET_NAME,
     )
     terminal = runtime.terminal
     store = SQLiteSessionStore(connection)

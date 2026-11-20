@@ -122,12 +122,22 @@ def _surface_socket(environment: Mapping[str, str] | None = None) -> str:
 
 
 def _local_runtime(
-    config, paths: ProductionPaths, project_paths, descriptors=None, *, folder_for
+    config,
+    paths: ProductionPaths,
+    project_paths,
+    descriptors=None,
+    *,
+    folder_for,
+    socket_name: str | None = None,
 ) -> LocalRuntime:
     """Compose the one tmux terminal and profile probe that every surface shares.
 
     `folder_for` has no default on purpose: it is where every pane starts, and a production
     runtime composed without it would start a worktree session in the main checkout (BL-116).
+
+    `socket_name` is the server, when the caller is not a surface: the bot passes the
+    production one, so a service that inherited a stale test `$TMUX` still manages the
+    owner's sessions (DEC-144). Surfaces leave it None and get `_surface_socket()`.
     """
     definitions = closed_profiles()
     compatibility = probe_profiles(
@@ -161,7 +171,7 @@ def _local_runtime(
                 definition, executable, allowed_environment
             )
     gateway = TmuxGateway(
-        _surface_socket(),
+        socket_name or _surface_socket(),
         AsyncTmuxRunner(),
         intent_directory=paths.intent_directory,
         # Both surfaces' runtimes come from here, so both name the same lock files and their

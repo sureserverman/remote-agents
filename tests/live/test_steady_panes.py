@@ -160,7 +160,7 @@ async def test_the_feed_holds_still_an_arrival_takes_the_cursor_and_limits_keep_
     try:
         await _run(
             "tmux", "-L", socket, "new-session", "-d", "-s", "tui", "-x", "140", "-y", "44",
-            "env", f"HOME={home}", str(_PYTHON), "-m", "remote_agents", "tui",
+            "env", "-u", "TMUX", f"HOME={home}", str(_PYTHON), "-m", "remote_agents", "tui",
         )  # fmt: skip
 
         async def drawn() -> bool:

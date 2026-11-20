@@ -214,6 +214,11 @@ def _closer_script(tmp_path: Path) -> Path:
             # A delay so the caller can be dead before any of this runs -- the property the
             # second test is about.
             time.sleep(float(sys.argv[2]))
+            # The verb falls back to the production socket when `$TMUX` names none of ours,
+            # so this refuses rather than risk closing the owner's real console.
+            if "/remote-agents-test-" not in os.environ.get("TMUX", ""):
+                Path(sys.argv[1]).write_text("refused: no test TMUX", encoding="utf-8")
+                sys.exit(3)
             completed = subprocess.run(
                 [sys.executable, "-m", "remote_agents", "console", "close"],
                 env=os.environ | {{"HOME": {str(home)!r}}},

@@ -42,7 +42,8 @@ def hosting_socket(environment: Mapping[str, str]) -> str | None:
     value = environment.get("TMUX")
     if not value:
         return None
-    socket_path = value.split(",", 1)[0]
+    # From the right: the pid and the session index never hold a comma, a path may.
+    socket_path = value.rsplit(",", 2)[0]
     name = os.path.basename(socket_path)
     if os.path.sep in socket_path and is_our_socket(name):
         return name

@@ -420,3 +420,47 @@ async def test_the_composed_backend_adds_a_schedule_for_a_registered_project(
     finally:
         connection.close()
         ui.close()
+
+
+def test_the_bot_manages_the_production_server_whatever_tmux_it_inherited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEC-144: a surface follows `$TMUX`, the service does not.
+
+    The bot shares `_local_runtime` with the surfaces, and a surface builds on the server its
+    `$TMUX` names. A service that inherited a test console's `$TMUX` (a hand-run `serve` from a
+    test pane, an environment imported into the user manager) would otherwise manage a
+    disposable server and never see the owner's sessions. Swept: every `TmuxGateway` reachable
+    from the composition, by walking it rather than naming the two that exist today.
+    """
+    from remote_agents.adapters.tmux.gateway import TmuxGateway
+
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/remote-agents-test-inherited,4242,0")
+    composition, _paths, connection, ui = _composition(tmp_path, monkeypatch)
+    try:
+        gateways: dict[int, TmuxGateway] = {}
+        seen: set[int] = set()
+
+        def walk(obj: object, left: int) -> None:
+            if left < 0 or id(obj) in seen:
+                return
+            seen.add(id(obj))
+            if isinstance(obj, TmuxGateway):
+                gateways[id(obj)] = obj
+                return
+            for name in dir(obj):
+                if name.startswith("__"):
+                    continue
+                try:
+                    value = getattr(obj, name)
+                except Exception:
+                    continue
+                if type(value).__module__.startswith("remote_agents"):
+                    walk(value, left - 1)
+
+        walk(composition, 6)
+        assert gateways, "the sweep reached no TmuxGateway, so it proves nothing"
+        assert {gateway._socket_name for gateway in gateways.values()} == {"remote-agents"}
+    finally:
+        connection.close()
+        ui.close()

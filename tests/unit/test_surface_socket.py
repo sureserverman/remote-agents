@@ -60,6 +60,7 @@ def recorder(monkeypatch) -> RecordingRunner:
         (_tmux("my-remote-agents"), None),
         ("remote-agents,4242,0", None),
         ("garbled", None),
+        ("/tmp/a,b/tmux-1000/remote-agents-test-abc,4242,0", _TEST_SOCKET),
     ],
 )
 def test_the_hosting_socket_is_read_from_tmux_only_when_it_is_ours(value, expected) -> None:

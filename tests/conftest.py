@@ -143,6 +143,14 @@ def pytest_configure(config: pytest.Config) -> None:
     # busy for good (2026-10-08: a rollover against that pane failed `predecessor-not-idle`).
     # Removed for the whole run; a test that needs one sets it explicitly.
     os.environ.pop("REMOTE_AGENTS_SESSION_ID", None)
+    # **Nor does any test inherit the pane's tmux server.** Run from a pane of the owner's
+    # console, `$TMUX` names `remote-agents`, and since DEC-144 a surface composed in a test
+    # builds on the server `$TMUX` names: `local_context` would classify as console-hosted
+    # and run `ensure` and the start-time repair on the owner's real console. Removed for
+    # the whole run, with `TMUX_PANE`; a test that needs one names a `remote-agents-test-`
+    # server itself, and every pane a test server starts gets its own from tmux.
+    os.environ.pop("TMUX", None)
+    os.environ.pop("TMUX_PANE", None)
     config.addinivalue_line(
         "markers", "live_profile: opt-in qualification using a generated dedicated tmux socket"
     )

@@ -22,6 +22,7 @@ and writes nothing of theirs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 from pathlib import Path
@@ -91,6 +92,33 @@ async def _run(*argv: str) -> str:
     if process.returncode != 0:
         raise RuntimeError(f"{argv} failed: {err.decode()}")
     return out.decode()
+
+
+@contextlib.contextmanager
+def _server_home(home: Path):
+    """Start the test server under `home`, which every later child of it inherits.
+
+    A tmux server copies its environment when it starts, and every pane and `run-shell` child
+    it spawns afterwards gets that copy. The pane commands here name `HOME` themselves, but a
+    console-hosted surface re-runs `ensure` and rebuilds a missing pane with production's own
+    command, and its root bindings run `remote-agents console ...` -- neither naming one. So
+    the server is started with the fabricated `HOME`, and `_assert_server_home` proves it.
+    Without this they read and lock the owner's real files (DEC-144's review, round 1).
+    """
+    saved = os.environ.get("HOME")
+    os.environ["HOME"] = str(home)
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = saved
+
+
+async def _assert_server_home(socket: str, home: Path) -> None:
+    shown = (await _run("tmux", "-L", socket, "show-environment", "-g", "HOME")).strip()
+    assert shown == f"HOME={home}", f"the test server runs with {shown!r}, not the fabricated HOME"
 
 
 async def _panes(socket: str) -> list[tuple[int, str, int, int]]:
@@ -399,10 +427,10 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
       `test_add_project_and_tui_journey.py`; starting a second one here would prove nothing
       new. The agent is fabricated — a `sleep` carrying schema-2 pane marks, which is what
       every console live test uses.
-    - The **exchange** is `composer.show`, because a pane surface bakes in the production
-      socket name — a surface inside a disposable console must therefore classify as FOREIGN,
-      or it drives the owner's real console, which is what happened when it briefly did not.
-      The key-driven exchange has its own proof in
+    - The **exchange** is `composer.show`, driven from the test rather than by opening a
+      session from the sessions pane: this journey is about what the console does around
+      the exchange, and the key-driven route has its own proofs in the session chord case
+      at the end of this file and in
       `test_the_projects_key_brings_the_surface_back_from_a_displayed_agent`.
     - The **stop** is a store event, not `SessionService.force_stop`: what this journey is
       about is the console's reaction to a session ending — the surface coming back — and the
@@ -444,7 +472,9 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
         reserved_keys={},
     )
     try:
-        assert await composer.ensure() is True
+        with _server_home(home):
+            assert await composer.ensure() is True
+        await _assert_server_home(console_socket, home)
 
         # A managed session, fabricated. Marked schema-2 and pane-scoped (DEC-038) so it can
         # be displayed by exchange at all.
@@ -882,18 +912,10 @@ async def test_the_published_selection_follows_the_cursor_over_real_tmux(tmp_pat
     reading it back. That is what runs here: the gateway publishes exactly as the pane's
     capability does, and a separate `tmux show-options` process reads it.
 
-    The half that is missing is missing for a reason already recorded in
-    `adapters/tui/attach.py::hosting_mode`, not for want of trying. A pane surface inside a
-    disposable console classifies as FOREIGN, so `console_publish_selection` is never wired and
-    a keypress there publishes nothing. That strictness is deliberate and was paid for: when
-    the predicate was widened to accept a test socket, a surface inside a throwaway console
-    drove the owner's **real** one — panes split into their live console window, a root binding
-    installed on their server — because the composition root hardcodes the composer's server to
-    `remote-agents`. Driving the cursor here would mean either reintroducing that, or pointing
-    this test at the owner's production console. Neither is a test worth having.
-
-    So the gap stays named rather than papered over: until the composer's server stops being
-    hardcoded, no live test can drive a pane surface's own keypress into a console.
+    The keypress half -- a real `Down` in a real sessions pane publishing the row it lands
+    on -- is `test_down_in_a_real_sessions_pane_publishes_the_second_row`, possible since
+    DEC-144 built a pane's composer on the server it runs inside. This case keeps the
+    narrower question: the option's encoding, and the empty value meaning nothing selected.
     """
     _live_or_skip()
 
@@ -1308,7 +1330,9 @@ async def test_the_function_keys_reach_the_pane_the_owner_is_in_and_the_agent_th
         reserved_keys=reserved_keys_by_profile(),
     )
     try:
-        assert await composer.ensure() is True
+        with _server_home(home):
+            assert await composer.ensure() is True
+        await _assert_server_home(console_socket, home)
 
         installed = await _run("tmux", "-L", console_socket, "list-keys", "-T", "root")
         for key in sequences:
@@ -1612,7 +1636,9 @@ class _RealConsole:
             },
             reserved_keys=reserved_keys_by_profile(),
         )
-        assert await composer.ensure() is True
+        with _server_home(self.home):
+            assert await composer.ensure() is True
+        await _assert_server_home(self.socket, self.home)
         arrangement = await self.gateway.pane_arrangement()
         self.panes = {pane.console_slot: pane.pane_id for pane in arrangement if pane.console_slot}
         await _run(
