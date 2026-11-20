@@ -9,9 +9,9 @@ definition; it is never a direction to trust the owner's configuration.
 Codex runs inside `native_isolation.codex_command`'s confinement. There the owner's existing
 ``auth.json`` is bound read-only over an empty placeholder in the disposable home, so a token
 refresh cannot replace the owner's file (BL-135). The test never opens, copies, serializes or logs
-that credential. After each turn it asserts that the placeholder is still empty and that the
-owner's file has the inode, size and time it had before. This keeps the ordinary ChatGPT Codex
-entitlement instead of requiring unrelated API billing.
+that credential. After each run, however it ended, it asserts that the placeholder is still empty
+and that the owner's file has the inode, size and time it had before. This keeps the ordinary
+ChatGPT Codex entitlement instead of requiring unrelated API billing.
 """
 
 from __future__ import annotations
@@ -79,30 +79,35 @@ def _run_codex(workspace: Path, command: tuple[str, ...], environment: dict[str,
     runtime_environment.pop(SESSION_ID_VARIABLE, None)
     runtime_environment.update(environment)
     login_before = _stat(owner_codex_login())
-    completed = subprocess.run(
-        [
-            *command,
-            "exec",
-            "--dangerously-bypass-hook-trust",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--cd",
-            str(workspace),
-            _TURN,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=180,
-        cwd=workspace,
-        env=runtime_environment,
-    )
-    placeholder = workspace / ".codex" / "auth.json"
-    assert not placeholder.is_symlink() and placeholder.is_file(), "the placeholder was replaced"
-    assert placeholder.stat().st_size == 0, "credential placeholder was written"
-    assert _stat(owner_codex_login()) == login_before, (
-        "Codex rewrote the owner's auth.json, or the owner's own Codex refreshed it meanwhile"
-    )
+    try:
+        completed = subprocess.run(
+            [
+                *command,
+                "exec",
+                "--dangerously-bypass-hook-trust",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--cd",
+                str(workspace),
+                _TURN,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            cwd=workspace,
+            env=runtime_environment,
+        )
+    finally:
+        # However the run ended, a timeout included (BL-135).
+        placeholder = workspace / ".codex" / "auth.json"
+        assert not placeholder.is_symlink() and placeholder.is_file(), (
+            "the placeholder was replaced"
+        )
+        assert placeholder.stat().st_size == 0, "credential placeholder was written"
+        assert _stat(owner_codex_login()) == login_before, (
+            "Codex rewrote the owner's auth.json, or the owner's own Codex refreshed it meanwhile"
+        )
     output = f"{completed.stdout}\n{completed.stderr}".lower()
     if completed.returncode != 0:
         blocked_reason = next(

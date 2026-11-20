@@ -806,3 +806,32 @@ def test_a_sweep_that_fails_lets_the_session_start(monkeypatch, capsys):
 
     conftest.pytest_sessionstart(Session())
     assert "drill-home sweep failed, homes kept" in capsys.readouterr().err
+
+
+def test_a_retirement_that_stops_partway_leaves_the_owner_named(monkeypatch):
+    """Found at the Stage 3 demo: retirement removed `.owner` first, so a home it could not finish
+    removing named no owner, and the next sweep kept it, and the daemon in it, for good."""
+    import codex_home
+
+    home = short_codex_home()
+    (home / "sessions").mkdir()
+    (home / "sessions" / "turn.jsonl").write_text("{}")
+
+    def partway(path, *_args, **_kwargs):
+        # A real `rmtree` removes what it reaches before the entry that fails.
+        for entry in Path(path).iterdir():
+            if entry.is_file():
+                entry.unlink()
+        raise OSError("a daemon is still writing here")
+
+    monkeypatch.setattr(codex_home.shutil, "rmtree", partway)
+    try:
+        with pytest.raises(OSError, match="still writing"):
+            retire_codex_home(home)
+        assert (home / ".owner").is_file(), "the owner file went before the rest of the home"
+    finally:
+        monkeypatch.undo()
+        shutil.rmtree(home, ignore_errors=True)
+        claim = codex_home._OWNED_HOMES.pop(home, None)
+        if claim is not None:
+            os.close(claim[0])

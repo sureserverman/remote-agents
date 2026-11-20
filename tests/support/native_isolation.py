@@ -72,7 +72,9 @@ def confined_command(
         details = source.lstat()
         if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid():
             raise RuntimeError("BLOCKED: credential source must be an owned regular file")
-        if any(source.is_relative_to(directory) for directory in directories):
+        # Resolved: a login reached through a link into a writable root would stay writable
+        # through that root's own bind, whatever the read-only mount over its target says.
+        if any(source.resolve().is_relative_to(directory) for directory in directories):
             raise RuntimeError(
                 "BLOCKED: credential source cannot be within a writable fixture root"
             )

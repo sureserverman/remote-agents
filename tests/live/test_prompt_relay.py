@@ -154,6 +154,8 @@ def _codex_homes_are_retired():
     try:
         for home in _CODEX_HOMES:
             placeholder = home / "auth.json"
+            if not (placeholder.exists() or placeholder.is_symlink()):
+                continue  # Its setup stopped before the confinement was built.
             assert not placeholder.is_symlink() and placeholder.stat().st_size == 0, (
                 "credential placeholder was written"
             )

@@ -261,7 +261,17 @@ def retire_codex_home(home: Path, *, stop: Callable[[], None] | None = None) -> 
     """Remove only after all processes attesting the fixture home have exited."""
     home = _private_home(home)
     stop_codex_home(home, stop=stop)
-    shutil.rmtree(home)
+    # The owner file goes last: a removal that stops partway leaves a home whose dead owner the
+    # next session's sweep can still read, not one that names nobody and is kept for good.
+    for entry in home.iterdir():
+        if entry.name == _OWNER_FILE:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    (home / _OWNER_FILE).unlink(missing_ok=True)
+    home.rmdir()
     os.close(_OWNED_HOMES.pop(home)[0])
 
 

@@ -92,7 +92,22 @@ def _bwrap_works() -> bool:
     if shutil.which("bwrap") is None:
         return False
     probe = subprocess.run(
-        ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "true"], capture_output=True, check=False
+        # The flags `confined_command` uses: a host that refuses a PID namespace or a /proc mount
+        # skips these tests rather than failing them.
+        [
+            "bwrap",
+            "--unshare-pid",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "true",
+        ],
+        capture_output=True,
+        check=False,
     )
     return probe.returncode == 0
 
@@ -172,3 +187,25 @@ def test_opencode_refuses_the_owner_data_home(owner_home, tmp_path) -> None:
     assert sorted(path.name for path in (owner_data / "opencode").iterdir()) == ["auth.json"]
     assert not (owner_data / "opencode" / "auth.json").is_symlink()
     assert (owner_data / "opencode" / "auth.json").read_text() == '{"made-up": "login"}\n'
+
+
+@_NEEDS_BWRAP
+def test_a_login_reached_through_a_link_into_a_writable_root_is_refused(tmp_path) -> None:
+    """The read-only mount covers only its target; the same inode would stay writable through the
+    writable root's own bind, so a source that resolves into one is refused (second-pass review)."""
+    from native_isolation import confined_command
+
+    root = tmp_path / "drill"
+    (root / "home").mkdir(parents=True)
+    real = root / "real-codex"
+    real.mkdir()
+    (real / "auth.json").write_text("{}")
+    linked = tmp_path / "owner-codex"
+    linked.symlink_to(real)
+    with pytest.raises(RuntimeError, match="BLOCKED"):
+        confined_command(
+            Path("/bin/sh"),
+            home=root / "home",
+            writable=(root,),
+            credentials=((linked / "auth.json", root / "home" / "auth.json"),),
+        )

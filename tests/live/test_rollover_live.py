@@ -601,9 +601,6 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
         assert _owner_fingerprint() == owners_before, (
             "the run changed the owner's project registry, Portfolio roll-ups or root reports"
         )
-        assert not (codex_home / "auth.json").is_symlink()
-        assert (codex_home / "auth.json").stat().st_size == 0, "credential placeholder was written"
-        assert _stat(login) == login_before, "Codex rewrote the owner's auth.json"
     finally:
         try:
             for task in periodic:
@@ -622,11 +619,23 @@ async def test_rollover_now_hands_a_real_plan_to_a_fresh_codex_session(
             # After the panes, and whatever failed above: the daemon the TUI started outlives
             # them (BL-133).
             _CODEX_HOME = None
-            if codex_home is not None:
-                retire_codex_home(codex_home)
-            for made in (repo_parent, tmux_directory):
-                if made is not None:
-                    shutil.rmtree(made, ignore_errors=True)
+            try:
+                # Checked however the drill ended: one that failed partway is the one most likely
+                # to have touched the login (BL-135). A home set up no further has no placeholder.
+                placeholder = None if codex_home is None else codex_home / "auth.json"
+                if placeholder is not None and (placeholder.exists() or placeholder.is_symlink()):
+                    assert not placeholder.is_symlink()
+                    assert placeholder.stat().st_size == 0, "credential placeholder was written"
+                assert _stat(login) == login_before, (
+                    "Codex rewrote the owner's auth.json, or the owner's own Codex refreshed it "
+                    "meanwhile"
+                )
+            finally:
+                if codex_home is not None:
+                    retire_codex_home(codex_home)
+                for made in (repo_parent, tmux_directory):
+                    if made is not None:
+                        shutil.rmtree(made, ignore_errors=True)
 
 
 def _kill_server(socket: Path) -> None:
