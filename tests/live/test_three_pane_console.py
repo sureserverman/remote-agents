@@ -2007,3 +2007,99 @@ async def test_console_shortcuts_reach_a_visible_destination(tmp_path, slot, age
         assert any(p.session_id == identity for p in await ui.gateway.pane_arrangement())
     finally:
         await ui.kill()
+
+
+@pytest.mark.parametrize("key", ["F8", "F9"])
+@pytest.mark.parametrize(
+    ("slot", "agent", "folded"),
+    [
+        (slot, agent, folded)
+        for agent in (False, True)
+        for folded in (False, True)
+        for slot in (("surface",) if folded else ("surface", "sessions", "limits", "feed"))
+    ],
+)
+async def test_stop_keys_act_only_on_the_displayed_or_visible_target(
+    tmp_path, key, slot, agent, folded
+):
+    from remote_agents.adapters.tmux.codec import pane_mark_args
+    from remote_agents.domain.models import SessionState
+
+    _live_or_skip()
+    ui = _RealConsole(tmp_path, ("running", "running"), registered=True)
+    db = None
+    try:
+        await ui.start()
+        db, store = _store(ui.home)
+        panes = {}
+        for identity in ui.ids.values():
+            record = await store.get(identity)
+            pane = (
+                await _run(
+                    "tmux",
+                    "-L",
+                    ui.socket,
+                    "new-session",
+                    "-d",
+                    "-s",
+                    f"ra-{identity}",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "sh",
+                    "-c",
+                    'while IFS= read -r line; do [ "$line" = /exit ] && exit 0; done',
+                )
+            ).strip()
+            for command in pane_mark_args(identity, record.project_id, record.profile_id):
+                await _run("tmux", "-L", ui.socket, *command)
+            await _run(
+                "tmux", "-L", ui.socket, "set-option", "-p", "-t", pane, "remain-on-exit", "on"
+            )
+            panes[str(identity)] = pane
+        first, second = await ui.move_the_cursor_to_the_second_row()
+        target, other = (first, second) if agent else (second, first)
+        view = ConsoleComposer(
+            ui.gateway,
+            ("true",),
+            ui.home,
+            projects_command=("true",),
+            panes_command=("true",),
+            reserved_keys={},
+        )
+        if agent:
+            assert await view.show(SessionId.parse(first)) is None
+        left = panes[first] if agent else ui.panes["surface"]
+        if folded:
+            await ui.gateway.write_console_option("@remote_agents_panes_hidden", "1")
+            await ui.gateway.zoom_console_pane(left, wanted=True)
+        await _run(
+            "tmux",
+            "-L",
+            ui.socket,
+            "select-pane",
+            "-t",
+            left if slot == "surface" else ui.panes[slot],
+        )
+        prior = {sid: await store.events(SessionId.parse(sid)) for sid in panes}
+        await ui.press(key)
+        if folded and not agent:
+            assert await ui.draws("surface", "Select a visible Sessions row")
+            assert await store.events(SessionId.parse(target)) == prior[target]
+        else:
+            if key == "F9":
+                assert await ui.draws("surface", "Yes, force stop it")
+                assert await store.events(SessionId.parse(target)) == prior[target]
+                await ui.press("Down")
+                await ui.press("Enter")
+            for _ in range(60):
+                if (await store.get(SessionId.parse(target))).state is SessionState.ENDED:
+                    break
+                await asyncio.sleep(0.2)
+            assert (await store.get(SessionId.parse(target))).state is SessionState.ENDED
+        assert await store.events(SessionId.parse(other)) == prior[other]
+        assert (await store.get(SessionId.parse(other))).state is SessionState.RUNNING
+    finally:
+        if db is not None:
+            db.close()
+        await ui.kill()

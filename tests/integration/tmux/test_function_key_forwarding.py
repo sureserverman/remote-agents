@@ -472,3 +472,22 @@ def test_a_foreign_draft_does_not_block_and_a_console_confirmation_does(server):
     os.write(client, chord)
     time.sleep(0.3)
     assert sink.read_bytes() == chord
+
+
+def test_editor_arrows_and_letters_survive_session_navigation_bindings(server):
+    agent = server.panes()[0]
+    sessions = server.add_pane()
+    native, controller = server.watch(agent), server.watch(sessions)
+    server.mark(sessions, slot=ConsolePaneSlot.SESSIONS.value)
+    for key in ("M-Left", "M-Right"):
+        server.tmux(*console_binding_args(key, ConsoleBindingAction.CYCLE_SESSION))
+    server.tmux("select-pane", "-t", agent)
+    client = server.attach()
+    for key_bytes in (b"i", b"d", b"r", b"\x1b[D", b"\x1b[C", b"\x1b[1;5D", b"\x1b[1;5C"):
+        before = native.read_bytes()
+        os.write(client, key_bytes)
+        deadline = time.monotonic() + 3
+        while native.read_bytes() == before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert native.read_bytes() == before + key_bytes
+        assert not controller.read_bytes()
