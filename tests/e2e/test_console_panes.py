@@ -649,7 +649,8 @@ async def test_waiting_to_fresh_with_live_panes_and_no_conversation_handoff(cons
         "  print('─' * 30, flush=True)\n"
         "  try: line = input('❯ ')\n"
         "  except (KeyboardInterrupt, EOFError): break\n"
-        "  print(line, file=log)\n",
+        "  print(line, file=log)\n"
+        "  if line == 'yes': print('\\x1b]2;Ready\\x07', end='', flush=True)\n",
         encoding="utf8",
     )
     terminal = TmuxTerminal(
@@ -701,8 +702,9 @@ async def test_waiting_to_fresh_with_live_panes_and_no_conversation_handoff(cons
 
     try:
         source = (await sessions.launch(LaunchCommand(project, profile, "planning"))).record
+        other = (await sessions.launch(LaunchCommand(project, profile, "other"))).record
         assert source.state is SessionState.RUNNING
-        assert await view.show(source.session_id) is None
+        assert await view.show(other.session_id) is None
         pane = next(
             p.pane_id for p in await gateway.pane_arrangement() if p.session_id == source.session_id
         )
@@ -731,7 +733,12 @@ async def test_waiting_to_fresh_with_live_panes_and_no_conversation_handoff(cons
             assert app.screen._waiting_reasons == {str(source.session_id): "Approval requested"}
             await pilot.press("enter")
             assert await view.displayed_session() == source.session_id
-            await runner.run("tmux", "-L", socket, "select-pane", "-t", pane, "-T", "Ready")
+            await gateway.send_keys(source.session_id, ("yes", "Enter"))
+            for _ in range(50):
+                if await terminal.waiting_reason(source.session_id) is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert (tmp_path / str(source.session_id)).read_text() == "yes\n"
             assert await terminal.waiting_reason(source.session_id) is None
             await pilot.press("f6")
             assert app.screen.position == "FRESH_SESSION_CONFIRM"
@@ -747,7 +754,13 @@ async def test_waiting_to_fresh_with_live_panes_and_no_conversation_handoff(cons
             assert await terminal.pane_idle(replacement)
             assert f"cwd={folder}" in await gateway.capture(replacement)
             assert (tmp_path / str(replacement)).read_text() == ""
-            assert len(await store.list()) == 2
+            records = tuple(await store.list())
+            assert len(records) == 3
+            assert await view.cycle_session(records, 1) is None
+            assert await view.displayed_session() == other.session_id
+            assert await view.cycle_session(records, -1) is None
+            assert await view.displayed_session() == replacement
+            assert (tmp_path / str(other.session_id)).read_text() == ""
     finally:
         db.close()
 
