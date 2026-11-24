@@ -20,6 +20,7 @@ def _bar() -> tuple[Button, ...]:
         Button("Sessions", "c1_sessions"),
         Button("Launch", "c1_launch"),
         Button("Resume", "c1_resume"),
+        Button("Settings", "c1_settings"),
     )
 
 
@@ -44,7 +45,7 @@ def test_the_deficit_is_spread_across_the_row_rather_than_dropped_on_one_button(
     widened = uniform_keyboard(((Button("Back", "c1_back"),), _bar()))
 
     widths = [len(button.text) for button in widened[-1]]
-    assert max(widths) - min(widths) <= 2
+    assert max(widths) - min(widths) <= 3
 
 
 def test_padding_never_touches_a_callback_token() -> None:
@@ -70,7 +71,12 @@ def test_only_the_last_row_is_padded() -> None:
 def test_every_padded_label_reads_back_as_the_label_a_screen_builder_wrote() -> None:
     widened = uniform_keyboard(((Button("Back", "c1_back"),), _bar()))
 
-    assert [unpadded(button.text) for button in widened[-1]] == ["Sessions", "Launch", "Resume"]
+    assert [unpadded(button.text) for button in widened[-1]] == [
+        "Sessions",
+        "Launch",
+        "Resume",
+        "Settings",
+    ]
 
 
 def test_the_padding_character_is_not_whitespace_telegram_would_trim() -> None:

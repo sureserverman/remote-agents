@@ -318,6 +318,7 @@ async def test_a_genuinely_failed_launch_no_longer_blames_workspace_trust() -> N
         "Details",
         "Sessions",
         "Launch",
+        "Settings",
     ]
 
 
@@ -353,7 +354,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
     labels = tuple(unpadded(button.text) for row in reply.keyboard for button in row)
     assert labels[0] == "🟢 #1 Demo", labels
-    assert labels[1:] == ("Sessions", "Launch")
+    assert labels[1:] == ("Sessions", "Launch", "Settings")
     assert "ended" not in labels
 
 
@@ -423,12 +424,13 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     ] == [
         "• Sessions",
         "Launch",
+        "Settings",
     ]
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
     help_rows = help_message.replies[0]["reply_markup"].inline_keyboard
-    assert [unpadded(button.text) for button in help_rows[-1]] == ["Sessions", "Launch"]
+    assert [unpadded(button.text) for button in help_rows[-1]] == ["Sessions", "Launch", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -1005,7 +1007,7 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     assert [[unpadded(button.text) for button in row] for row in resume.keyboard[-3:]] == [
         ["Next"],
         ["Search"],
-        ["Sessions", "Launch"],
+        ["Sessions", "Launch", "Settings"],
     ]
 
 
@@ -1068,7 +1070,7 @@ async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own
     assert rows[0] == ["Inspect", "Rename"]
     assert rows[-3] == ["Stop and close", "Force stop"]
     assert rows[-2] == ["‹ Back to sessions"]
-    assert rows[-1] == ["Sessions", "Launch"]
+    assert rows[-1] == ["Sessions", "Launch", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -1125,7 +1127,8 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
         button
         for button_row in listing.keyboard
         for button in button_row
-        if unpadded(button.text) not in {"Previous", "Next", "Sessions", "Launch", "Resume"}
+        if unpadded(button.text)
+        not in {"Previous", "Next", "Sessions", "Launch", "Resume", "Settings"}
     )
     boundary.callbacks.bind_pending(11, 1)
     opened = boundary.callbacks.resolve(row.callback_data, owner_id=7, chat_id=11, message_id=1)
@@ -1235,7 +1238,7 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ]
-    assert labels[-2:] == ["Sessions", "Launch"]
+    assert labels[-3:] == ["Sessions", "Launch", "Settings"]
     assert "Back" not in labels
     assert "Open session" not in labels
     assert labels[0].endswith(" Demo"), "the session that would not stop is on the list"
@@ -2306,6 +2309,7 @@ async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_fail
         "⛔ Don't trust — close it",
         "Sessions",
         "Launch",
+        "Settings",
     ]
 
 

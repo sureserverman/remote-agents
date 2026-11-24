@@ -88,7 +88,7 @@ def test_the_question_carries_no_navigation_bar() -> None:
     """
     message = render_trust_question(_record(), answerable=True, trust=_TRUST, decline=_DECLINE)
 
-    assert not any(label in {"Sessions", "Launch", "Resume", "Back"} for label in _labels(message))
+    assert not any(label in {"Sessions", "Launch", "Resume", "Settings", "Back"} for label in _labels(message))
 
 
 def test_a_trusted_session_amends_to_a_message_that_still_carries_a_keyboard() -> None:
@@ -111,7 +111,7 @@ def test_the_settled_render_carries_no_navigation_bar_either() -> None:
         message = render_trust_settled(_record(state), open_session=_OPEN)
 
         assert not any(
-            label in {"Sessions", "Launch", "Resume", "Back"} for label in _labels(message)
+            label in {"Sessions", "Launch", "Resume", "Settings", "Back"} for label in _labels(message)
         )
 
 

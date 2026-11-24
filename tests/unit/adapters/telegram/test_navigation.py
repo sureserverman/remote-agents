@@ -225,6 +225,8 @@ async def _every_screen(
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Resume")), None)
         snapshot(anchor)
 
+    await boundary.settings_command(chat.message_update("/settings"), None)
+    snapshot(anchor)
     await boundary.help_command(chat.message_update("/help"), None)
     snapshot(anchor)
     return seen
@@ -241,7 +243,7 @@ async def test_the_navigation_bar_closes_every_screen_that_carries_a_keyboard() 
     boundary = _boundary()
 
     for text, rows in await _every_screen(chat, boundary):
-        assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"], (
+        assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume", "Settings"], (
             f"screen {text!r} does not close with the navigation bar"
         )
 
@@ -252,7 +254,7 @@ async def test_the_navigation_bar_omits_resume_when_no_conversation_service_is_w
     boundary = _boundary(with_resume=False)
 
     for text, rows in await _every_screen(chat, boundary):
-        assert _unmarked(rows[-1]) == ["Sessions", "Launch"], (
+        assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Settings"], (
             f"screen {text!r} offers Resume with no conversation service wired"
         )
 
@@ -269,7 +271,7 @@ async def test_the_navigation_bar_keeps_back_on_its_own_row_above_it() -> None:
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
 
     rows = _rows(chat.messages[anchor])
-    assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"]
+    assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume", "Settings"]
     assert rows[-2] == ["‹ Back to sessions"]
 
 
@@ -390,7 +392,7 @@ async def _open_entry(chat: FakeChat, boundary: PrivateBotBoundary, entry: str) 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry", ["launch.search", "session.rename", "project.area"])
-@pytest.mark.parametrize("tab", ["Sessions", "Launch", "Resume"])
+@pytest.mark.parametrize("tab", ["Sessions", "Launch", "Resume", "Settings"])
 async def test_the_bar_abandons_entry_rather_than_stranding_its_input_box(
     entry: str, tab: str
 ) -> None:
@@ -430,10 +432,10 @@ async def test_the_active_tab_is_marked_on_a_screen_inside_that_flow() -> None:
 
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     anchor = chat.bot_messages[0].message_id
-    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume", "Settings"]
 
     await boundary.launch_command(chat.message_update("/launch"), None)
-    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "• Launch", "Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "• Launch", "Resume", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -447,10 +449,10 @@ async def test_the_active_tab_follows_a_screen_deeper_into_its_flow() -> None:
     anchor = chat.bot_messages[0].message_id
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
 
-    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume", "Settings"]
 
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
-    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -464,11 +466,11 @@ async def test_the_active_tab_is_marked_on_a_resume_flow_screen_too() -> None:
     anchor = chat.bot_messages[0].message_id
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Resume")), None)
 
-    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume", "Settings"]
 
     # And deeper in: choosing a project stays inside the flow it was chosen from.
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
-    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume", "Settings"]
 
 
 class _ManyLauncher(_Launcher):
@@ -732,7 +734,7 @@ async def test_no_screen_offers_a_body_button_that_duplicates_the_bar() -> None:
 
     Swept over every screen in the set rather than the one the plan happened to name.
     """
-    bar = {"Sessions", "Launch", "Resume", "Launch another"}
+    bar = {"Sessions", "Launch", "Resume", "Settings", "Launch another"}
 
     for name, rendered in (await _outcome_screens()).items():
         keyboard = getattr(rendered, "keyboard", None) or rendered.inline_keyboard
@@ -776,7 +778,7 @@ async def test_owner_commands_reach_the_resume_picker_when_resume_is_wired() -> 
     shown = chat.messages[chat.bot_messages[0].message_id]
     assert shown.text.startswith("<b>Resume 1/1</b>")
     assert _rows(shown)[0] == ["Demo"]
-    assert _rows(shown)[-1] == ["Sessions", "Launch", "• Resume"]
+    assert _rows(shown)[-1] == ["Sessions", "Launch", "• Resume", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -791,7 +793,7 @@ async def test_owner_commands_answer_resume_even_where_it_is_unavailable() -> No
 
     shown = chat.messages[chat.bot_messages[0].message_id]
     assert "Resume is unavailable." in shown.text
-    assert _unmarked(_rows(shown)[-1]) == ["Sessions", "Launch"]
+    assert _unmarked(_rows(shown)[-1]) == ["Sessions", "Launch", "Settings"]
 
 
 class _ResumingLauncher(_Launcher):
@@ -949,7 +951,7 @@ async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> Non
     rows = _rows(chat.messages[anchor])
     assert "Force stop" in rows[-3], f"expected the confirm screen, got {rows}"
     assert rows[-2] == ["Cancel"], "nothing harmless separates the kill button from the bar"
-    assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"]
+    assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -974,7 +976,7 @@ async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
     anchor = chat.bot_messages[0].message_id
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
 
-    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "• Launch", "Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "• Launch", "Resume", "Settings"]
 
 
 @pytest.mark.asyncio
@@ -985,7 +987,7 @@ async def test_the_active_tab_marks_nothing_on_a_screen_that_belongs_to_no_flow(
     await boundary.help_command(chat.message_update("/help"), None)
     anchor = chat.bot_messages[0].message_id
 
-    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "Resume"]
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "Resume", "Settings"]
 
 
 class _BoundLauncher(_Launcher):

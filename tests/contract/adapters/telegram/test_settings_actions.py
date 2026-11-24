@@ -403,15 +403,15 @@ async def test_no_row_label_spells_two_states_at_once(current, connection) -> No
         )
 
 
-async def test_the_screen_closes_with_back_to_sessions_above_the_navigation_bar() -> None:
+async def test_the_settings_root_closes_with_the_navigation_bar() -> None:
     """DEC-032: one bar, one choke point, appended by `_message` and never by a screen."""
     screen = await _bot(
         FakeClaudeDefault(), FakeHostRemoteControl(HostConnection.DISABLED)
     )._settings_screen()
 
     rows = _rows(screen)
-    assert rows[-1] == ["Sessions", "Launch"], rows
-    assert len(rows[-2]) == 1 and "Back to sessions" in rows[-2][0], rows
+    assert rows[-1] == ["Sessions", "Launch", "Settings"], rows
+    assert all("Back to sessions" not in label for row in rows for label in row)
     assert all(len(row) == 1 for row in rows[:-1]), f"every row is one answer wide: {rows}"
 
 

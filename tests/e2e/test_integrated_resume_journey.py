@@ -140,7 +140,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         boundary.callbacks.bind_pending(11, 1)
         detail = await boundary._detail_reply(str(record.session_id), 1)
         labels = [button.text for row in detail.keyboard for button in row]
-        assert labels == ["‹ Back to sessions", "Sessions", "Launch", "Resume"]
+        assert labels == ["‹ Back to sessions", "Sessions", "Launch", "Resume", "Settings"]
     finally:
         for record in await service.list_sessions():
             try:

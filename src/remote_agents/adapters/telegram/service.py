@@ -48,6 +48,8 @@ from remote_agents.adapters.telegram.limit_reset_notifications import (
 )
 from remote_agents.adapters.telegram.limits_block import limits_block
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
+from remote_agents.adapters.telegram.navigation import flow_of as _flow_of
+from remote_agents.adapters.telegram.navigation import navigation_row
 from remote_agents.adapters.telegram.notifications import (
     NOTIFIED_DETAIL_ACTION as _NOTIFIED_DETAIL,
 )
@@ -1540,30 +1542,20 @@ class PrivateBotBoundary:
             )
 
     async def remote_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Open this machine's own Remote Control -- the one screen about no session at all.
-
-        `self._flow` is cleared rather than set: the navigation bar has three destinations and
-        this is not one of them, so marking a tab would tell the owner they are standing
-        somewhere they are not.
-        """
+        """Open machine-wide Remote Control, a child of Settings."""
         del context
         if self.permits(update) and update.effective_message is not None:
-            self._flow = None
+            self._flow = "settings"
             await self._answer_command(
                 update.effective_message,
                 _reply_arguments(await self._host_remote_control_reply()),
             )
 
     async def settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Open the screen whose subject is this machine's providers rather than a session.
-
-        `self._flow` is cleared rather than set, exactly as `/remote` clears it: the navigation
-        bar has three destinations and this is not one of them, so marking a tab would tell the
-        owner they are standing somewhere they are not.
-        """
+        """Open the Settings destination."""
         del context
         if self.permits(update) and update.effective_message is not None:
-            self._flow = None
+            self._flow = "settings"
             await self._answer_command(
                 update.effective_message, _reply_arguments(await self._settings_screen())
             )
@@ -3843,6 +3835,8 @@ class PrivateBotBoundary:
             f"<code>{self._host_reading(status)}</code>\n"
             f"{escape(_HOST_CONNECTION_EXPLANATIONS[status.connection])}",
             (buttons,) if buttons else (),
+            back=self._callback("settings.open", "default"),
+            back_label="‹ Back to Settings",
         )
 
     async def _host_remote_control_reply(self) -> RenderedMessage:
@@ -4150,8 +4144,6 @@ class PrivateBotBoundary:
         return self._message(
             "\n".join(lines),
             tuple(rows),
-            back=self._callback("sessions.open", "sessions"),
-            back_label=_BACK_TO_SESSIONS,
         )
 
     async def _permission_question(self, flow: str, entity_id: str) -> RenderedMessage:
@@ -5943,65 +5935,18 @@ class PrivateBotBoundary:
         back: str | None = None,
         back_label: str = "Back",
     ) -> RenderedMessage:
-        """Render one screen and close it with Back, then the fixed navigation bar.
-
-        Every screen ends with the same three destinations in the same position, so a move
-        between flows costs one press from wherever the owner is. Before this the only way
-        out was Home, and reaching Launch from a session meant going *up* to a screen whose
-        entire content was the three buttons this row now carries everywhere — so the
-        dashboard was a waypoint charged for on every cross-flow move.
-
-        `back` is the screen that owns this one, and it keeps a row of its own above the bar.
-        Merging the two would be the obvious saving and it is the wrong one: Back means
-        something different on every screen and the bar means the same thing on all of them,
-        which is the whole property that makes a fixed row worth having.
-
-        Telegram has no chrome — no menu, no tab strip — so a keyboard row is the only place
-        a persistent affordance can live, and the bottom is where a thumb already is.
-
-        Three renders do **not** come through here, and so carry no bar. Two are permanent:
-        `callback`'s pending screen, which drops its keyboard so a wait cannot be pressed
-        into a second launch, and `notifications`, which is a message rather than a screen.
-        Both call `render_message` directly; that is the mechanism, not an oversight.
-
-        There was a third for one stage — Home, which rendered its own keyboard through
-        `presenters.render_home` and so answered barless. That screen is gone: its counts
-        live on the sessions list, its Add Project on the launch list, and its three
-        destinations are this row. "Every screen closes with the bar" is now true of the
-        bot rather than only of the screens built here.
-
-        There was a third slot here once, `refresh`, offered on the two screens whose answer
-        goes stale under the owner. Both re-derive their answer on every entry, so it only
-        ever saved a tap, and the one thing it did that no other route did — return to the
-        sessions page it was pressed on — is now what `_sessions_back` gives Back.
-        """
-        rows: list[tuple[Button, ...]] = []
+        """Append the contextual Back row, when supplied, then the global navigation."""
+        rows = list(keyboard)
         if back is not None:
-            # `back_label` names the parent where a screen wants to -- the session detail says
-            # `‹ Back to sessions` -- and stays the bare word everywhere a parent is obvious.
             rows.append((Button(back_label, back),))
-        # Resume is absent rather than disabled on a host that wired no conversation
-        # service: Telegram has no disabled state, and a button that answers "unavailable"
-        # is a worse answer than no button.
-        bar = [
-            Button(
-                _tab("Sessions", self._flow == "sessions"),
-                self._callback("sessions.open", "sessions"),
-            ),
-            Button(
-                _tab("Launch", self._flow == "launch"),
-                self._callback("launch.open", "projects"),
-            ),
-        ]
-        if self.backend.conversations is not None:
-            bar.append(
-                Button(
-                    _tab("Resume", self._flow == "resume"),
-                    self._callback("resume.open", "projects"),
-                )
+        rows.append(
+            navigation_row(
+                self._flow,
+                can_resume=self.backend.conversations is not None,
+                callback=self._callback,
             )
-        rows.append(tuple(bar))
-        return render_message(text, keyboard + tuple(rows))
+        )
+        return render_message(text, tuple(rows))
 
     def _callback(self, action: str, entity_id: str, *, mutation: bool = False) -> str:
         """Mint a token for a screen that has not been delivered yet.
@@ -6461,53 +6406,6 @@ def _with_remote_control(remote_control: bool) -> str:
     disagreed with the launch is the disagreement class this stage exists to remove.
     """
     return " · with Remote Control" if remote_control else ""
-
-
-_ACTIVE_TAB = "• "
-"""What marks the tab the owner is standing in, prefixed rather than wrapped.
-
-A prefix keeps the label's first characters where the eye already reads them; wrapping the
-name in symbols moves every label one column right and makes the three read as decoration.
-"""
-
-_FLOW_OF_PREFIX = {
-    "sessions": "sessions",
-    "session": "sessions",
-    "remote": "sessions",
-    "launch": "launch",
-    "project": "launch",
-    "resume": "resume",
-    # A schedule is made from the launch flow's agent list, and listed beside the sessions.
-    "sched": "launch",
-    "schedule": "launch",
-    "schedules": "sessions",
-}
-"""Which flow an action's screen belongs to, keyed by the part before its dot.
-
-A session's own screens — its detail, its capture, its rename, its Remote Control
-confirmation — are the *sessions* flow, because that is where the owner came from and where
-Back returns them; the marker tracks where they are standing, not which button they last
-pressed. The bare stop actions carry no dot and are mapped beside them for the same reason.
-
-`project` is the **Add Project wizard** and nothing else: `launch.project` and
-`resume.project` partition on their own prefixes and never reach this key. It maps to
-`launch` because that is where the wizard lives — it is entered from the launch project
-list, and the screen you add a project from is the screen that told you it was missing.
-
-*(This paragraph was written one stage early, while the wizard was still entered from Home,
-and said so. Home is gone and the entry point moved with it, so the mapping that was
-"scheduled" is now simply current.)*
-"""
-
-
-def _flow_of(action: str) -> str | None:
-    if action in {GRACEFUL, CLEANUP, FORCE, CONFIRMED_FORCE}:
-        return "sessions"
-    return _FLOW_OF_PREFIX.get(action.partition(".")[0])
-
-
-def _tab(label: str, active: bool) -> str:
-    return f"{_ACTIVE_TAB}{label}" if active else label
 
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:

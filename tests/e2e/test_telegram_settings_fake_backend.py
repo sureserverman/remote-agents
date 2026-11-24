@@ -17,6 +17,7 @@ from dataclasses import replace
 
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
+from telegram.error import BadRequest
 
 from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import (
@@ -209,36 +210,34 @@ async def test_the_settings_screen_closes_with_the_navigation_bar() -> None:
     await boundary.settings_command(chat.message_update("/settings"), None)
 
     rows = _rows(chat.bot_messages[0])
-    assert rows[-1] == ["Sessions", "Launch"], rows
-    assert len(rows[-2]) == 1 and "Back to sessions" in rows[-2][0], rows
+    assert rows[-1] == ["Sessions", "Launch", "• Settings"], rows
+    assert all("Back to sessions" not in label for row in rows for label in row)
 
 
-async def test_back_from_settings_lands_on_the_sessions_list() -> None:
+async def test_sessions_tab_from_settings_lands_on_the_sessions_list() -> None:
     boundary = _boundary(FakeClaudeDefault(), None)
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
     anchor = chat.bot_messages[0].message_id
-    back = next(
-        _button(chat.messages[anchor], label)
-        for label in _labels(chat.messages[anchor])
-        if "Back to sessions" in label
-    )
-    await boundary.callback(chat.press(back), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert "Sessions" in chat.messages[anchor].text, chat.messages[anchor].text
     assert len(chat.bot_messages) == 1, chat.transcript()
 
 
-async def test_the_settings_screen_marks_no_tab_on_the_navigation_bar() -> None:
-    """It belongs to no flow, so marking one would say the owner is somewhere they are not."""
+async def test_settings_tab_and_command_open_the_same_screen_and_keep_one_anchor() -> None:
     boundary = _boundary(FakeClaudeDefault(), None)
     chat = FakeChat()
-
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0]
+    await boundary.callback(chat.press(_button(anchor, "Settings")), None)
+    root = anchor.text
+    assert _rows(anchor)[-1] == ["Sessions", "Launch", "• Settings"]
     await boundary.settings_command(chat.message_update("/settings"), None)
-
-    assert _rows(chat.bot_messages[0])[-1] == ["Sessions", "Launch"]
-    assert all("•" not in label for label in _labels(chat.bot_messages[0]))
+    assert chat.bot_messages == [anchor] and anchor.text == root
+    await boundary.callback(chat.press(_button(anchor, "Launch")), None)
+    assert _rows(anchor)[-1] == ["Sessions", "• Launch", "Settings"]
 
 
 async def test_the_owner_switches_resume_after_limit_off_and_back_on_through_the_chat(
@@ -328,3 +327,18 @@ async def test_the_owner_switches_resume_interrupted_off_and_back_on_through_the
     await boundary.callback(chat.press(_row(chat.messages[anchor], title)), None)
     assert read_resume_interrupted(config) is True
     assert len(chat.bot_messages) == 1, chat.transcript()
+
+
+async def test_settings_tab_rebinds_buttons_after_an_uneditable_anchor() -> None:
+    boundary = _boundary(None, None)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    old = chat.bot_messages[0]
+    chat.bot.edit_error = BadRequest("Message can't be edited")
+    await boundary.callback(chat.press(_button(old, "Settings")), None)
+    (current,) = chat.bot_messages
+    assert current.message_id != old.message_id
+    assert _rows(current)[-1][-1] == "• Settings"
+    chat.bot.edit_error = None
+    await boundary.callback(chat.press(_button(current, "Launch")), None)
+    assert _rows(current)[-1][1] == "• Launch"

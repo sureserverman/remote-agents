@@ -170,10 +170,9 @@ async def test_the_keyboards_choices_are_exactly_the_live_choices() -> None:
     message = chat.messages[anchor]
     picks = [
         unpadded(button.text).removesuffix(" ✓")
-        for row in message.reply_markup.inline_keyboard
+        for row in message.reply_markup.inline_keyboard[:-1]
         for button in row
         if not unpadded(button.text).startswith(("‹", "•", "Back"))
-        and unpadded(button.text) != "Launch"
     ]
     # Every button that is not navigation is a pick, and the picks are exactly the live set.
     assert picks == [choice.label for choice in LIVE_CHOICES]

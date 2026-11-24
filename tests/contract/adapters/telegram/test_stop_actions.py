@@ -456,4 +456,4 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     # destinations on every screen alike -- a signature that cannot distinguish the list
     # from anywhere else.
     assert "Sessions" in second["text"]
-    assert labels == ["Sessions", "Launch"], "it answers on the list, whose way out is the bar"
+    assert labels == ["Sessions", "Launch", "Settings"], "it answers on the list, whose way out is the bar"
