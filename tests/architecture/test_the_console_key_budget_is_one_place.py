@@ -150,24 +150,32 @@ def test_the_root_set_is_the_function_key_row_and_nothing_else() -> None:
     from remote_agents.application.console import CONSOLE_BINDINGS
     from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable
 
-    keys = [binding.key for binding in CONSOLE_BINDINGS]
-    assert sorted(keys) == sorted([f"F{number}" for number in range(1, 11)] + ["F12"]), (
-        f"the root set is not the function-key row minus F11: {keys}"
-    )
-    assert len(CONSOLE_BINDINGS) == 11, f"the root set is {len(CONSOLE_BINDINGS)} keys: {keys}"
+    root = [b for b in CONSOLE_BINDINGS if b.table is ConsoleKeyTable.ROOT]
+    keys = [binding.key for binding in root]
+    assert sorted(keys) == sorted(
+        [f"F{number}" for number in range(1, 11)] + ["F12", "M-Left", "M-Right"]
+    ), f"the root set is not the function-key row minus F11: {keys}"
+    assert len(root) == 13, f"the root set is {len(CONSOLE_BINDINGS)} keys: {keys}"
     assert "F11" not in keys, "F11 belongs to the terminal and the console does not take it"
-    assert all(binding.table is ConsoleKeyTable.ROOT for binding in CONSOLE_BINDINGS)
+    assert len(root) == len(set(keys))
 
-    actions = {binding.key: binding.action for binding in CONSOLE_BINDINGS}
+    actions = {binding.key: binding.action for binding in root}
     assert actions["F12"] is ConsoleBindingAction.SHOW_PROJECTS, (
         "F12 is the exchange, which is the one console operation tmux cannot perform itself"
     )
     # F2 is Settings since 2026-10-01: it opens in the projects pane, not the active one.
     assert actions["F2"] is ConsoleBindingAction.SHOW_SETTINGS, actions
+    assert actions["F3"] is ConsoleBindingAction.TOGGLE_PANES
+    assert actions["F4"] is ConsoleBindingAction.SHOW_WAITING
+    assert actions["F6"] is ConsoleBindingAction.FRESH_SESSION
+    assert actions["F9"] is ConsoleBindingAction.CONFIRM_FORCE
+    assert actions["F1"] is ConsoleBindingAction.SHOW_HELP
+    assert actions["F7"] is ConsoleBindingAction.SHOW_ADD_PROJECT
+    assert actions["M-Left"] is actions["M-Right"] is ConsoleBindingAction.CYCLE_SESSION
     assert all(
         action is ConsoleBindingAction.FORWARD_FUNCTION_KEY
         for key, action in actions.items()
-        if key not in ("F2", "F12")
+        if key not in ("F1", "F2", "F3", "F4", "F6", "F7", "F9", "F12", "M-Left", "M-Right")
     ), f"a member of the row is not a forward: {actions}"
 
 
@@ -197,7 +205,7 @@ def test_the_root_row_is_the_surface_s_own_key_table_in_tmux_s_spelling() -> Non
     from remote_agents.adapters.tui.keys import FUNCTION_KEYS
     from remote_agents.application.console import CONSOLE_BINDINGS
 
-    console = {binding.key.lower() for binding in CONSOLE_BINDINGS}
+    console = {binding.key.lower() for binding in CONSOLE_BINDINGS if binding.key.startswith("F")}
     surface = {entry.key for entry in FUNCTION_KEYS}
 
     assert console == surface, (
@@ -256,7 +264,7 @@ def test_the_composed_console_installs_the_row_and_the_fold_and_nothing_else() -
     )
     # The fold key alone. The eight prefix forwards retired with the Alt layer they served, so
     # anything else appearing here is a key nobody argued for.
-    assert {binding.key for binding in prefix} == {console_panes_binding().key}, (
+    assert {binding.key for binding in prefix} == {console_panes_binding().key, "F2"}, (
         "the production console's prefix table is not just the fold key: "
         f"{sorted(binding.key for binding in prefix)}"
     )
@@ -284,6 +292,7 @@ def test_a_console_that_forwards_a_function_key_cannot_be_built_without_the_rese
             object(),  # type: ignore[arg-type]
             ("true",),
             pathlib.Path("/tmp"),
+            panes_command=("true",),
             projects_command=("true",),
             bindings=CONSOLE_BINDINGS,
         )
@@ -292,6 +301,7 @@ def test_a_console_that_forwards_a_function_key_cannot_be_built_without_the_rese
         object(),  # type: ignore[arg-type]
         ("true",),
         pathlib.Path("/tmp"),
+        panes_command=("true",),
         projects_command=("true",),
         bindings=CONSOLE_BINDINGS,
         reserved_keys={},

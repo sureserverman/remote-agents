@@ -278,10 +278,7 @@ def test_the_panes_key_runs_our_own_program_from_the_prefix_table() -> None:
     # The whole clause, not its parts, for the reason the forwarding chord's twin says: an
     # inverted `!=` still contains `= "ra-console"`, and `|| true` in place of `|| exit 0` is
     # asserted by nothing at all.
-    guard = (
-        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
-        f"|| exit 0;"
-    )
+    guard = 'test "$ra_console" = 1 || exit 0;'
     assert guard in script, (
         f"the fold key does not refuse a client attached to anything but the console: {script}"
     )
@@ -360,10 +357,7 @@ def test_a_function_key_binding_carries_the_guard_and_its_three_branches() -> No
     # The guard, whole rather than in parts — the same reasoning the chord layer's own test
     # records: `!= "ra-console"` still contains `= "ra-console"`, so a substring assertion
     # survives an inverted guard.
-    guard = (
-        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
-        f"|| exit 0;"
-    )
+    guard = 'test "$ra_console" = 1 || exit 0;'
     assert guard in script, (
         "an F-key root binding does not refuse a client attached to anything but the console, "
         f"so it fires from any client on this server (DEC-073(3)): {script}"
@@ -841,7 +835,8 @@ def _settings_script(reserved=_RESERVED) -> str:
         reserved_keys=reserved,
     )
     assert argv[:4] == ("bind-key", "-n", "F2", "run-shell"), argv
-    shell, flag, script = shlex.split(argv[4])
+    *context, shell, flag, script = shlex.split(argv[4])
+    assert f"ra_console=#{{==:#{{client_session}},{CONSOLE_SESSION_NAME}}}" in context
     assert (shell, flag) == ("sh", "-c"), argv
     return script
 
@@ -849,10 +844,7 @@ def _settings_script(reserved=_RESERVED) -> str:
 def test_the_settings_key_goes_to_the_projects_pane_and_selects_it() -> None:
     script = _settings_script()
 
-    guard = (
-        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
-        f"|| exit 0;"
-    )
+    guard = 'test "$ra_console" = 1 || exit 0;'
     assert guard in script, "the Settings key fires from clients outside the console"
     assert f"##{{{CONSOLE_SLOT_OPTION}}},surface}}" in script, "the projects mark is never read"
     assert 'grep -c .)" = 1 || exit 0' in script, "two projects panes must deliver nothing"
@@ -870,15 +862,16 @@ def test_the_settings_key_fetches_a_parked_surface_with_the_projects_command() -
     assert script.index("console projects") < script.index('send-keys -t "$panes"')
 
 
-def test_the_settings_key_still_hands_f2_to_opencode() -> None:
-    script = _settings_script()
-
-    assert 'if test "$profile" = "opencode"; then tmux send-keys -t "$active" F2; exit 0; fi;' in (
-        script
-    )
-    for absent in ("claude", "codex", "cursor-agent"):
-        assert absent not in script, f"{absent!r} reserves no F2: {script}"
-    assert '"$profile"' not in _settings_script(reserved={}), "nobody reserves F2 here"
+def test_settings_ignores_native_reservations_and_the_escape_honors_them() -> None:
+    assert "opencode" not in _settings_script()
+    script = console_binding_args(
+        "F2",
+        ConsoleBindingAction.PROVIDER_KEY,
+        table=ConsoleKeyTable.PREFIX,
+        reserved_keys=_RESERVED,
+    )[-1]
+    assert "opencode)" in script
+    assert 'send-keys -t "$ra_pane" F2' in script
 
 
 def test_the_settings_key_refuses_what_a_forward_refuses() -> None:

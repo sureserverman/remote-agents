@@ -9,7 +9,7 @@ from pathlib import Path
 from remote_agents.application.backend import Backend
 from remote_agents.application.console import RecoveryReport
 from remote_agents.application.profiles import ProfileAvailability
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import SessionId, SessionRecord
 from remote_agents.ports.console import RemoteControlMark, StatusBarPalette
 from remote_agents.ports.state_events import StateEvents
 
@@ -71,6 +71,18 @@ class TuiContext:
     # and would answer `quit` by ending its own pane instead of closing the console. The two
     # questions differ exactly where it would hurt.
     console_hosted: bool = False
+    console_cycle_session: (
+        Callable[[tuple[SessionRecord, ...], int], Awaitable[str | None]] | None
+    ) = None
+    console_agent_focused: Callable[[], Awaitable[bool]] | None = None
+    console_visible_selection: Callable[[], Awaitable[SessionId | None]] | None = None
+    console_prefix: Callable[[], Awaitable[str]] | None = None
+    console_present_overlay: Callable[[], Awaitable[SessionId | None]] | None = None
+    console_focus_session: Callable[[SessionId], Awaitable[bool]] | None = None
+    console_toggle_panes: Callable[[], Awaitable[None]] | None = None
+    console_displayed_session: Callable[[], Awaitable[SessionId | None]] | None = None
+    waiting_reason: Callable[[SessionId], Awaitable[str | None]] | None = None
+    pane_idle: Callable[[SessionId], Awaitable[bool]] | None = None
     # Start the detached teardown that removes the whole console (DEC-096). Wired only under
     # console hosting; `None` everywhere else, where `quit` still means "leave the app".
     #

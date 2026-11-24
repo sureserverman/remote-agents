@@ -156,6 +156,7 @@ def _arrangements():
         DashboardScreen,
         FeedScreen,
         ForceConfirmModal,
+        FreshSessionConfirmModal,
         InspectScreen,
         LaunchModeScreen,
         LimitsPaneScreen,
@@ -221,6 +222,7 @@ def _arrangements():
         ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, capable),
         ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", page),
         ForceConfirmModal: lambda: ForceConfirmModal.for_record(_record()),
+        FreshSessionConfirmModal: FreshSessionConfirmModal,
         RemoteControlConfirmModal: lambda: RemoteControlConfirmModal.for_change(
             _record(), RemoteControlState.ACTIVE
         ),

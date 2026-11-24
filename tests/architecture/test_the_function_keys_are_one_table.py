@@ -98,6 +98,8 @@ def test_every_table_key_has_exactly_one_binding_and_no_alt_binding_survives() -
     # argued for, and it spells no retired key, which the stage gate's own grep forbids.
     allowed = {entry.key for entry in FUNCTION_KEYS} | {
         "escape",
+        "alt+left",
+        "alt+right",
         "ctrl+r",
         "ctrl+q",
         # The bare keys the owner's map borrows from pagers and vim, and `,`, which opens
@@ -570,7 +572,7 @@ def test_only_a_session_key_marks_a_position_as_left_by_an_excursion() -> None:
                 ):
                     callers[node.name] = callers.get(node.name, 0) + 1
 
-    assert set(callers) == {"action_session_key"}, (
+    assert set(callers) == {"action_waiting_sessions", "action_fresh_session"}, (
         f"the excursion mark is set from {sorted(callers)}; only the app's own session-key "
         "action may set it, because `perform_row_action` and `perform_row_remote_control` are "
         "shared with the bare row keys, which must not mark"

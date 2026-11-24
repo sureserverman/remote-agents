@@ -256,3 +256,20 @@ qualification remains an independent final gate.
   the pass and the note folder, the whole flow on real tmux with fake agents, and one live
   rollover each on Claude Code 2.1.329 (`auto` mode) and Codex 0.171.0, the fresh session
   stating the fact the old one was told.
+
+## WF-CONT-008 — Fresh session in the same working folder
+
+F6 operates on the agent displayed in the console. The confirmation identifies the source,
+project, profile and recorded working folder. A fresh conversation inherits that folder
+and the effective permissions. The operator supplies the first conversational command.
+
+A stable replacement identity lets repeated confirmations recover a launch across console
+restarts. The console displays and focuses the replacement and checks for an empty ready
+prompt before requesting an idle-only graceful close of the named original. A changed
+folder, unverified readiness or failed display leaves the original available. If closing
+times out, reopen the original and press F6 to retry with the existing replacement. If
+the process exited and its pane could not be removed, select the preserved original in
+Sessions and press **c** to finish cleanup.
+
+Coverage lives in `tests/integration/test_folder_bound_resume.py` and
+`tests/unit/adapters/tui/test_function_keys.py`.

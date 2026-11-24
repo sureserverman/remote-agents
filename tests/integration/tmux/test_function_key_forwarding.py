@@ -26,7 +26,7 @@ from uuid import uuid4
 import pytest
 
 from remote_agents.adapters.tmux.codec import CONSOLE_SESSION_NAME, console_binding_args
-from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
+from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable, ConsolePaneSlot
 
 #: What a terminal sends for the keys under test. tmux resolves `F2`/`F5`; a client types bytes.
 _SEQUENCES = {"F2": "\x1bOQ", "F5": "\x1b[15~"}
@@ -319,7 +319,7 @@ def test_settings_pressed_in_a_right_hand_pane_opens_in_the_projects_pane(
     assert _active(server) == projects, "the projects pane was not selected for the owner"
 
 
-def test_settings_at_an_opencode_pane_is_still_handed_to_opencode(server: _Server) -> None:
+def test_opencode_settings_and_native_prefix_f2_use_separate_routes(server: _Server) -> None:
     """OpenCode binds F2 (DEC-070); moving Settings must not take its model switch away."""
     projects, agent = server.panes()[0], server.add_pane()
     projects_sink, agent_sink = server.watch(projects), server.watch(agent)
@@ -328,10 +328,21 @@ def test_settings_at_an_opencode_pane_is_still_handed_to_opencode(server: _Serve
     _install_settings(server)
     server.tmux("select-pane", "-t", agent)
 
-    server.press(server.attach(), "F2")
-
-    assert _received(agent_sink, "F2"), "OpenCode's own key was taken from its pane"
-    assert not _received(projects_sink, "F2"), "a reserved key also opened Settings"
+    server.tmux(
+        *console_binding_args(
+            "F2",
+            ConsoleBindingAction.PROVIDER_KEY,
+            table=ConsoleKeyTable.PREFIX,
+            reserved_keys=_RESERVED,
+        )
+    )
+    client = server.attach()
+    server.press(client, "F2")
+    assert _received(projects_sink, "F2")
+    assert not agent_sink.read_bytes()
+    server.tmux("select-pane", "-t", agent)
+    os.write(client, b"\x02" + _SEQUENCES["F2"].encode())
+    assert _received(agent_sink, "F2")
 
 
 def test_settings_with_the_projects_pane_parked_runs_the_projects_command_first(
@@ -408,3 +419,56 @@ def test_settings_sends_nothing_when_the_surface_could_not_be_fetched_home(
     assert not _received(parked_sink, "F2", timeout=2.0), "Settings opened out of sight"
     assert not _received(agent_sink, "F2", timeout=0.5), "F2 leaked into the agent"
     assert _active(server) == agent, "focus moved to a hidden pane"
+
+
+@pytest.mark.parametrize(("key", "sequence"), [("M-Left", b"\x1b[1;3D"), ("M-Right", b"\x1b[1;3C")])
+def test_alt_arrow_uses_console_controller_or_originating_foreign_pane(server, key, sequence):
+    sessions, agent = server.panes()[0], server.add_pane()
+    sink, agent_sink = server.watch(sessions), server.watch(agent)
+    server.mark(sessions, slot=ConsolePaneSlot.SESSIONS.value)
+    server.tmux(*console_binding_args(key, ConsoleBindingAction.CYCLE_SESSION))
+    server.tmux("select-pane", "-t", agent)
+    server.tmux("resize-pane", "-Z", "-t", agent)
+    console = server.attach()
+    server.tmux("new-session", "-d", "-s", "foreign", "cat")
+    other_pane = server.tmux("list-panes", "-t", "foreign", "-F", "#{pane_id}").stdout.strip()
+    other_sink = server.watch(other_pane)
+    foreign = server.attach("foreign")
+    for fd, output in [(console, sink), (foreign, other_sink)]:
+        os.write(fd, sequence)
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline and not output.read_bytes():
+            time.sleep(0.05)
+        assert output.read_bytes() == sequence
+    assert sink.read_bytes() == sequence and not agent_sink.read_bytes()
+    assert (
+        server.tmux("display-message", "-p", "-t", agent, "#{window_zoomed_flag}").stdout.strip()
+        == "1"
+    )
+
+
+def test_a_foreign_draft_does_not_block_and_a_console_confirmation_does(server):
+    from remote_agents.ports.console import PANE_PROTECTED_OPTION
+
+    receiver = server.panes()[0]
+    sessions = server.add_pane()
+    server.mark(sessions, slot=ConsolePaneSlot.SESSIONS.value)
+    sink = server.watch(sessions)
+    server.tmux(*console_binding_args("M-Right", ConsoleBindingAction.CYCLE_SESSION))
+    server.tmux("set-option", "-t", CONSOLE_SESSION_NAME, "prefix", "C-a")
+    foreign = server.tmux(
+        "new-session", "-d", "-s", "foreign", "-P", "-F", "#{pane_id}", "cat"
+    ).stdout.strip()
+    server.tmux("set-option", "-pt", foreign, PANE_PROTECTED_OPTION, "1")
+    server.tmux("select-pane", "-t", receiver)
+    client = server.attach()
+    chord = b"\x1b[1;3C"
+    os.write(client, chord)
+    deadline = time.monotonic() + 3
+    while not sink.read_bytes() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert sink.read_bytes() == chord
+    server.tmux("set-option", "-pt", receiver, PANE_PROTECTED_OPTION, "1")
+    os.write(client, chord)
+    time.sleep(0.3)
+    assert sink.read_bytes() == chord

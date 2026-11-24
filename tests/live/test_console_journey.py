@@ -60,6 +60,7 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
         gateway,
         ("sleep", "600"),
         tmp_path,
+        panes_command=("true",),
         projects_command=("true",),
         # The real shape: three panes. `sleep` stands in for the surfaces, which are driven
         # for real in `test_three_pane_console.py` — what this file is about is the

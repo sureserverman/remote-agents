@@ -524,7 +524,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # The bar's two flags, straight onto the gateway for `console_publish_selection`'s
         # reason: one `set-option` each, none of the composer's arrangement reasoning.
         console_publish_session_selected = runtime.gateway.publish_session_selected
-        console_publish_typing = runtime.gateway.publish_typing
+        console_publish_typing = partial(runtime.gateway.publish_typing, pane_id=pane_id)
         console_publish_remote_control = runtime.gateway.publish_remote_control
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
@@ -574,6 +574,18 @@ def local_context(config, connection, paths: ProductionPaths):
         # own rather than following the host the way the bot's does.
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         console_hosted=console_hosted,
+        console_cycle_session=composer.cycle_session if console_hosted else None,
+        console_agent_focused=runtime.gateway.console_agent_focused if console_hosted else None,
+        console_visible_selection=runtime.gateway.visible_selection if console_hosted else None,
+        console_prefix=runtime.gateway.console_prefix if console_hosted else None,
+        console_present_overlay=partial(composer.present_overlay, os.environ["TMUX_PANE"])
+        if console_hosted and os.environ.get("TMUX_PANE")
+        else None,
+        console_focus_session=composer.focus_session if console_hosted else None,
+        console_toggle_panes=composer.toggle_panes if console_hosted else None,
+        console_displayed_session=composer.displayed_session if console_hosted else None,
+        waiting_reason=runtime.terminal.waiting_reason,
+        pane_idle=runtime.terminal.pane_idle,
         open_in_console=open_in_console,
         console_sync=console_sync,
         console_flash=console_flash,

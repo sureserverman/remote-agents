@@ -36,6 +36,7 @@ from remote_agents.adapters.tui.screens import (
     DashboardScreen,
     FeedScreen,
     ForceConfirmModal,
+    FreshSessionConfirmModal,
     InspectScreen,
     LaunchModeScreen,
     LimitsPaneScreen,
@@ -207,6 +208,7 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),
     ForceConfirmModal: lambda: ForceConfirmModal.for_record(_record()),
+    FreshSessionConfirmModal: FreshSessionConfirmModal,
     RemoteControlConfirmModal: lambda: RemoteControlConfirmModal.for_change(
         _record(), RemoteControlState.ACTIVE
     ),

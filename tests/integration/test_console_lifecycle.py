@@ -158,6 +158,7 @@ async def test_opening_a_session_exchanges_it_into_the_consoles_left_pane() -> N
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
+        panes_command=("true",),
         projects_command=("true",),
         reserved_keys={},
     )
@@ -192,6 +193,7 @@ async def test_a_reload_notices_the_session_the_other_writer_stopped() -> None:
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
+        panes_command=("true",),
         projects_command=("true",),
         reserved_keys={},
     )
@@ -231,6 +233,7 @@ async def test_a_reload_leaves_a_trust_blocked_agent_on_screen() -> None:
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
+        panes_command=("true",),
         projects_command=("true",),
         reserved_keys={},
     )

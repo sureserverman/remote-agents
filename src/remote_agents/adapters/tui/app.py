@@ -9,6 +9,7 @@ import enum
 import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic
 from typing import Literal, TypeVar
 
@@ -21,7 +22,7 @@ from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
 from textual.theme import Theme
 from textual.timer import Timer
-from textual.widgets import HelpPanel, Input
+from textual.widgets import HelpPanel, Input, Static
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
@@ -96,6 +97,7 @@ from remote_agents.application.project_catalog import (
     rank_by_recent_use,
 )
 from remote_agents.application.resume_flow import RESUME_PANE_UNAVAILABLE_MESSAGE
+from remote_agents.application.services import FreshCleanupRequired
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
@@ -408,6 +410,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # mattered: "Refresh" gave no hint that it used to abandon the position it was pressed on.
     # Lower-case descriptions: the footer reads `esc back · ^r refresh …` as one quiet line.
     BINDINGS = [
+        Binding("alt+left", "cycle_session(-1)", "previous session", show=False, priority=True),
+        Binding("alt+right", "cycle_session(1)", "next session", show=False, priority=True),
         Binding("escape", "back", "back", tooltip="Return to the position you came from"),
         # `show=False` on both, and it is the F-key row that made them redundant rather than
         # wrong: F5 and F10 name the same two acts, the footer is one clipping line, and an
@@ -602,6 +606,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: `_close_catalogue_gap`, which is the only thing that reads or writes it.
         self._catalogue_gap_read_at: float | None = None
         self.selection = LaunchSelection()
+        self._refresh_error: str | None = None
+        self._force_origin: SessionId | None = None
+        self._fresh_origin: SessionId | None = None
+        self._help_origin: SessionId | None = None
         self._busy = False
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
         # different questions and only one of them is temporary.
@@ -744,6 +752,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # the identical dereference; the first version of this guard checked two conditions
             # that could never be false and left this one open.
             return True
+        if action == "back" and screen.query(HelpPanel):
+            return True
+        if action == "refresh" and self.services.console_agent_focused is not None:
+            return not self.busy and not isinstance(screen, ModalScreen)
+        if action == "cycle_session":
+            return self.services.console_cycle_session is not None
+        if action == "toggle_panes":
+            return self.services.console_toggle_panes is not None
+        if action in {"waiting_sessions", "fresh_session"}:
+            available = (
+                self.services.waiting_reason is not None
+                if action == "waiting_sessions"
+                else self.services.pane_idle is not None
+            )
+            return (
+                available
+                and not self.busy
+                and not isinstance(screen, ModalScreen)
+                and not (getattr(screen, "entry_is_a_commitment", False))
+            )
         if action == "session_key":
             # The key is gated on the row letter it stands for: refused behind a modal,
             # refused on a commitment screen when it is a stop (DEC-052, DEC-062), offered
@@ -846,6 +874,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # absent key rather than an `AttributeError` out of a key handler, which this file
             # records elsewhere as the class that has already killed the app once.
             return False
+        if self.services.console_visible_selection is not None:
+            return True
         kind = _position_kind(screen)
         if kind is PositionKind.ROWS:
             return True
@@ -1325,12 +1355,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         unwrapped for the same reason `in_thread` unwraps it: the caller reports the failure,
         and "Worker raised exception: …" is not what the owner needs to read.
         """
+        previous = self._typing_wanted
+        if self.services.console_publish_typing:
+            await self._settle_typing(True)
         try:
             return bool(await self._ask(modal).wait())
         except WorkerCancelled:
             return False
         except WorkerFailed as failure:
             raise failure.error from None
+        finally:
+            if self.services.console_publish_typing:
+                await self._settle_typing(previous)
 
     # Actions -------------------------------------------------------------------
 
@@ -1342,6 +1378,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         confirmations, are screens of their own as of this task.
         """
         if self.busy:
+            return
+        if self.screen.query(HelpPanel):
+            await self.action_help()
+            return
+        if isinstance(self.screen, SessionsScreen) and self.screen.waiting:
+            previous = self.screen.return_session
+            await self.go_back()
+            await self._restore_overlay_session(previous)
             return
         await self.go_back()
 
@@ -1364,7 +1408,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         screen = self.body
         if screen is None:
             return
-        await screen.refresh_contents()
+        flash = self.services.console_flash
+        self._refresh_error = None
+        try:
+            agent_focused = self.services.console_agent_focused
+            if (
+                agent_focused is not None
+                and await agent_focused()
+                and not isinstance(screen, SessionsScreen)
+            ):
+                await self.load_sessions()
+                message = "Refreshed the console session list."
+            elif screen.can_refresh:
+                await screen.refresh_contents()
+                message = self._refresh_error or "Refresh finished."
+            else:
+                message = "This screen has no data to refresh."
+        except Exception as error:
+            message = f"Refresh failed: {error}"
+        if flash is not None:
+            await flash(message)
 
     async def reload_catalogue(self) -> bool:
         """Re-read the project catalogue into app state, and say whether that took.
@@ -1714,6 +1777,109 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             _LOG.debug("the console arrangement could not be read", exc_info=True)
             return False
 
+    async def action_cycle_session(self, step: int) -> None:
+        cycle = self.services.console_cycle_session
+        if cycle is None or not await self._holds_console_slot():
+            return
+        try:
+            message = await cycle(await self.load_sessions(), step)
+        except Exception as error:
+            message = f"Could not switch session: {error}"
+        if message:
+            self.announce(message)
+            if self.services.console_flash is not None:
+                await self.services.console_flash(message)
+
+    async def action_toggle_panes(self) -> None:
+        toggle = self.services.console_toggle_panes
+        if toggle is not None and await self._holds_console_slot():
+            await toggle()
+
+    async def action_waiting_sessions(self) -> None:
+        if isinstance(self.screen, SessionsScreen) and self.screen.waiting:
+            if self.services.console_present_overlay:
+                previous = await self.services.console_present_overlay()
+                if previous is not None:
+                    self.screen.return_session = previous
+            await self.screen.refresh_contents()
+        else:
+            self.screen.mark_excursion()
+            picker = SessionsScreen(waiting=True)
+            if self.services.console_present_overlay is not None:
+                picker.return_session = await self.services.console_present_overlay()
+            await self.push_screen(picker)
+
+    async def action_fresh_session(self) -> None:
+        screen = self.screen
+        try:
+            displayed = self.services.console_displayed_session
+            present = self.services.console_present_overlay
+            if present is not None:
+                self._fresh_origin = source = await present()
+            elif displayed is not None and await self._holds_console_slot():
+                source = await displayed()
+            else:
+                source = None
+            target = str(source) if source is not None else None
+            if self.screen is not screen or self.busy:
+                return
+            if target is None:
+                self.announce("Display the session you want to replace first.", severity="warning")
+                return
+            screen.mark_excursion()
+            await self.show_detail(target, opening_action="fresh")
+        except Exception as error:
+            self.announce(f"Could not open Fresh session: {error}")
+
+    async def dismiss_fresh_overlay(self) -> None:
+        previous, self._fresh_origin = self._fresh_origin, None
+        if previous is not None:
+            await self.go_back()
+            await self._restore_overlay_session(previous)
+
+    async def replace_with_fresh(self, source: SessionRecord, folder: Path) -> None:
+        """Start and verify the replacement before stopping the confirmed source."""
+        idle = self.services.pane_idle
+        displayed = self.services.console_displayed_session
+        opener = self.services.open_in_console
+        focus = self.services.console_focus_session
+        if idle is None or displayed is None or opener is None or focus is None:
+            self.announce("Open this session in the console first.")
+            return
+        sessions = self.services.backend.sessions
+        successor = None
+        try:
+            if await displayed() != source.session_id or not await idle(source.session_id):
+                raise ValueError("Display the original session and finish its turn or draft first.")
+            successor = await sessions.fresh_successor(source.session_id, folder)
+            if successor.state not in (SessionState.RUNNING, SessionState.UNTRUSTED):
+                raise ValueError("Replacement has not started.")
+            if await sessions.fresh_folder(successor) != folder:
+                raise ValueError("Replacement working folder differs.")
+            refused = await opener(str(successor.session_id))
+            if refused:
+                raise ValueError(refused)
+            if not await focus(successor.session_id):
+                raise ValueError("Could not focus the replacement.")
+            deadline = monotonic() + 60
+            while not await idle(successor.session_id):
+                if monotonic() >= deadline:
+                    raise ValueError("Could not verify an empty replacement prompt.")
+                await asyncio.sleep(0.25)
+            if await displayed() != successor.session_id:
+                raise ValueError("The displayed session changed.")
+            await sessions.close_fresh_predecessor(source, successor, folder)
+            self.return_to_projects()
+        except Exception as error:
+            message = f"Fresh session: {error} Original: {source.display.rendered}."
+            if successor is not None:
+                message += f" Replacement: {successor.display.rendered}."
+                if not isinstance(error, FreshCleanupRequired):
+                    message += " Reopen the original and press F6 to retry."
+            self.announce(message)
+            if self.services.console_flash is not None:
+                await self.services.console_flash(message)
+
     async def action_session_key(self, name: str) -> None:
         """One session-shaped F-key: what its row letter does on a row, to the selected session.
 
@@ -1733,9 +1899,30 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # the app. `busy` is the row keys' own refusal, one step earlier.
             return
         screen = self.screen
-        session_value, refusal = await self._resolve_session()
+        displayed = self.services.console_displayed_session
+        selection = self.services.console_visible_selection
+        present = self.services.console_present_overlay
+        previous = None
+        if name == "force" and present is not None:
+            previous = await present()
+            self._force_origin = previous
+        hosted = displayed is not None and await self._holds_console_slot()
+        if selection is not None and not hosted:
+            self.announce("Use a visible console pane to stop a session.", severity="warning")
+            return
+        source = previous or (await displayed() if hosted else None)
+        if source is not None:
+            session_value, refusal = str(source), ""
+        elif selection is not None:
+            selected = await selection()
+            session_value = str(selected) if selected else None
+            refusal = "Select a visible Sessions row or display the session first."
+        else:
+            session_value, refusal = await self._resolve_session()
         if session_value is None:
             self.announce(refusal, severity="warning")
+            if self.services.console_flash:
+                await self.services.console_flash(refusal)
             return
         if self.busy or self.screen is not screen:
             # Both facts can change across the gate's tmux read -- up to two subprocess round
@@ -1745,16 +1932,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # without re-checking here this would be the one path that can navigate while a
             # command is in flight.
             return
-        if named.action is None:
-            screen.mark_excursion()
-            await self.show_detail(session_value)
-            return
-        if named.action not in _ACTION_LABELS:
-            # Inspect and rename navigate unconditionally; the stops do not.
-            screen.mark_excursion()
         await perform_row_action(named.action, session_value, screen=screen)
 
-    def action_help(self) -> None:
+    async def dismiss_force_overlay(self) -> None:
+        previous, self._force_origin = self._force_origin, None
+        if previous and await self.current_record(str(previous)):
+            await self._restore_overlay_session(previous)
+
+    async def action_help(self) -> None:
         """Show Textual's keys panel, or take it down again -- F1, and `?` off an `Input`.
 
         A toggle rather than Textual's show-only action, because the panel takes a third of
@@ -1766,9 +1951,42 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             self.screen.query_one(HelpPanel)
         except NoMatches:
-            self.action_show_help_panel()
+            if self.services.console_present_overlay is not None:
+                self._help_origin = await self.services.console_present_overlay()
+            if self.services.console_prefix is None:
+                self.action_show_help_panel()
+            else:
+                panel = HelpPanel()
+                await self.screen.mount(panel)
+                prefix = await self.services.console_prefix()
+                await panel.mount(
+                    Static(
+                        f"Alt+Left  Previous session   Alt+Right  Next session\n"
+                        f"{prefix}, then F2  Native provider F2\n"
+                        "Sessions: i  Inspect   d  Details   r  Rename",
+                        markup=False,
+                    ),
+                    before=0,
+                )
             return
+        if self.services.console_present_overlay and self.services.console_displayed_session:
+            if await self.services.console_displayed_session() is not None:
+                self._help_origin = await self.services.console_present_overlay()
+                return
         self.action_hide_help_panel()
+        previous, self._help_origin = self._help_origin, None
+        await self._restore_overlay_session(previous)
+
+    async def _restore_overlay_session(self, previous: SessionId | None) -> None:
+        opener = self.services.open_in_console
+        displayed = self.services.console_displayed_session
+        focus = self.services.console_focus_session
+        if previous and opener and displayed and focus and await displayed() is None:
+            refused = await opener(str(previous))
+            if refused:
+                self.announce(refused)
+            else:
+                await focus(previous)
 
     async def action_back_or_quit(self) -> None:
         """`q`: Back where there is somewhere to go back to, quit at the resting position.
@@ -1798,9 +2016,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         self.action_command_palette()
 
-    def action_bare_help(self) -> None:
+    async def action_bare_help(self) -> None:
         """`?`: the help key where no `Input` is focused; `check_action` refuses it elsewhere."""
-        self.action_help()
+        await self.action_help()
 
     def action_projects_home(self) -> None:
         """Unwind to the resting position from wherever the owner is -- F12.
@@ -2268,6 +2486,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
+            if self.services.console_flash:
+                await self.services.console_flash(
+                    f"{_ACTION_LABELS[action]}: {record.display.rendered}"
+                )
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
                 outcome = await dispatch_stop(resolution, sessions=self._services.backend.sessions)
             failure = outcome.failure
@@ -2365,6 +2587,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         the toast and keeps its rows and its status line. The failure is never silent; what it
         is not allowed to do is rewrite a listing it is not about.
         """
+        self._refresh_error = f"Refresh failed: {error}"
         _LOG.exception("session read failed", exc_info=error)
         target = screen if screen is not None else self.body
         if target is None or not target.showing:

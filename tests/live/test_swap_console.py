@@ -72,6 +72,7 @@ class LiveConsole:
             self.gateway,
             ("sleep", "600"),
             home,
+            panes_command=("true",),
             projects_command=("true",),
             reserved_keys={},
         )

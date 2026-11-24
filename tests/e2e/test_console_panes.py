@@ -170,7 +170,12 @@ async def test_a_retired_tagged_key_is_unbound_and_an_owner_key_survives_a_conso
     )
     await _run(*tmux, "bind-key", "-n", "M-w", "display-message", "owner")
     composer = ConsoleComposer(
-        gateway, ("sleep", "600"), tmp_path, projects_command=("true",), reserved_keys={}
+        gateway,
+        ("sleep", "600"),
+        tmp_path,
+        panes_command=("true",),
+        projects_command=("true",),
+        reserved_keys={},
     )
 
     assert await composer.ensure() is True
@@ -608,3 +613,161 @@ async def test_a_transient_wide_split_then_narrow_leaves_the_sessions_pane_idle(
     assert _SESSIONS_PANE_TEXT in await _capture(console_socket, sessions), (
         "the sessions pane did not redraw its own text at a usable height; it is stuck"
     )
+
+
+async def test_waiting_to_fresh_with_live_panes_and_no_conversation_handoff(console, tmp_path):
+    """Drive the app, real pane classifier and session service with a disposable provider."""
+    import re
+    import sys
+    from functools import partial
+
+    from backends import backend_for
+
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+    from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.adapters.tui.panes import ProjectsPane
+    from remote_agents.application.commands import LaunchCommand
+    from remote_agents.application.project_catalog import CatalogProject
+    from remote_agents.application.services import SessionService
+    from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+    from remote_agents.ports.provider_descriptor import ComposerScreen, ProviderDescriptor
+
+    _, runner, socket = console
+    gateway = TmuxGateway(socket, runner, intent_directory=tmp_path / "intents")
+    folder = tmp_path / "planning"
+    folder.mkdir()
+    project, profile = ProjectId("qualification"), ProfileId("fake")
+    agent = tmp_path / "fixture.py"
+    agent.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "with Path(sys.argv[1]).open('w', buffering=1) as log:\n"
+        " print('READY', flush=True)\n"
+        " print('cwd=' + str(Path.cwd()), flush=True)\n"
+        " while True:\n"
+        "  print('─' * 30, flush=True)\n"
+        "  try: line = input('❯ ')\n"
+        "  except (KeyboardInterrupt, EOFError): break\n"
+        "  print(line, file=log)\n",
+        encoding="utf8",
+    )
+    terminal = TmuxTerminal(
+        gateway,
+        {project: folder},
+        {},
+        startup_timeout=5.0,
+        profile_factories={
+            profile: lambda identity, remote: LaunchProfile(
+                sys.executable,
+                (sys.executable, str(agent), str(tmp_path / str(identity))),
+                {"PATH": os.environ["PATH"]},
+                "READY",
+            )
+        },
+        composers={
+            str(profile): ProviderDescriptor(
+                profile,
+                "F",
+                "Fixture",
+                action_required_title=re.compile(r"^Approval required$"),
+                composer=ComposerScreen(
+                    composer=r"^─{10,}\n❯ ?(?P<draft>[^\n]*)\Z",
+                    command_menu=r"(?!)",
+                    menu_absent=r"─{10,}\n❯",
+                ),
+            )
+        },
+    )
+    db = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteSessionStore(db)
+    sessions = SessionService(store, terminal, project_paths={project: folder})
+    view = ConsoleComposer(
+        gateway,
+        ("true",),
+        tmp_path,
+        panes_command=("true",),
+        projects_command=("true",),
+        reserved_keys={},
+    )
+    surface = next(
+        p for p in await gateway.pane_arrangement() if p.on_console and p.pane_index == 0
+    )
+    await gateway.mark_console_slot(surface.pane_id, ConsolePaneSlot.PROJECTS)
+    cat = (CatalogProject(str(project), "Qualification", "infra", "Registered"),)
+
+    async def open_pane(identity):
+        return await view.show(SessionId.parse(identity))
+
+    try:
+        source = (await sessions.launch(LaunchCommand(project, profile, "planning"))).record
+        assert source.state is SessionState.RUNNING
+        assert await view.show(source.session_id) is None
+        pane = next(
+            p.pane_id for p in await gateway.pane_arrangement() if p.session_id == source.session_id
+        )
+        await runner.run("tmux", "-L", socket, "select-pane", "-t", pane, "-T", "Approval required")
+        app = ProjectsPane(
+            TuiContext(
+                backend=backend_for(
+                    sessions=sessions,
+                    projects=object(),
+                    catalogue=cat,
+                    refresh_catalogue=lambda: cat,
+                ),
+                profiles=(),
+                attach_argv=lambda _: (),
+                open_in_console=open_pane,
+                console_holds_slot=partial(gateway.holds_console_slot, surface.pane_id),
+                console_present_overlay=partial(view.present_overlay, surface.pane_id),
+                console_displayed_session=view.displayed_session,
+                console_focus_session=view.focus_session,
+                waiting_reason=terminal.waiting_reason,
+                pane_idle=terminal.pane_idle,
+            )
+        )
+        async with app.run_test() as pilot:
+            await pilot.press("f4")
+            assert app.screen._waiting_reasons == {str(source.session_id): "Approval requested"}
+            await pilot.press("enter")
+            assert await view.displayed_session() == source.session_id
+            await runner.run("tmux", "-L", socket, "select-pane", "-t", pane, "-T", "Ready")
+            assert await terminal.waiting_reason(source.session_id) is None
+            await pilot.press("f6")
+            assert app.screen.position == "FRESH_SESSION_CONFIRM"
+            assert str(folder) in app.screen._question
+            await pilot.press("down", "enter")
+            for _ in range(100):
+                if (await store.get(source.session_id)).state is SessionState.ENDED:
+                    break
+                await asyncio.sleep(0.1)
+            assert (await store.get(source.session_id)).state is SessionState.ENDED
+            replacement = await view.displayed_session()
+            assert replacement and replacement != source.session_id
+            assert await terminal.pane_idle(replacement)
+            assert f"cwd={folder}" in await gateway.capture(replacement)
+            assert (tmp_path / str(replacement)).read_text() == ""
+            assert len(await store.list()) == 2
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(("table", "key"), [("root", "M-Left"), ("prefix", "F2"), ("root", "F3")])
+async def test_ensure_preserves_existing_shortcuts_in_both_tables(console, tmp_path, table, key):
+    from remote_agents.application.console import CONSOLE_BINDINGS
+
+    gateway, runner, socket = console
+    await runner.run("tmux", "-L", socket, "bind-key", "-T", table, key, "display-message", "owner")
+    view = ConsoleComposer(
+        gateway,
+        ("true",),
+        tmp_path,
+        projects_command=("true",),
+        panes_command=("true",),
+        bindings=CONSOLE_BINDINGS,
+        reserved_keys={},
+    )
+    for _ in range(2):
+        await view.ensure()
+    listing = await runner.run("tmux", "-L", socket, "list-keys", "-T", table, key)
+    assert "display-message owner" in listing

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
@@ -125,6 +126,8 @@ class _Creator:
 
 def _context(launcher: _Listing) -> TuiContext:
     return TuiContext(
+        waiting_reason=AsyncMock(return_value=None),
+        pane_idle=AsyncMock(return_value=True),
         backend=backend_for(
             sessions=launcher,  # type: ignore[arg-type]
             projects=_Creator(),  # type: ignore[arg-type]
@@ -533,7 +536,7 @@ async def test_a_session_key_acts_on_the_published_selection_and_leaves_the_filt
     """The owner's ask, in one test: bare letters are text, Alt letters are session actions.
 
     `priority=True` is what makes both halves true at once. Textual checks priority bindings
-    from the App down *before* the focused widget (`App._check_bindings`), so `F3` never
+    from the App down *before* the focused widget (`App._check_bindings`), so `F6` never
     reaches the filter's `Input`, and `i` never reaches the session key layer. Measured on the
     pinned Textual 8.2.8 through a real tmux `send-keys M-i` before the layer was written.
 
@@ -548,6 +551,7 @@ async def test_a_session_key_acts_on_the_published_selection_and_leaves_the_filt
         replace(
             _context(_Listing(())),
             console_read_selection=console.read,
+            console_displayed_session=AsyncMock(return_value=chosen),
             console_holds_slot=console.holds_console_slot,
         )
     )
@@ -555,8 +559,8 @@ async def test_a_session_key_acts_on_the_published_selection_and_leaves_the_filt
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        async def _record_detail(value: str, action: str | None = None) -> None:
-            opened.append((value, action))
+        async def _record_detail(value: str, opening_action: str | None = None) -> None:
+            opened.append((value, opening_action))
 
         app.show_detail = _record_detail  # type: ignore[assignment]
         await pilot.press("/")
@@ -566,14 +570,14 @@ async def test_a_session_key_acts_on_the_published_selection_and_leaves_the_filt
         assert entry.has_focus and entry.value == "ab", "the filter never took the typed text"
 
         reads, slot_reads = console.reads, console.slot_reads
-        await pilot.press("f3")
+        await pilot.press("f6")
         await pilot.pause()
 
-        assert opened == [(str(chosen), "inspect")]
+        assert opened == [(str(chosen), "fresh")]
         assert entry.value == "ab", "the session key's letter was typed into the filter as well"
         # Deltas: the hint row's own poll reads the same double (see the note in
         # `test_selected_session_elsewhere_answers_from_the_published_selection`).
-        assert console.reads - reads == 1 and console.slot_reads - slot_reads == 1
+        assert console.reads == reads and console.slot_reads - slot_reads == 1
 
 
 async def test_a_session_key_really_navigates_and_does_not_only_resolve() -> None:
@@ -588,6 +592,7 @@ async def test_a_session_key_really_navigates_and_does_not_only_resolve() -> Non
         replace(
             _context(_Listing(())),
             console_read_selection=console.read,
+            console_displayed_session=AsyncMock(return_value=chosen),
             console_holds_slot=console.holds_console_slot,
         )
     )
@@ -595,7 +600,7 @@ async def test_a_session_key_really_navigates_and_does_not_only_resolve() -> Non
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("f4")
+        await pilot.press("f6")
         await pilot.pause()
 
         assert isinstance(app.screen, SessionDetailScreen)
@@ -614,7 +619,7 @@ async def test_a_session_key_is_not_offered_off_a_console() -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        assert app.check_action("session_key", ("inspect",)) is False
+        assert app.check_action("session_key", ("graceful",)) is False
 
 
 async def test_a_session_key_off_the_console_s_own_panes_refuses_and_reads_nothing() -> None:
@@ -642,7 +647,7 @@ async def test_a_session_key_off_the_console_s_own_panes_refuses_and_reads_nothi
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("f4")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen)
@@ -676,7 +681,7 @@ async def test_a_session_key_with_nothing_selected_says_so_and_navigates_nowhere
         await pilot.pause()
 
         before = console.reads
-        await pilot.press("f4")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen)
@@ -843,7 +848,7 @@ async def test_a_session_key_behind_a_modal_does_not_fire_when_it_is_really_pres
         await pilot.pause()
         before = console.reads
 
-        await pilot.press("f4")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert isinstance(app.screen, ForceConfirmModal), (
@@ -876,7 +881,7 @@ async def test_a_session_key_on_a_detail_acts_on_its_own_session_not_the_publish
         await pilot.pause()
         before = console.reads
 
-        await pilot.press("f4")
+        await pilot.press("f6")
         await pilot.pause()
 
         assert isinstance(app.screen, SessionDetailScreen)
@@ -1060,7 +1065,7 @@ async def test_a_session_key_stands_down_when_a_command_starts_during_the_gate_r
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
-        await pilot.press("f4")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen), (
@@ -1439,7 +1444,7 @@ async def test_an_unreadable_store_does_not_repaint_a_pane_that_shows_no_session
 
 
 @pytest.mark.parametrize("surface", [ProjectsPane, SessionsPane, LimitsPane, FeedPane])
-async def test_f4_from_every_console_pane_opens_the_detail_and_escape_comes_home(
+async def test_f4_from_every_console_pane_lists_waiting_sessions_and_escape_comes_home(
     surface: type[RemoteAgentsTui],
 ) -> None:
     """The Stage 3 gate's judgment check, at unit scope across all four panes.
@@ -1470,17 +1475,14 @@ async def test_f4_from_every_console_pane_opens_the_detail_and_escape_comes_home
         await pilot.press("f4")
         await pilot.pause()
         opened = position(app)
-        named = getattr(app.screen, "session_value", None)
+        assert app.screen.waiting
 
         await pilot.press("escape")
         await pilot.pause()
         returned = position(app)
 
-    assert opened == "SESSION_DETAIL", f"{surface.__name__}: F4 reached {opened}"
-    assert named == str(chosen.session_id), (
-        f"{surface.__name__}: the detail names {named}, not the selected session"
-    )
-    assert returned == home, f"{surface.__name__}: escape landed on {returned}, not {home}"
+    assert opened == "SESSIONS"
+    assert returned == home
 
 
 async def test_a_wizard_step_over_a_pane_keeps_the_navigating_keys_and_refuses_the_stops() -> None:
@@ -1530,7 +1532,6 @@ async def test_a_wizard_step_over_a_pane_keeps_the_navigating_keys_and_refuses_t
         await pilot.press("f4")
         await pilot.pause()
         opened = position(app)
-        await pilot.press("escape")
         await pilot.pause()
         returned = position(app)
         kept = app.screen.query_one("#filter", Input).value
@@ -1541,7 +1542,7 @@ async def test_a_wizard_step_over_a_pane_keeps_the_navigating_keys_and_refuses_t
         f"the wrong session keys are offered while a name is being typed: {offered}"
     )
     assert not any(offered[name] for name in stops), "a stop key is live on a text entry"
-    assert opened == "SESSION_DETAIL", f"F4 from a wizard step reached {opened}"
+    assert opened == "NAME", f"F4 from a wizard step reached {opened}"
     assert returned == "NAME", f"escape landed on {returned}, not the half-typed name"
     assert kept == "my-new-project", "the excursion discarded the name the owner was typing"
 

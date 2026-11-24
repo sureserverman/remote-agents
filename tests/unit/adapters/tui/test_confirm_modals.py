@@ -55,6 +55,7 @@ from remote_agents.adapters.tui.screens import ALL_CONFIRMS
 from remote_agents.adapters.tui.screens.confirm import (
     ConfirmScreen,
     ForceConfirmModal,
+    FreshSessionConfirmModal,
     RemoteControlConfirmModal,
 )
 from remote_agents.application.commands import ForceStopCommand, RemoteControlCommand
@@ -260,13 +261,15 @@ def test_every_registered_confirm_is_arranged_here() -> None:
     destructive confirm would ship with none of these guarantees and every test in this file
     would still be green — verified by registering one and watching ten cases fail.
     """
-    assert set(ALL_CONFIRMS) == set(_ARRANGED), (
+    # Fresh is reached via F6 on the displayed agent, independently of any detail row.
+    # Its interactive arrangements live in test_function_keys.
+    assert set(ALL_CONFIRMS) == {*_ARRANGED, FreshSessionConfirmModal}, (
         "every confirm in ALL_CONFIRMS needs an arrangement in this file, and every "
         "arrangement needs to still be registered"
     )
 
 
-@pytest.mark.parametrize("confirm", ALL_CONFIRMS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("confirm", _ARRANGED, ids=lambda c: c.__name__)
 def test_each_arrangements_refused_state_is_genuinely_refused(
     confirm: type[ConfirmScreen],
 ) -> None:

@@ -296,6 +296,7 @@ def _composer(console: RecordingConsole, pane_commands=None) -> ConsoleComposer:
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
+        panes_command=("true",),
         projects_command=_PROJECTS_COMMAND,
         pane_commands=pane_commands or _PANE_COMMANDS,
         reserved_keys={},
@@ -604,8 +605,8 @@ async def test_the_binding_budget_is_one_key_and_it_says_why() -> None:
     cost to any agent. A key that buys one keystroke over an existing chord does not earn a
     permanent claim on every agent's keyboard.
     """
-    assert len(CONSOLE_BINDINGS) == 11
-    assert len({binding.key for binding in CONSOLE_BINDINGS}) == 11
+    assert len(CONSOLE_BINDINGS) == 14
+    assert len({(binding.table, binding.key) for binding in CONSOLE_BINDINGS}) == 14
     for binding in CONSOLE_BINDINGS:
         assert binding.why.strip(), f"{binding.key} is spent forever and does not say why"
 
@@ -643,7 +644,7 @@ async def test_the_fold_key_is_a_prefix_key_and_the_root_budget_is_untouched() -
     )
     assert binding.why.strip(), "a key is spent and does not say what it costs"
     assert binding not in CONSOLE_BINDINGS
-    assert len(CONSOLE_BINDINGS) == 11
+    assert len(CONSOLE_BINDINGS) == 14
 
 
 async def test_ensure_installs_the_fold_key_with_the_command_that_folds() -> None:
@@ -1346,6 +1347,7 @@ async def test_ensure_turns_the_mouse_on_and_survives_a_server_that_refuses() ->
             console,
             ("remote-agents", "tui"),
             Path("/tmp"),
+            panes_command=("true",),
             projects_command=_PROJECTS_COMMAND,
             pane_commands=_PANE_COMMANDS,
             reserved_keys={},
@@ -1570,6 +1572,7 @@ def _barred_composer(console: RecordingConsole) -> ConsoleComposer:
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
+        panes_command=("true",),
         projects_command=_PROJECTS_COMMAND,
         pane_commands=_PANE_COMMANDS,
         reserved_keys={},
@@ -1675,7 +1678,11 @@ async def test_the_settings_key_runs_the_projects_command_to_fetch_the_surface_h
     console = RecordingConsole()
     await _composer(console).ensure()
 
-    by_key = {call[1]: (call[2], call[3]) for call in named(console, "install_console_binding")}
+    by_key = {
+        call[1]: (call[2], call[3])
+        for call in named(console, "install_console_binding")
+        if call[4] is ConsoleKeyTable.ROOT
+    }
     assert by_key["F2"] == (ConsoleBindingAction.SHOW_SETTINGS, _PROJECTS_COMMAND)
 
 

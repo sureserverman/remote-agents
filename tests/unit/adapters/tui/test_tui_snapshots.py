@@ -211,6 +211,7 @@ _POSITIONS = (
     "SESSION_DETAIL",
     "RENAME",
     "FORCE_MODAL",
+    "FRESH_SESSION_CONFIRM",
     "REMOTE_CONTROL_MODAL",
     "INSPECT",
     "RESUME_PROJECTS",
@@ -766,6 +767,16 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
             return None
         app.screen.submit("new-project")
         return None
+    if step == "FRESH_SESSION_CONFIRM":
+        from remote_agents.adapters.tui.screens.confirm import FreshSessionConfirmModal
+
+        return asyncio.create_task(
+            app.ask_to_confirm(
+                FreshSessionConfirmModal(
+                    "Open a fresh session in /projects/example and close the original?"
+                )
+            )
+        )
     if step == "SESSIONS":
         await app.show_sessions()
         return None

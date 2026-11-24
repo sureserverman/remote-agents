@@ -140,3 +140,24 @@ def test_the_prompt_relay_types_nothing_onto_the_hook_review() -> None:
 
     assert delivery.outcome.value == "refused"
     assert pane.typed == []
+
+
+def test_waiting_picker_reads_current_native_dialogs_and_ignores_idle_panes():
+    for directory, profile, question in (
+        ("claude", "claude", "dialog_approval"),
+        ("codex", "codex", "dialog_approval"),
+        ("cursor", "cursor-agent", "dialog_approval"),
+        ("opencode", "opencode", "dialog_permission"),
+    ):
+        for screen, waiting in ((question, True), ("idle", False)):
+            capture = (_PANES / directory / f"{screen}.txt").read_text()
+            pane = PromptPane([capture], profile=profile)
+            reason = asyncio.run(_terminal(pane).waiting_reason(pane.session_id))
+            assert bool(reason) == waiting, (profile, screen, reason)
+            assert not pane.typed
+    for pane in (
+        PromptPane([HOOKS], profile="codex", listed=False),
+        PromptPane([HOOKS], profile="codex", fail_on="capture-pane"),
+    ):
+        assert asyncio.run(_terminal(pane).waiting_reason(pane.session_id)) is None
+        assert not pane.typed

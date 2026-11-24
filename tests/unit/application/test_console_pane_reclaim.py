@@ -168,7 +168,12 @@ class RecordingConsole:
 
 def _composer(console: RecordingConsole) -> ConsoleComposer:
     return ConsoleComposer(
-        console, ("dashboard",), Path("/tmp"), projects_command=("projects",), reserved_keys={}
+        console,
+        ("dashboard",),
+        Path("/tmp"),
+        panes_command=("true",),
+        projects_command=("projects",),
+        reserved_keys={},
     )
 
 

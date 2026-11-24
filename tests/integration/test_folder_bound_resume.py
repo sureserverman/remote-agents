@@ -1,5 +1,6 @@
 """Durable folder ownership through catalogue, manual selection and restart recovery."""
 
+import asyncio
 import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -14,7 +15,7 @@ from remote_agents.adapters.sqlite.folder_bindings import SQLiteFolderBindings
 from remote_agents.adapters.sqlite.interrupted_resumes import SQLiteInterruptedResumes
 from remote_agents.adapters.sqlite.worktree_store import SQLiteWorktreeStore
 from remote_agents.adapters.workflow.roots import acceptable_root
-from remote_agents.application.commands import ResumeCommand
+from remote_agents.application.commands import LaunchCommand, ResumeCommand
 from remote_agents.application.interrupted_resume import (
     InterruptedResumePass,
     RestartSnapshot,
@@ -625,3 +626,91 @@ async def test_existing_resume_holds_mismatched_or_missing_pane_ownership(
     assert result.record == before
     assert await rig.store.get(before.session_id) == before
     assert len(rig.terminal.presets) == 1
+
+
+@pytest.mark.parametrize("outside", [True, False])
+async def test_fresh_launch_keeps_folder_preset_and_durable_identity(rig, outside):
+    folder = rig.outside if outside else rig.project
+    source = (
+        await rig.service.launch(
+            LaunchCommand(
+                PROJECT,
+                CODEX,
+                "plan",
+                permissions=PermissionPreset.ASK,
+                folder=folder if outside else None,
+            )
+        )
+    ).record
+    assert await rig.service.fresh_folder(source) == folder
+    one, two = await asyncio.gather(
+        rig.service.fresh_successor(source.session_id, folder),
+        rig.service.fresh_successor(source.session_id, folder),
+    )
+    assert one.session_id == two.session_id != source.session_id
+    assert one.project_id == source.project_id and one.profile_id == source.profile_id
+    assert await rig.service.fresh_folder(one) == folder
+    assert await rig.bindings.for_session(one.session_id) == PermissionPreset.ASK
+    assert (await rig.store.get(source.session_id)).state is SessionState.RUNNING
+    assert len(rig.terminal.argv) == 2
+    assert len(await rig.store.list()) == 2
+
+
+async def test_fresh_refuses_changed_folder_before_launch(rig):
+    source = (
+        await rig.service.launch(
+            LaunchCommand(PROJECT, CODEX, "plan", permissions=PermissionPreset.ASK)
+        )
+    ).record
+    with pytest.raises(ValueError, match="working folder"):
+        await rig.service.fresh_successor(source.session_id, rig.outside)
+    assert len(await rig.store.list()) == 1
+
+
+@pytest.mark.parametrize("replacement_disappears", [True, False])
+async def test_fresh_closes_only_after_live_replacement_and_keeps_shared_folder(
+    rig, replacement_disappears
+):
+    source = (
+        await rig.service.launch(
+            LaunchCommand(
+                PROJECT, CODEX, "planning", permissions=PermissionPreset.ASK, folder=rig.outside
+            )
+        )
+    ).record
+    replacement = await rig.service.fresh_successor(source.session_id, rig.outside)
+    if replacement_disappears:
+        await rig.terminal.force_stop(replacement.session_id)
+        with pytest.raises(ValueError, match="replacement pane"):
+            await rig.service.close_fresh_predecessor(source, replacement, rig.outside)
+        assert (await rig.store.get(source.session_id)).state is SessionState.RUNNING
+    else:
+        await rig.service.close_fresh_predecessor(source, replacement, rig.outside)
+        assert (await rig.store.get(source.session_id)).state is SessionState.ENDED
+        assert await rig.service.fresh_folder(replacement) == rig.outside
+    assert not rig.terminal.prompts
+
+
+async def test_fresh_cleanup_failure_identifies_preserved_source_and_allows_cleanup(
+    rig, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from remote_agents.application.commands import CleanupCommand
+    from remote_agents.application.services import FreshCleanupRequired
+
+    source = (
+        await rig.service.launch(
+            LaunchCommand(PROJECT, CODEX, "plan", permissions=PermissionPreset.ASK)
+        )
+    ).record
+    successor = await rig.service.fresh_successor(source.session_id, rig.project)
+    with monkeypatch.context() as patch:
+        patch.setattr(rig.terminal, "cleanup", AsyncMock(side_effect=OSError("pane busy")))
+        with pytest.raises(FreshCleanupRequired, match="press c"):
+            await rig.service.close_fresh_predecessor(source, successor, rig.project)
+    assert (await rig.store.get(source.session_id)).state is SessionState.PRESERVED
+    await rig.service.cleanup(CleanupCommand(source.session_id))
+    assert (await rig.store.get(source.session_id)).state is SessionState.ENDED
+    assert (await rig.store.get(successor.session_id)).state is SessionState.RUNNING
+    assert len(rig.terminal.argv) == 2

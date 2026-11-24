@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
@@ -27,11 +28,6 @@ from tui_filter import settle_filter
 from tui_positions import position
 
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.keys import (
-    FUNCTION_KEYS,
-    SESSION_STOP_KEYS,
-    session_key,
-)
 from remote_agents.adapters.tui.panes import ProjectsPane
 from remote_agents.adapters.tui.preferences import (
     ALPHABETICAL,
@@ -73,6 +69,9 @@ class _Creator:
 
 
 class _Launcher(SessionUseCaseDouble):
+    async def fresh_folder(self, record):
+        return Path("/tmp/example")
+
     """A host with launch history, or with none -- `project_usage` is a render-time read.
 
     Inherits the three reads a screen makes while drawing rather than restating them: the
@@ -674,6 +673,7 @@ async def test_a_session_key_excursion_returns_to_the_filter_the_owner_typed() -
     console = SelectionConsole(selected=chosen.session_id)
     app = ProjectsPane(
         _context(
+            waiting_reason=AsyncMock(return_value=None),
             sessions=_Launcher((chosen,)),
             console_read_selection=console.read,
             console_holds_slot=console.holds_console_slot,
@@ -688,9 +688,9 @@ async def test_a_session_key_excursion_returns_to_the_filter_the_owner_typed() -
         entry = app.screen.query_one("#filter", Input)
         assert entry.value == "opaque-shift"
 
-        await pilot.press("f3")
+        await pilot.press("f4")
         await pilot.pause()
-        assert position(app) == "SESSION_DETAIL", "F3 did not open the detail"
+        assert position(app) == "SESSIONS", "F3 did not open the detail"
 
         await pilot.press("escape")
         await pilot.pause()
@@ -703,13 +703,7 @@ async def test_a_session_key_excursion_returns_to_the_filter_the_owner_typed() -
 #: The session-shaped F-keys that take the owner somewhere: every one whose action is not a
 #: stop. Derived from the table rather than spelled, so a sixth session key added tomorrow is
 #: covered here on the same commit.
-_NAVIGATING_SESSION_KEYS = sorted(
-    entry.key
-    for entry in FUNCTION_KEYS
-    if entry.action.startswith("session_key(")
-    and (found := session_key(entry.action[len("session_key('") : -2])) is not None
-    and found.row_key not in SESSION_STOP_KEYS
-)
+_NAVIGATING_SESSION_KEYS = ["f4", "f6"]
 
 
 @pytest.mark.parametrize("key", _NAVIGATING_SESSION_KEYS)
@@ -741,6 +735,9 @@ async def test_every_navigating_session_key_marks_the_position_it_leaves(key: st
     console = SelectionConsole(selected=running.session_id)
     app = ProjectsPane(
         _context(
+            waiting_reason=AsyncMock(return_value=None),
+            pane_idle=AsyncMock(return_value=True),
+            console_displayed_session=AsyncMock(return_value=running.session_id),
             sessions=_Launcher((running,)),
             console_read_selection=console.read,
             console_holds_slot=console.holds_console_slot,
@@ -757,6 +754,8 @@ async def test_every_navigating_session_key_marks_the_position_it_leaves(key: st
 
         left = app.screen is not pane
         marked = pane._left_by_excursion
+        if key == "f6":
+            await pilot.press("escape")
 
     assert left, f"{key} did not navigate, so it is not a navigating session key"
     assert marked, (

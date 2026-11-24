@@ -31,11 +31,11 @@ _NIGHT, _DAY = (status_bar_palette(theme) for theme in THEMES)
 
 #: The design's two lines (handoff README § 2), keys half, text only.
 _FULL_KEYS = (
-    "1 help  2 settings  3 inspect  4 detail  5 refresh  6 rename  7 add project  8 stop  "
+    "1 help  2 settings  3 panes  4 waiting  5 refresh  6 fresh  7 add project  8 stop  "
     "9 force stop  10 close console  11 terminal  12 projects"
 )
 _COMPACT_KEYS = (
-    "1help 2setup 3view 4detail 5refresh 6rename 7addproj 8stop 9kill 10close 12projects"
+    "1help 2setup 3panes 4waiting 5refresh 6fresh 7addproj 8stop 9kill 10close 12projects"
 )
 
 #: What `remote_control_words_args` publishes for "claude on · codex on", written by hand here
@@ -130,13 +130,13 @@ def test_session_keys_dim_on_no_selection() -> None:
     for entry in status_bar_keys():
         if entry.needs_selection:
             assert f"#{{!=:#{{{SESSION_SELECTED_OPTION}}},1}}" in value
-    assert {entry.number for entry in status_bar_keys() if entry.needs_selection} == {3, 4, 6, 8, 9}
+    assert {entry.number for entry in status_bar_keys() if entry.needs_selection} == {8, 9}
 
 
 def test_stop_keys_dim_while_typing() -> None:
     assert f"#{{==:#{{{TYPING_OPTION}}},1}}" in _format()
     typing = {entry.number for entry in status_bar_keys() if entry.refused_while_typing}
-    assert typing == {2, 7, 8, 9}
+    assert typing == {2, 4, 6, 7, 8, 9}
 
 
 # --- a real tmux client ----------------------------------------------------------------------

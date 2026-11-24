@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
+from uuid import uuid5
 
 from remote_agents.application.commands import (
     LAUNCH_WAIT_SECONDS,
@@ -38,7 +39,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     pane_is_attachable,
 )
-from remote_agents.application.session_folders import live_folder
+from remote_agents.application.session_folders import SessionFolders, live_folder
 from remote_agents.application.worktrees import WorktreeCreateFailed, WorktreeService
 from remote_agents.domain.models import (
     ProfileId,
@@ -241,6 +242,10 @@ def _event_for_recheck(
             return LifecycleEvent.STARTUP_ERROR
         return None
     return None if state is SessionState.RUNNING else LifecycleEvent.READY
+
+
+class FreshCleanupRequired(ValueError):
+    """The old process exited, but its preserved pane still requires cleanup."""
 
 
 class SessionService:
@@ -455,7 +460,112 @@ class SessionService:
         guard = self._daemon_guards.get(profile_id)
         return contextlib.nullcontext() if guard is None else guard.hold(wait, alone=False)
 
+    async def fresh_folder(self, source: SessionRecord) -> Path:
+        """Resolve the recorded launch folder and refuse a moved project root."""
+        registered = (
+            None if self._project_paths is None else self._project_paths.get(source.project_id)
+        )
+        saved = await self._store.project_root_for(source.session_id)
+        if registered is None or saved is None or registered.resolve(strict=True) != saved:
+            raise ValueError("Cannot verify the original project folder.")
+        folder = await SessionFolders(
+            self._project_paths, self._worktrees, self._folder_bindings
+        ).folder_for(source.session_id, source.project_id)
+        if folder is None or not folder.is_dir():
+            raise ValueError("The original working folder is unavailable.")
+        return folder.resolve(strict=True)
+
+    async def _verify_fresh_source(self, source: SessionRecord) -> None:
+        observed = await self._terminal.inspect(source.session_id)
+        if (
+            source.state is not SessionState.RUNNING
+            or observed is None
+            or not observed.live
+            or not pane_is_attachable(observed, source)
+        ):
+            raise ValueError("Cannot verify the original running session and its owner.")
+
+    async def close_fresh_predecessor(
+        self, source: SessionRecord, successor: SessionRecord, folder: Path
+    ) -> None:
+        """Close only the confirmed source after verifying both durable bindings again."""
+        if source.session_id == successor.session_id or (source.project_id, source.profile_id) != (
+            successor.project_id,
+            successor.profile_id,
+        ):
+            raise ValueError("The replacement identity does not match the source.")
+        if (
+            await self.fresh_folder(source) != folder
+            or await self.fresh_folder(successor) != folder
+        ):
+            raise ValueError("The working folder changed.")
+        if await self.continuation_permissions(source) != await self.continuation_permissions(
+            successor
+        ):
+            raise ValueError("The permissions of the replacement differ.")
+        await self._verify_fresh_source(await self._require_session(source.session_id))
+        current = await self._require_session(successor.session_id)
+        replacement_pane = await self._terminal.inspect(current.session_id)
+        if (
+            replacement_pane is None
+            or not replacement_pane.live
+            or not pane_is_attachable(replacement_pane, current)
+        ):
+            raise ValueError("The replacement pane is no longer available.")
+        try:
+            observed = await self.graceful_stop(
+                GracefulStopCommand(source.session_id, source.profile_id, only_if_idle=True)
+            )
+        except Exception as error:
+            if (await self._require_session(source.session_id)).state is SessionState.PRESERVED:
+                raise FreshCleanupRequired(
+                    "The original exited. Select it in Sessions and press c to finish cleanup."
+                ) from error
+            raise
+        if not observed.preserved:
+            raise ValueError("Graceful close did not finish.")
+
+    async def fresh_successor(self, predecessor: SessionId, folder: Path) -> SessionRecord:
+        """Open one empty conversation for this source, reusing its folder and permissions.
+
+        Derive the replacement ID before the launch. Two console panes confirming the same
+        source share the durable launch claim, and a retry can find the same replacement
+        even after the console exits. An ended replacement can be replaced on another try.
+        """
+        source = await self._require_session(predecessor)
+        await self._verify_fresh_source(source)
+        if await self.fresh_folder(source) != folder:
+            raise ValueError("The original working folder has changed.")
+        replacement = SessionId(uuid5(predecessor.value, "fresh-session"))
+        while existing := await self._store.get(replacement):
+            if existing.state is SessionState.FAILED:
+                observed = await self._terminal.inspect(existing.session_id)
+                if observed is not None and observed.live:
+                    return existing
+            elif existing.state is not SessionState.ENDED:
+                return existing
+            replacement = SessionId(uuid5(replacement.value, "fresh-session"))
+        command = LaunchCommand(
+            source.project_id,
+            source.profile_id,
+            f"fresh-session:{replacement}",
+            reuse_folder_of=predecessor,
+            inherit_permissions_of=predecessor,
+        )
+        try:
+            return (await self._launch(command, replacement, expected_folder=folder)).record
+        except DuplicateCommandError:
+            existing = await self._store.get(replacement)
+            if existing is None:
+                raise ValueError("A fresh launch was already claimed. Check Sessions.") from None
+            return existing
+
     async def launch(self, command: LaunchCommand) -> LaunchOutcome:
+        return await self._launch(command, SessionId.new())
+
+    async def _launch(
+        self, command: LaunchCommand, session_id: SessionId, *, expected_folder: Path | None = None
+    ) -> LaunchOutcome:
         # Before the key is claimed and the record saved, so a refusal leaves nothing behind
         # and the owner's next press is a real attempt. Taken holding no other lock; the
         # Remote Control side takes no session lock, so nothing under it waits on this.
@@ -470,7 +580,6 @@ class SessionService:
             )
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("launch callback was already handled")
-            session_id = SessionId.new()
             sequence = await self._store.next_sequence(command.project_id, command.profile_id)
             record = SessionRecord(
                 session_id,
@@ -515,6 +624,13 @@ class SessionService:
                     if command.folder is not None
                     else await self._reuse_folder(session_id, command.reuse_folder_of)
                 )
+                if expected_folder is not None and bound is _Bound.BOUND:
+                    try:
+                        confirmed_folder = await self.fresh_folder(record)
+                    except (ValueError, KeyError, OSError):
+                        confirmed_folder = None
+                    if confirmed_folder != expected_folder:
+                        bound = _Bound.REFUSED
                 if bound is not _Bound.BOUND:
                     return LaunchOutcome(
                         await self._store.record_event(session_id, LifecycleEvent.STARTUP_ERROR),

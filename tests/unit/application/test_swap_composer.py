@@ -98,11 +98,14 @@ class RecordingConsole:
     async def kill_console(self) -> None:
         self.calls.append(("kill_console",))
 
-    async def pane_arrangement(self) -> tuple[HostedPane, ...]:
+    async def pane_arrangement(self, *, live_only: bool = False) -> tuple[HostedPane, ...]:
         self.reads += 1
         if self.error is not None:
             raise self.error
         return self.arrangement
+
+    async def focus_pane(self, pane_id: str) -> None:
+        self.focused = pane_id
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         self.swaps.append((source_pane, target_pane))
@@ -137,7 +140,12 @@ def composer(console: RecordingConsole) -> ConsoleComposer:
     from pathlib import Path
 
     return ConsoleComposer(
-        console, ("dashboard",), Path("/tmp"), projects_command=("projects",), reserved_keys={}
+        console,
+        ("dashboard",),
+        Path("/tmp"),
+        panes_command=("true",),
+        projects_command=("projects",),
+        reserved_keys={},
     )
 
 
@@ -606,3 +614,15 @@ async def test_discarding_a_preserved_pane_also_steps_the_console_aside_before_t
     await _stop_service(order, hide=hide, state=SessionState.PRESERVED).cleanup(CleanupCommand(_A))
 
     assert order == [f"hide:{_A}", "cleanup"], order
+
+
+async def test_cycle_uses_displayed_identity_wraps_and_skips_missing_panes() -> None:
+    console = RecordingConsole((_slot("%1"), _feed("%2"), _home(_A, "%3", _A), _home(_B, "%4", _B)))
+    view = composer(console)
+    records = (_running(_A), _running(_LEGACY), _running(_B))
+    assert await view.cycle_session((), 1) == "No sessions to switch to."
+    for step, expected, pane in [(-1, _B, "%4"), (1, _A, "%3"), (1, _B, "%4"), (-1, _A, "%3")]:
+        assert await view.cycle_session(records, step) is None
+        assert await view.displayed_session() == expected
+        assert console.focused == pane
+    assert await view.cycle_session((_running(_A),), -1) == "Only one session."

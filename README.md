@@ -547,15 +547,8 @@ Your managed sessions are not in that session and survive it.
 
 ### Keys the console takes
 
-**The function-key row**, and it is worth knowing why. F1 through F10 and F12 are tmux *root*
-bindings — no prefix — installed on this project's own tmux server only, so your own tmux
-configuration is never touched, but on that server they are keys no pane can receive. They earn
-that because the surface must stay reachable from the one position where no key of its own can
-be pressed: an agent fills the pane you were working in, and that is exactly when a console
-looks stuck. Each key is delivered at press time to whichever pane owns the act — the console's
-own pane if that is where you pressed it, the sessions pane otherwise — and F12 brings the
-projects surface back to the left pane, the one console operation tmux cannot perform by
-itself.
+Press F1–F10, F12 and Alt+Left/Right directly in any console pane. The console installs
+these bindings on its own tmux server. Ctrl+Left and Ctrl+Right reach the focused editor.
 
 **A key a release stops using is removed when you next enter the console.** Every key the
 console installs carries a `remote-agents:` note (`tmux -L remote-agents list-keys -N`), and on
@@ -576,27 +569,11 @@ an agent displayed in it at the time would go with it.
 **F11 is unbound on purpose.** It is the full-screen toggle in almost every emulator, and a
 binding of ours would be a key you lose without being able to tell which side took it.
 
-**An agent that already binds a function key keeps it.** A curated provider declares such a key
-on its own descriptor, and the binding reads the pane's profile at press time and hands the key
-straight over rather than taking it. OpenCode is the only one that declares anything — it binds
-F2 to `model_cycle_recent` — so F2 at an OpenCode pane cycles its model, and F2 anywhere else
-on the console opens Settings. Claude Code, Codex and Cursor bind no function key.
+**OpenCode model selection.** F2 opens Settings in the left pane. With OpenCode focused,
+press the configured tmux prefix (usually Ctrl+B), then F2 to cycle its model.
 
-**Settings always opens in the left pane.** F2 from any of the four panes opens it in the
-projects pane and moves focus there. If an agent holds the left slot, F2 first brings the
-projects pane back, as F12 does. `,` and the palette in a right-hand pane do the same.
-
-**An agent this project does not curate loses any function key it binds, and nothing says so.**
-That is the accepted cost of taking the row at the root rather than a defect, and it is
-recorded as BL-094: the declaration that spares OpenCode comes from a curated provider's own
-descriptor, and an uncurated agent has none to make.
-
-**And one behind the prefix: `prefix h` folds the right column away.** Press `Ctrl-b h` (or
-`h` under whatever prefix this host sets) and the sessions, limits and feed panes slide off
-the right edge, giving the agent in the left pane the whole window; press it again and they
-slide back. It costs no agent anything — tmux takes the prefix in the client, before any key
-reaches a pane — which is why it is a prefix key rather than a twelfth root one: the console is
-entirely usable without it. Two things are worth knowing about the fold:
+**F3 or prefix then lowercase h** hides Sessions, Limits and Feed together. Press either
+shortcut again to restore them.
 
 - **It survives displaying an agent.** Folded, launch a session and the agent arrives in the
   full-width left pane with the column still away. The console remembers the fold as a
@@ -617,159 +594,28 @@ true, and moving between panes has cost no agent a keystroke since.
 Each pane offers only the flows it owns: the projects pane keeps *Add project* and *Resume*,
 which both begin by choosing a project. The sessions and feed panes offer neither.
 
-The session actions have keys of their own on every pane, and they are five members of the same
-row — see *The function-key row* immediately below.
-
 ### The function-key row
 
-Eleven keys, owner-validated, each borrowed from a program you already press it in — and F11,
-which is listed below because it is deliberately left alone. They are
-one table in the code, which is what the footer, F1's help panel and this document all read, so
-there is one spelling of each act rather than three that have to be kept agreeing:
-
-| Key | Action | Borrowed from |
-|---|---|---|
-| `F1`, `?` | help — the panel that lists every key | htop, mc |
-| `F2`, `,` | settings | htop Setup |
-| `F3` | inspect output | mc View |
-| `F4` | session detail | mc Edit |
-| `F5`, `Ctrl+R` | refresh | browsers, k9s |
-| `F6` | rename | mc RenMov |
-| `F7` | add project | mc Mkdir |
-| `F8` | stop and close — issued without asking | mc Delete |
-| `F9` | force stop — asks first | htop Kill |
-| `F10`, `q` at the resting position, `Ctrl+Q` | quit — inside the console, close the console | htop, mc |
-| `F11` | unbound; the terminal's | terminal full-screen |
-| `F12` | projects | existing root key |
-
-The rest of the keyboard is what it is everywhere else: `j` `k` `g` `G` move within a list
-(vim, k9s, less), `q` is Back on a pushed screen, `/` filters (k9s, less, vim), `:` and
-`Ctrl+P` open the command palette (k9s; Textual), and Escape, Enter and the arrows are
-unchanged.
-
-**Inside the console the row is drawn once, on tmux's status line** at the bottom of the window
-(DEC-105): `1 help  2 settings  3 inspect … 10 close console  11 terminal  12 projects`, with
-`Remote Control  claude on · codex on` and the session name at the right end. It belongs to the
-window rather than to a pane, so it stays on screen while an agent fills the left slot. Below
-161 columns it compacts to `1help 2setup 3view …` and `RC` with one mark per agent — `●` on,
-`○` off, `!` a broken link, `?` unknown. The session keys dim while the sessions pane has no row selected; while a
-text entry is open (the rename box, a new project's name) `F2`, `F7`, `F8` and `F9` dim and the
-right end reads `esc cancels`. Its colours follow the theme you choose. With tmux's default
-`status on` it takes the row tmux's own status line already used, so no pane is shorter for it.
-A console built before 0.51.0 gets it the next time `remote-agents` is run from a plain shell
-(`remote-agents console close`, then `remote-agents`).
-
-**Outside the console, in `remote-agents tui`, Textual's footer draws the row instead**, since
-there is no tmux status line there; inside the console no screen draws a Textual header or
-footer at all, and each pane carries its title on its own round border. **The footer does not
-draw all eleven**, and that is a width decision rather than a statement about which keys exist —
-every one of them is bound on every position that answers for it. The footer is a single
-clipping line: measured on the inspect screen at 80 columns, five app
-entries fit and six do not. So it draws `F1`, `F7` and `F10` beside Escape and the palette, and
-**`F1` opens a panel listing every key**, which is what that key is borrowed from htop for.
-
-**`F10` means something different inside the console, and only there.** A surface pane hosted
-by the console is not a standalone app that owns its terminal, so "leave the program" cannot mean
-"leave this pane": it means leave remote-agents. One press closes the **whole console** — the
-`ra-console` session is removed and you get back the shell you entered from — and every managed
-agent session keeps running (DEC-096). The bar says so: it reads `10 close console` rather than
-`quit`. Outside the console — `remote-agents tui` in an ordinary
-terminal — the key exits the app and the footer draws `quit`, because there leaving the program
-is leaving this process. `Ctrl+Q`, and `q` at the resting position, mean whatever `F10` means.
-
-**That covers the position you are in most often, too.** While an agent is *displayed*, `F10` is
-taken by the tmux **root** binding and forwarded to the sessions pane — which is a console
-surface pane like any other, so the press runs the same teardown, and the teardown swaps the
-agent back into its own window before it kills anything. Earlier versions kept that footer entry
-out of the console's line instead, and the key still cost the owner the pane they were reading;
-that was BL-097, and giving the key a correct meaning is what closed it.
-
-**The cost is real, and the key asks nothing first:** one press now closes four panes instead of
-one. Nothing is destroyed by it — no session ends and nothing is written — and `remote-agents`
-builds the panes back on the version that is installed, but an owner who meant "close just this
-pane" has no key for that.
-
-The
-five session-shaped keys are left out of the bare footer, and `F2`, `F5` and `F12` because `,`,
-`Ctrl+R` and the palette already say the same acts.
-
-**The five session keys act from any pane on the session the sessions pane has highlighted** —
-the row it marks `▸` in yellow, which is in a pane you are not focused on. `F3` Inspect output,
-`F4` the detail, `F6` Rename, `F8` Stop and close, `F9` Force stop. Each does exactly what its
-bare letter does on a row — same policy, same confirmations, `F9` and both Remote Control
-directions still asking and `F8` and Clean up still not. A stop issued from the projects pane
-therefore reports as a toast rather than in the status line: the status line there describes the
-project list, and that is what you are looking at.
-
-**Three row actions got no function key**, and they are the three that are not about ending or
-reading a session: Copy attach, Clean up and Claude Remote Control stay on their bare letters
-(`a`, `c`, `m`) on the sessions pane, and in the command palette. The row is spent on what the
-owner reaches for from another pane.
-
-Function keys rather than bare letters, because the projects pane's filter holds the keyboard by
-construction. Bare letters still type into the filter; the F-keys act. The bar names them and
-dims them whenever nothing is selected. The sessions pane names its own row letters, each with
-its word, on the action line under its list (`a attach i inspect r rename s stop f force
-c clean up m remote`, with `p projects` at its right end), or says `No session is selected ·
-j k to choose one` when the cursor rests on nothing.
-
-**From inside a displayed agent there is nothing extra to press.** An agent in the left pane
-receives every key you type, but not these: the row is bound at the tmux *root*, so tmux takes
-the key before the agent sees it and delivers it to the console pane that owns the act. The
-agent is never sent the key — unless it is one that declared it, which today means OpenCode and
-`F2`. There is no prefix route and no second spelling to remember, and that is the whole of what
-the row is worth: the keys cost every pane on this server a keystroke, and what they buy is a
-console that answers from the one position where nothing else can.
-
-**Four cases where a function key deliberately does nothing**, each worth knowing before you
-conclude a key is broken:
-
-- **While what you are typing is a commitment.** On the rename box and on the new-project name
-  step, `F8` and `F9` are refused. The row takes priority over the focused text box, so it would
-  otherwise be one keystroke from an unconfirmed, irreversible stop — of the very session being
-  renamed, or of whatever another pane happens to highlight. The navigating keys still work
-  there, and Escape comes back to the text you had typed. The cost is accepted rather than
-  overlooked: on an empty rename box `F8` was the best-targeted stop in the app, its subject
-  named and on screen, and it is refused too.
-- **When the sessions cursor rests on nothing.** There is then no selection to act on, and every
-  session key says `No session is selected.` and does nothing rather than guessing at a row.
-  This is the ordinary state from the moment the row you were on leaves the list until you move
-  the cursor onto another one — not a window that closes by itself — see *Keys on the sessions
-  list* below.
-- **From a client that is not the console.** A tmux key table belongs to the *server*, and
-  managed agents are attached to that same server — so a root binding would otherwise fire from
-  a plain `remote-agents attach`, stopping a row you cannot see. It does not: the binding asks
-  which session your client is attached to and does nothing unless it is the console. `F8` from
-  an agent attach is deliberately inert.
-- **From a process that is not one of the console's own panes.** Only a pane the console is
-  currently showing may read the selection, and that is asked at the moment you press the key
-  rather than once at start-up. A plain `remote-agents tui` started from a shell on the
-  console's own tmux server is refused, and so is the projects surface after an exchange has
-  parked it in an agent's window — it keeps its slot mark, but it is no longer on the console.
-  Both are told `Session keys act on the console's own panes.` rather than being answered from a
-  console whose sessions list is not on their screen. Two of these keys end a session with no
-  confirmation, so the guard on who may read the selection is doing the job the confirmation
-  prompt is not.
-
-### Upgrading from 0.41.0: what each old key became
-
-The Alt layer and the three Ctrl flow keys are gone. The keys below are spelled the way 0.41.0's
-own footer drew them. Everything they did is still here; most of it is now one press rather than
-two, and two of them moved to the command palette on purpose.
-
-| Was | Is now |
+| Shortcut | Action |
 |---|---|
-| `⌥i` Inspect output | `F3` |
-| `⌥d` the session detail | `F4` |
-| `⌥r` Rename | `F6` |
-| `⌥s` Stop and close | `F8` |
-| `⌥f` Force stop | `F9` |
-| `⌥a` Copy attach, `⌥c` Clean up, `⌥m` Claude Remote Control | no function key — the bare `a`, `c` and `m` on the sessions pane, and the command palette |
-| `prefix M-<key>`, the forwarding route from a displayed agent | nothing to press — the F-keys reach you there directly |
-| `^n` add project | `F7` |
-| `^s` sessions | no key — the command palette (`:` or `Ctrl+P`), entry "Sessions" |
-| `^o` resume | no key — the palette, entry "Resume" |
-| `^r` refresh, `^q` quit | still work, unchanged — but the footer now draws `F5` and `F10` for those acts, because one line cannot hold both spellings. Inside the console both quit keys close the whole console, and the footer entry reads `close console` |
+| F1 | Open Help. Escape returns to the previous view. |
+| F2 | Open Settings in the left pane. |
+| F3 | Hide or show the three right panes. |
+| F4 | Show sessions waiting for your answer. Each row gives a current reason. Enter opens that session. |
+| F5 | Refresh the current screen. From an agent, refresh the console session list and keep typing in the agent. Use it to check an external change before the next automatic update. |
+| F6 | Open a fresh session in the displayed agent’s exact working folder, with the same project, profile and effective permissions. Confirm the named source and folder. The original closes gracefully once the replacement has a verified empty prompt. Enter your execution command yourself. |
+| F7 | Open Add Project. |
+| F8 | Gracefully stop the displayed session. With Projects displayed, select a visible Sessions row first. |
+| F9 | Force stop the same target after confirmation. |
+| F10 | Close the console and keep the agent sessions available. |
+| F11 | Terminal fullscreen, when supported by the terminal. |
+| F12 | Return to Projects. |
+| Alt+Left / Alt+Right | Display and focus the previous / next live session in Sessions order. The list wraps and the sidebar keeps its current layout. |
+
+With a row highlighted in Sessions, press **i** to inspect output, **d** for details and **r**
+to rename. The console status line shows the main shortcuts. F1 includes the navigation keys
+and the configured prefix for native F2. A terminal emulator can reserve a shortcut before
+tmux receives it.
 
 ### Width
 
@@ -940,9 +786,7 @@ have no filter to type into.
 
 **They act on the row your cursor is on**, and that row is marked `▸` in yellow so you can see
 which it is. The marker is not a second selection — it is the cursor, drawn so that it reads
-from somewhere else. That matters because five of these acts are also function keys on the
-whole console: pressing `F8` in the projects pane acts on a row in a list you are not focused
-on, and the marker is how that list says which.
+from somewhere else. When Projects is displayed, the same visible row is the target for F8 and F9.
 
 A session that has just **started** takes the cursor, so the agent you launched is the one in
 front of you and the one your keys are pointed at, with no hunt down the list. A session that

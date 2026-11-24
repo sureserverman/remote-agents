@@ -50,6 +50,11 @@ class Site:
 _TABLE: dict[Site, tuple[Kind, str]] = {
     Site(
         "application/services.py",
+        "SessionService.fresh_folder",
+        "self._project_paths.get(source.project_id)",
+    ): (Kind.PROJECT, "verify frozen project root before resolving session-specific cwd"),
+    Site(
+        "application/services.py",
         "SessionService._save_with_permissions",
         "self._project_paths.get(record.project_id)",
     ): (Kind.PROJECT, "atomically snapshot the registered root; never answers a bound session cwd"),

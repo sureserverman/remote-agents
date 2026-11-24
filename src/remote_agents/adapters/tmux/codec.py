@@ -10,6 +10,7 @@ from pathlib import Path
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
+    PANE_PROTECTED_OPTION,
     REMOTE_CONTROL_COMPACT_OPTION,
     REMOTE_CONTROL_OPTION,
     SESSION_SELECTED_OPTION,
@@ -418,9 +419,7 @@ rebinds one of our keys without `-N` drops the note -- measured on tmux 3.4,
 #: which is the reach DEC-073(3) recorded after reproducing it. It was written inline in the
 #: forwarding script and is lifted here because the fold key needs the identical sentence: a
 #: second copy is a second thing to get wrong, and the one that is wrong will be the quiet one.
-_PRESSED_FROM_THE_CONSOLE = (
-    f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" || exit 0;'
-)
+_PRESSED_FROM_THE_CONSOLE = 'test "$ra_console" = 1 || exit 0;'
 
 
 def _console_only_command(command: tuple[str, ...]) -> tuple[str, ...]:
@@ -528,21 +527,20 @@ def _forward_function_key_command(
     )
     script = (
         f"{_PRESSED_FROM_THE_CONSOLE} "
-        f'active=$(tmux display-message -p "#{{pane_id}}"); '
+        f'active="$ra_pane"; '
         f'slot=$(tmux show-options -qv -pt "$active" {CONSOLE_SLOT_OPTION}); '
         f"{reads_profile}"
         f'if {mine_or_reserved}; then tmux send-keys -t "$active" {key}; exit 0; fi; '
         f'panes=$(tmux list-panes -a -F "#{{pane_id}}" '
-        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}"); '
+        f'-f "#{{&&:#{{==:#{{window_id}},$ra_window}},'
+        f'#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}}}"); '
         f'test "$(printf "%s\\n" "$panes" | grep -c .)" = 1 '
         f'&& tmux send-keys -t "$panes" {key}'
     )
     return ("sh", "-c", script)
 
 
-def _settings_key_command(
-    key: str, reserved_keys: Mapping[str, frozenset[str]], projects_command: tuple[str, ...]
-) -> tuple[str, ...]:
+def _settings_key_command(key: str, projects_command: tuple[str, ...]) -> tuple[str, ...]:
     """The `sh -c` argv for the Settings key: the projects pane, whichever pane is active.
 
     Validated exactly as `_forward_function_key_command` is, and in the same place: `key` and
@@ -550,47 +548,29 @@ def _settings_key_command(
     `projects_command` is a fixed argv built from `sys.executable`, and it is `shlex`-joined
     here, so a path with a space stays one word to the inner shell.
 
-    The branches, in order:
-
-    1. **the active pane's profile reserves this key** -- the agent binds it (OpenCode's F2,
-       DEC-070), so it is handed over, exactly as a forward does;
-    2. **the projects pane is not in the active pane's window** -- an agent holds the left
-       slot and the surface is parked in that agent's window, so `projects_command` (F12's)
-       brings it home first, and the script waits for it. **Then it asks again.** The
-       command degrades to a log line and exits 0 when it cannot exchange (a busy lock, a
-       surface parked somewhere it will not move from), so its exit status says nothing;
-       a surface still away means no key, rather than Settings opened out of sight. An
-       exchange racing in between this check and the press can still park it; that window
-       is a few milliseconds and is accepted;
-    3. **then always** -- the key goes to the projects pane and that pane is selected.
+    Bring Projects back into the invoking window if it is parked, verify the exchange,
+    then deliver the shortcut and focus the surface.
 
     The projects pane is found by its mark at press time (DEC-038), and two panes claiming it
     deliver nothing, for the forward's reason: a guess here would open Settings somewhere the
     owner cannot see.
     """
-    reserving = sorted(name for name, keys in reserved_keys.items() if key in keys)
-    handover = (
-        f'profile=$(tmux show-options -qv -pt "$active" {_PROFILE_OPTION}); '
-        + "".join(
-            f'if test "$profile" = "{name}"; then tmux send-keys -t "$active" {key}; exit 0; fi; '
-            for name in reserving
-        )
-        if reserving
-        else ""
-    )
     script = (
         f"{_PRESSED_FROM_THE_CONSOLE} "
-        f'active=$(tmux display-message -p "#{{pane_id}}"); '
-        f"{handover}"
+        f'active="$ra_pane"; '
         f'panes=$(tmux list-panes -a -F "#{{pane_id}}" '
         f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.PROJECTS.value}}}"); '
         f'test "$(printf "%s\\n" "$panes" | grep -c .)" = 1 || exit 0; '
         f'home() {{ test "$(tmux display-message -p -t "$panes" "#{{window_id}}")" = '
-        f'"$(tmux display-message -p "#{{window_id}}")"; }}; '
+        f'"$ra_window"; }}; '
         f"home || {{ {shlex.join(projects_command)}; home || exit 0; }}; "
         f'tmux select-pane -t "$panes"; tmux send-keys -t "$panes" {key}'
     )
     return ("sh", "-c", script)
+
+
+def focus_pane_args(pane_id: str) -> tuple[str, ...]:
+    return ("select-pane", "-t", exact_pane_target(pane_id))
 
 
 def console_key_args(pane_id: str, key: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -604,7 +584,7 @@ def console_key_args(pane_id: str, key: str) -> tuple[tuple[str, ...], tuple[str
     if not _FUNCTION_KEY.match(key):
         raise ValueError("only a function key, in tmux's own spelling, is handed to a pane")
     target = exact_pane_target(pane_id)
-    return ("select-pane", "-t", target), ("send-keys", "-t", target, key)
+    return focus_pane_args(pane_id), ("send-keys", "-t", target, key)
 
 
 def console_binding_args(
@@ -664,7 +644,14 @@ def console_binding_args(
         # was deleted on the argument that a closed set leaves no third value to pass; this
         # is what makes that argument true at runtime rather than only for a type checker.
         raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
-    if action is ConsoleBindingAction.SHOW_SETTINGS:
+    if action in (
+        ConsoleBindingAction.SHOW_SETTINGS,
+        ConsoleBindingAction.SHOW_WAITING,
+        ConsoleBindingAction.CONFIRM_FORCE,
+        ConsoleBindingAction.FRESH_SESSION,
+        ConsoleBindingAction.SHOW_HELP,
+        ConsoleBindingAction.SHOW_ADD_PROJECT,
+    ):
         if table is not ConsoleKeyTable.ROOT:
             raise ValueError("the settings key may only be bound in the root table")
         if not command:
@@ -681,7 +668,28 @@ def console_binding_args(
         for name in reserved_keys:
             if not _PROFILE_NAME.match(name):
                 raise ValueError(f"a profile name reaching the settings script is unsafe: {name!r}")
-        command = _settings_key_command(key, reserved_keys, command)
+        if action in (
+            ConsoleBindingAction.SHOW_HELP,
+            ConsoleBindingAction.SHOW_WAITING,
+            ConsoleBindingAction.CONFIRM_FORCE,
+            ConsoleBindingAction.FRESH_SESSION,
+        ):
+            # The Projects process can find and return to the displaced agent only if
+            # it receives this request before the exchange.
+            command = (
+                "sh",
+                "-c",
+                (
+                    f"{_PRESSED_FROM_THE_CONSOLE} "
+                    f'panes=$(tmux list-panes -a -F "#{{pane_id}}" '
+                    f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.PROJECTS.value}}}"); '
+                    'case "$panes" in ""|*[!%0-9]*) '
+                    'exec tmux display-message "Projects pane unavailable";; esac; '
+                    f'exec tmux send-keys -t "$panes" {key}'
+                ),
+            )
+        else:
+            command = _settings_key_command(key, command)
     elif action is ConsoleBindingAction.FORWARD_FUNCTION_KEY:
         if table is not ConsoleKeyTable.ROOT:
             # The mirror of the retired prefix forward's refusal, and for the opposite
@@ -717,18 +725,50 @@ def console_binding_args(
                 raise ValueError(
                     f"a profile name reaching the forwarding script is unsafe: {name!r}"
                 )
-        command = _forward_function_key_command(key, reserved_keys)
+        command = _forward_function_key_command(
+            key,
+            reserved_keys,
+        )
+    elif action is ConsoleBindingAction.CYCLE_SESSION:
+        if table is not ConsoleKeyTable.ROOT or key not in {"M-Left", "M-Right"}:
+            raise ValueError("session navigation requires a root Alt arrow")
+        # A parked Projects process cannot be used as a controller. The Sessions
+        # process stays in this window even when the left pane is zoomed.
+        command = (
+            "sh",
+            "-c",
+            (
+                f'if test "$ra_console" != 1; then exec tmux send-keys -t "$ra_pane" {key}; fi; '
+                f'panes=$(tmux list-panes -t "$ra_window" -F "#{{pane_id}}" '
+                f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}"); '
+                'case "$panes" in ""|*[!%0-9]*) '
+                'exec tmux display-message "Sessions pane unavailable";; esac; '
+                f'exec tmux send-keys -t "$panes" {key}'
+            ),
+        )
+    elif action is ConsoleBindingAction.PROVIDER_KEY:
+        if table is not ConsoleKeyTable.PREFIX or key != "F2" or reserved_keys is None:
+            raise ValueError("provider F2 requires a prefix binding and provider reservations")
+        providers = [name for name, keys in reserved_keys.items() if key in keys]
+        if any(not _PROFILE_NAME.fullmatch(name) for name in providers):
+            raise ValueError("unsafe provider name in native key binding")
+        matches = "|".join(sorted(providers))
+        script = _PRESSED_FROM_THE_CONSOLE
+        if providers:
+            script += (
+                f' case "$(tmux show-options -qv -pt "$ra_pane" {_PROFILE_OPTION})" in '
+                f'{matches}) exec tmux send-keys -t "$ra_pane" {key};; esac'
+            )
+        command = ("sh", "-c", script)
     elif action is ConsoleBindingAction.SHOW_PROJECTS:
         if not command:
             raise ValueError("the projects binding needs the command that returns the surface")
+        command = _settings_key_command(key, command)
     elif action is ConsoleBindingAction.TOGGLE_PANES:
-        if table is not ConsoleKeyTable.PREFIX:
-            # The same refusal a function-key forward carries, in the other direction and for
-            # the same arithmetic: every root key is argued for one at a time, and folding the
-            # column is the convenience that argument does not reach. The argv is otherwise
-            # identical, so a caller that asked for the root table would take a key from every
-            # agent on this server and every test of the fold itself would still pass.
-            raise ValueError("the panes binding may only be bound in the prefix table")
+        if table is ConsoleKeyTable.ROOT and (
+            not _FUNCTION_KEY.match(key) or key == _TERMINALS_OWN_KEY
+        ):
+            raise ValueError("only a function key can fold panes outside the prefix table")
         if not command:
             raise ValueError("the panes binding needs the command that folds the column")
         command = _console_only_command(command)
@@ -738,6 +778,21 @@ def console_binding_args(
     # doubling first would let shlex quote the escape we just added. The doubling is also what
     # carries the forwarding script's own `#{...}` formats through to the *inner* tmux: the outer
     # pass turns `##{pane_id}` back into `#{pane_id}`, which is what the lookup needs to see.
+    if (
+        table is ConsoleKeyTable.ROOT and key != "F5"
+    ) or action is ConsoleBindingAction.TOGGLE_PANES:
+        shell, flag, script = command
+        protection = (
+            f'if test -n "$(tmux list-panes -t "$ra_window" -F "#{{pane_id}}" '
+            f'-f "#{{==:#{{{PANE_PROTECTED_OPTION}}},1}}")"; then '
+            'tmux display-message "Finish or cancel the current entry first"; exit 0; fi;'
+        )
+        boundary = (
+            _PRESSED_FROM_THE_CONSOLE
+            if action is not ConsoleBindingAction.CYCLE_SESSION
+            else f'if test "$ra_console" != 1; then exec tmux send-keys -t "$ra_pane" {key}; fi;'
+        )
+        command = (shell, flag, script.replace(boundary, f"{boundary} {protection}", 1))
     placement = ("-n",) if table is ConsoleKeyTable.ROOT else ("-T", table.value)
     note = f"{CONSOLE_BINDING_NOTE_PREFIX} {action.value}"
     return (
@@ -747,7 +802,10 @@ def console_binding_args(
         note,
         key,
         "run-shell",
-        shlex.join(command).replace("#", "##"),
+        # Capture the invoking client context in tmux before the inner shell starts.
+        # Only a boolean and tmux-generated numeric IDs cross this shell boundary.
+        f"ra_console=#{{==:#{{client_session}},{CONSOLE_SESSION_NAME}}} "
+        "ra_pane=#{pane_id} ra_window=#{window_id} " + shlex.join(command).replace("#", "##"),
     )
 
 
@@ -773,6 +831,20 @@ def console_bindings_listing_args(table: ConsoleKeyTable) -> tuple[str, ...]:
     if not isinstance(table, ConsoleKeyTable):
         raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
     return ("list-keys", "-N", "-T", table.value)
+
+
+def active_agent_args() -> tuple[str, ...]:
+    return ("display-message", "-p", "-t", console_target(), f"#{{{_ID_OPTION}}}")
+
+
+def binding_occupied(listing: str, table: ConsoleKeyTable, key: str) -> bool:
+    for line in listing.splitlines():
+        fields = line.split()
+        if fields[:2] == ["bind-key", "-r"]:
+            del fields[1]
+        if fields[:4] == ["bind-key", "-T", table.value, key]:
+            return True
+    return False
 
 
 def parse_tagged_bindings(output: str) -> frozenset[str]:
@@ -1004,7 +1076,13 @@ def _bar_entry(key: StatusBarKey, palette: StatusBarPalette, *, full: bool) -> s
         return dim
     refusals = []
     if key.needs_selection:
-        refusals.append(f"#{{!=:#{{{SESSION_SELECTED_OPTION}}},1}}")
+        # Expand over this window's panes even when focus is in the right column.
+        # Only the managed pane at the left counts as a displayed target.
+        has_agent = (
+            f"#{{m:*1*,#{{P:#{{&&:#{{==:#{{pane_index}},0}},#{{!=:#{{{_ID_OPTION}}},}}}}}}}}"
+        )
+        no_row = f"#{{||:#{{!=:#{{{SESSION_SELECTED_OPTION}}},1}},#{{window_zoomed_flag}}}}"
+        refusals.append(f"#{{&&:#{{==:{has_agent},0}},{no_row}}}")
     if key.refused_while_typing:
         refusals.append(f"#{{==:#{{{TYPING_OPTION}}},1}}")
     if not refusals:
@@ -1610,7 +1688,7 @@ def rejoin_console_pane_args(
     )
 
 
-def list_arrangement_args() -> tuple[str, ...]:
+def list_arrangement_args(*, live_only: bool = False) -> tuple[str, ...]:
     """Return the argv suffix that lists every pane on the server with its position.
 
     Server-wide rather than console-scoped, and that is the point: an exchange leaves one
@@ -1619,7 +1697,8 @@ def list_arrangement_args() -> tuple[str, ...]:
     went. One listing answers both, and no session target appears in it — the composer never
     names `ra-<uuid>:` to ask about a session's window, it filters a listing it already has.
     """
-    return ("list-panes", "-a", "-F", ARRANGEMENT_FORMAT)
+    live_filter = ("-f", "#{==:#{pane_dead},0}") if live_only else ()
+    return ("list-panes", "-a", "-F", ARRANGEMENT_FORMAT, *live_filter)
 
 
 def parse_arrangement(

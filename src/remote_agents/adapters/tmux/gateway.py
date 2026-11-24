@@ -14,6 +14,8 @@ from typing import Protocol
 from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
+    active_agent_args,
+    binding_occupied,
     console_background_hook_args,
     console_binding_args,
     console_bindings_listing_args,
@@ -34,6 +36,7 @@ from remote_agents.adapters.tmux.codec import (
     display_message_args,
     exact_pane_target,
     exact_session_target,
+    focus_pane_args,
     is_console_view,
     list_arrangement_args,
     paint_client_args,
@@ -56,6 +59,7 @@ from remote_agents.adapters.tmux.codec import (
 from remote_agents.adapters.tmux.key_lock import SessionKeyLock
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
+    PANE_PROTECTED_OPTION,
     ConsoleBindingAction,
     ConsoleKeyTable,
     ConsolePaneSlot,
@@ -731,7 +735,7 @@ class TmuxGateway:
                             _CLEANUP_SECONDS,
                         )
 
-    async def pane_arrangement(self) -> tuple[HostedPane, ...]:
+    async def pane_arrangement(self, *, live_only: bool = False) -> tuple[HostedPane, ...]:
         """Every pane on the server, with where it is shown and whose it is.
 
         One listing answers both halves of the swap model's only question. An exchange leaves
@@ -752,7 +756,9 @@ class TmuxGateway:
         reason every other console read answers that way: there is nothing being shown.
         """
         try:
-            output = await self._runner.run(*self._base_argv(), *list_arrangement_args())
+            output = await self._runner.run(
+                *self._base_argv(), *list_arrangement_args(live_only=live_only)
+            )
         except RuntimeError as error:
             # Absent *server* only. Every other reader here also allows the absent-*target*
             # signatures, because every other reader names one — and this one does not:
@@ -1040,8 +1046,31 @@ class TmuxGateway:
         """
         await self._runner.run(*self._base_argv(), *session_selected_args(selected))
 
-    async def publish_typing(self, typing: bool | None) -> None:
+    async def publish_typing(self, typing: bool | None, *, pane_id: str | None = None) -> None:
         """Publish whether a text entry holds the keyboard, for the bar. Raises."""
+        if pane_id is not None:
+            if not pane_id.startswith("%") or not pane_id[1:].isdigit():
+                raise ValueError("Invalid console pane ID")
+            await self._runner.run(
+                *self._base_argv(),
+                "set-option",
+                "-p",
+                "-t",
+                pane_id,
+                PANE_PROTECTED_OPTION,
+                "1" if typing else "0",
+            )
+            protected = await self._runner.run(
+                *self._base_argv(),
+                "list-panes",
+                "-t",
+                console_target(),
+                "-F",
+                "#{pane_id}",
+                "-f",
+                f"#{{==:#{{{PANE_PROTECTED_OPTION}}},1}}",
+            )
+            typing = bool(protected.strip())
         await self._runner.run(*self._base_argv(), *typing_args(typing))
 
     async def publish_remote_control(
@@ -1050,6 +1079,21 @@ class TmuxGateway:
         """Publish the Remote Control readings for the bar's right end, full and compact."""
         for arguments in remote_control_words_args(marks, palette):
             await self._runner.run(*self._base_argv(), *arguments)
+
+    async def console_agent_focused(self) -> bool:
+        result = await self._runner.run(*self._base_argv(), *active_agent_args())
+        return bool(result.strip())
+
+    async def console_prefix(self) -> str:
+        output = await self._runner.run(
+            *self._base_argv(), "show-options", "-Av", "-t", console_target(), "prefix"
+        )
+        return output.strip()
+
+    async def visible_selection(self) -> SessionId | None:
+        if await self.console_zoomed_pane() is not None:
+            return None
+        return await self.read_selection()
 
     async def read_selection(self) -> SessionId | None:
         """Read the published selection back, refusing anything that is not a session id.
@@ -1078,6 +1122,9 @@ class TmuxGateway:
             pane.pane_id == pane_id and pane.on_console and pane.console_slot is not None
             for pane in await self.pane_arrangement()
         )
+
+    async def focus_pane(self, pane_id: str) -> None:
+        await self._runner.run(*self._base_argv(), *focus_pane_args(pane_id))
 
     async def press_in_console_pane(self, pane_id: str, key: str) -> None:
         """Select one of the console's panes and hand it one function key; the codec checks both."""
@@ -1295,6 +1342,11 @@ class TmuxGateway:
         `console close` would then flash nothing and exit zero.
         """
         try:
+            # tmux 3.4 can terminate its server when a client closes a folded console.
+            # Restore this window before destroying it so other managed sessions survive.
+            zoomed = await self.console_zoomed_pane()
+            if zoomed is not None:
+                await self.zoom_console_pane(zoomed, wanted=False)
             await self._runner.run(*self._base_argv(), "kill-session", "-t", console_target())
         except RuntimeError as error:
             message = str(error)
@@ -1361,10 +1413,15 @@ class TmuxGateway:
         `reserved_keys` reaches the codec untouched: a function-key forward builds its script
         from it, and every other action ignores it.
         """
-        await self._runner.run(
-            *self._base_argv(),
-            *console_binding_args(key, action, command, table, reserved_keys=reserved_keys),
-        )
+        binding = console_binding_args(key, action, command, table, reserved_keys=reserved_keys)
+        # list-keys with a key returns no lines for an unbound key. The full
+        # listing sees owner bindings even when the owner gave them no note.
+        listing = await self._runner.run(*self._base_argv(), "list-keys", "-T", table.value)
+        occupied = binding_occupied(listing, table, key)
+        if occupied and key not in await self.tagged_console_bindings(table):
+            await self.display_message(f"Shortcut {key} already has a custom tmux binding.")
+            return
+        await self._runner.run(*self._base_argv(), *binding)
 
     async def tagged_console_bindings(self, table: ConsoleKeyTable) -> frozenset[str]:
         """The keys in one table whose binding carries the console's note prefix (BL-096)."""

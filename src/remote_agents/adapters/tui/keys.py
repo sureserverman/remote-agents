@@ -43,14 +43,11 @@ class SessionKey(NamedTuple):
 
     name: str
     row_key: str
-    action: str | None
+    action: str
 
 
-#: The five session-shaped keys. Ordered as the F-keys that carry them are.
+#: Session row commands still assigned to function keys.
 SESSION_KEYS: tuple[SessionKey, ...] = (
-    SessionKey("inspect", "i", "inspect"),
-    SessionKey("detail", "d", None),
-    SessionKey("rename", "r", "rename"),
     SessionKey("graceful", "s", GRACEFUL),
     SessionKey("force", "f", FORCE),
 )
@@ -115,10 +112,17 @@ class FunctionKey(NamedTuple):
 FUNCTION_KEYS: tuple[FunctionKey, ...] = (
     FunctionKey("f1", "help", "help", "htop, mc", footer=True, short="help"),
     FunctionKey("f2", "settings", "settings", "htop Setup", footer=False, short="setup"),
-    FunctionKey("f3", "session_key('inspect')", "inspect", "mc View", footer=False, short="view"),
-    FunctionKey("f4", "session_key('detail')", "detail", "mc Edit", footer=False, short="detail"),
+    FunctionKey("f3", "toggle_panes", "panes", "console layout", footer=False, short="panes"),
+    FunctionKey(
+        "f4",
+        "waiting_sessions",
+        "waiting",
+        "console navigation",
+        footer=False,
+        short="waiting",
+    ),
     FunctionKey("f5", "refresh", "refresh", "browsers, k9s", footer=False, short="refresh"),
-    FunctionKey("f6", "session_key('rename')", "rename", "mc RenMov", footer=False, short="rename"),
+    FunctionKey("f6", "fresh_session", "fresh", "session lifecycle", footer=False, short="fresh"),
     FunctionKey("f7", "add_project", "add project", "mc Mkdir", footer=True, short="addproj"),
     FunctionKey("f8", "session_key('graceful')", "stop", "mc Delete", footer=False, short="stop"),
     FunctionKey(
@@ -172,7 +176,7 @@ CONSOLE_FOOTER_LABELS: dict[str, str] = {
 
 #: The keys, besides the stops, that a text-entry screen refuses: F2 (settings) and F7 (add
 #: project) would each open a screen over a half-typed name. The console bar dims them there.
-_REFUSED_WHILE_TYPING = frozenset({"settings", "add_project"})
+_REFUSED_WHILE_TYPING = frozenset({"settings", "add_project", "fresh_session", "waiting_sessions"})
 
 
 def status_bar_keys() -> tuple[StatusBarKey, ...]:

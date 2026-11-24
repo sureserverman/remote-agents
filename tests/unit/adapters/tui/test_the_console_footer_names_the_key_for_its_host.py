@@ -141,7 +141,7 @@ async def _reading(*, console_hosted: bool) -> _Reading:
         displays = {key: app.get_key_display(entry.binding) for key, entry in active.items()}
         # F1's own act, reached through the action rather than the keystroke: what is under
         # test is what the panel lists, not whether F1 arrives.
-        app.action_help()
+        await app.action_help()
         await pilot.pause()
         table = app.screen.query_one(BindingsTable).render_bindings_table()
         recorder = RichConsole(width=200, no_color=True)

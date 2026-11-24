@@ -21,6 +21,7 @@ from __future__ import annotations
 from remote_agents.adapters.tui.screens.confirm import (
     ALL_CONFIRMS,
     ForceConfirmModal,
+    FreshSessionConfirmModal,
     RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.dashboard import (
@@ -91,6 +92,7 @@ ALL_SCREENS = (
     ScheduleScreen,
     SchedulesScreen,
     ForceConfirmModal,
+    FreshSessionConfirmModal,
     RemoteControlConfirmModal,
 )
 
@@ -101,6 +103,7 @@ __all__ = [
     "DashboardScreen",
     "FeedScreen",
     "ForceConfirmModal",
+    "FreshSessionConfirmModal",
     "InspectScreen",
     "LimitsPaneScreen",
     "NameScreen",

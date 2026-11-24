@@ -91,6 +91,10 @@ class ConsoleBindingAction(Enum):
     that was just disproved.
     """
 
+    CYCLE_SESSION = "cycle_session"
+    PROVIDER_KEY = "provider_key"
+    SHOW_HELP = "show_help"
+    SHOW_ADD_PROJECT = "show_add_project"
     FORWARD_FUNCTION_KEY = "forward_function_key"
     """Deliver one function key to whichever pane should have it, decided at press time.
 
@@ -122,6 +126,13 @@ class ConsoleBindingAction(Enum):
     brings the surface home. Under the tab model this key was `select-window 0`, which under
     the swap model selects the window the owner is already on.
     """
+
+    SHOW_WAITING = "show_waiting"
+    """Bring Projects to the left and open the list of sessions awaiting input."""
+
+    FRESH_SESSION = "fresh_session"
+    CONFIRM_FORCE = "confirm_force"
+    """Forward to the active console pane, focusing Sessions when invoked inside an agent."""
 
     SHOW_SETTINGS = "show_settings"
     """Open Settings in the projects pane, from whichever pane the owner pressed it in.
@@ -240,6 +251,8 @@ SESSION_SELECTED_OPTION = "@remote_agents_session_selected"
 Read by the console's status bar (DEC-105) to dim the session keys. A flag beside the selection
 option rather than a test of it, because the bar's format can only compare, and an empty
 selection and a stale one must both read as "nothing to act on"."""
+
+PANE_PROTECTED_OPTION = "@remote_agents_protected"
 
 TYPING_OPTION = "@remote_agents_typing"
 """`1` while a text entry holds the keyboard (the rename box, a new project's name).
@@ -398,9 +411,11 @@ class ConsolePort(Protocol):
 
     async def display_message(self, text: str) -> None: ...
 
-    async def pane_arrangement(self) -> tuple[HostedPane, ...]: ...
+    async def pane_arrangement(self, *, live_only: bool = False) -> tuple[HostedPane, ...]: ...
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None: ...
+
+    async def focus_pane(self, pane_id: str) -> None: ...
 
     async def press_in_console_pane(self, pane_id: str, key: str) -> None:
         """Select one of the console's own panes and hand it one function key.
@@ -546,7 +561,7 @@ class ConsolePort(Protocol):
         """Tell the status bar whether the sessions cursor rests on a row; `None` unsets it."""
         ...
 
-    async def publish_typing(self, typing: bool | None) -> None:
+    async def publish_typing(self, typing: bool | None, *, pane_id: str | None = None) -> None:
         """Tell the status bar whether a text entry holds the keyboard; `None` unsets it."""
         ...
 

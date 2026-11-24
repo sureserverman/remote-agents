@@ -302,6 +302,7 @@ def test_a_screen_that_resolves_a_session_declares_that_it_owns_a_cursor() -> No
 _PUBLISHERS = frozenset(
     {
         # The slot: takes a value, coalesces, and asks for a write.
+        "on_screen_suspend",  # Clear the published target when its row leaves view.
         "_publish_selection",
         # The writer: the *only* function that reaches `console_publish_selection`, holding the
         # lock that makes "last value wins" true. A second reacher would be a second

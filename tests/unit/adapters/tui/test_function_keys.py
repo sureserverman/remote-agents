@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import AsyncMock
 
+import pytest
 from backends import SessionUseCaseDouble, backend_for
 from console_selection import SelectionConsole
 from stop_results import a_clean_stop, a_stop_that_did_not_take
@@ -90,6 +93,9 @@ def _record(state: SessionState = SessionState.RUNNING, *, ordinal: int = 1) -> 
 
 @dataclass(slots=True)
 class _Listing(SessionUseCaseDouble):
+    async def fresh_folder(self, record):
+        return Path("/tmp/project")
+
     records: tuple[SessionRecord, ...] = ()
     #: Every command issued, in order -- the id matters, not only the count, because a key
     #: acting on the pane's own rows instead of the published selection issues one too.
@@ -204,13 +210,12 @@ def test_the_session_shaped_keys_name_a_row_key_the_sessions_pane_binds() -> Non
     that is what gets them refused on a commitment screen (DEC-052/DEC-062 as carried forward).
     """
     by_name = {session_key.name: session_key for session_key in SESSION_KEYS}
-    assert set(by_name) == {"inspect", "detail", "rename", "graceful", "force"}
+    assert set(by_name) == {"graceful", "force"}
     for session_key in SESSION_KEYS:
         assert session_key.row_key in {*ROW_KEY_LETTERS.split(), _DETAIL_KEY}, (
             f"{session_key.name} names the row key {session_key.row_key!r}, which no row binds"
         )
     assert {by_name["graceful"].row_key, by_name["force"].row_key} == SESSION_STOP_KEYS
-    assert by_name["detail"].action is None, "F4 opens the detail and performs no action"
     bound = {entry.action for entry in FUNCTION_KEYS if _action_name(entry.action) == "session_key"}
     assert bound == {f"session_key('{name}')" for name in by_name}, (
         f"the F-keys and the session-key vocabulary disagree: {bound}"
@@ -270,7 +275,7 @@ def test_the_app_binds_every_table_key_as_built() -> None:
 # --- the session-shaped keys, driven as keypresses ---------------------------------------
 
 
-async def test_f3_on_the_sessions_pane_inspects_the_highlighted_row() -> None:
+async def test_i_on_the_sessions_pane_inspects_the_highlighted_row() -> None:
     """Inspect on the sessions pane resolves the row the pane has highlighted, like `i`."""
     chosen = _record()
     capture = _Capture()
@@ -280,36 +285,30 @@ async def test_f3_on_the_sessions_pane_inspects_the_highlighted_row() -> None:
         await pilot.pause()
         assert app.screen.highlighted_session() == str(chosen.session_id)
 
-        await pilot.press("f3")
+        await pilot.press("i")
         await pilot.pause()
 
         reached = position(app)
 
-    assert reached == "INSPECT", f"F3 reached {reached}"
+    assert reached == "INSPECT", f"Inspect reached {reached}"
     assert capture.asked == [chosen.session_id], "inspect captured the wrong session"
 
 
-async def test_f4_from_a_pane_with_no_list_opens_the_published_selection_s_detail() -> None:
-    """The layer's whole point, on the one key that names no action."""
-    chosen = SessionId.new()
-    console = SelectionConsole(selected=chosen)
-    app = ProjectsPane(_on_a_console(_Listing(()), console))
-
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        reads, slot_reads = console.reads, console.slot_reads
-
+async def test_f4_lists_current_prompts_and_rechecks_before_opening() -> None:
+    waiting, ready = _record(), _record(ordinal=2)
+    reasons = {waiting.session_id: "Folder trust"}
+    read = AsyncMock(side_effect=reasons.get)
+    app = ProjectsPane(replace(_context(_Listing((waiting, ready))), waiting_reason=read))
+    async with app.run_test() as pilot:
         await pilot.press("f4")
         await pilot.pause()
-
-        assert isinstance(app.screen, SessionDetailScreen)
-        assert app.screen.session_value == str(chosen)
-        # The gate and the selection are read per press, never cached (DEC-073(3)).
-        assert console.reads - reads == 1 and console.slot_reads - slot_reads == 1
-
-        await pilot.press("escape")
+        assert app.screen.waiting
+        assert list(app.screen._drawn) == [str(waiting.session_id)]
+        reasons.clear()
+        await pilot.press("enter")
         await pilot.pause()
-        assert not isinstance(app.screen, SessionDetailScreen), "escape did not come home"
+        assert app.screen.waiting and not app.screen._drawn
+        await pilot.press("escape")
 
 
 async def test_f8_from_the_feed_pane_stops_the_published_selection_and_says_how_it_went() -> None:
@@ -381,23 +380,30 @@ async def test_f9_posts_the_force_question_and_it_rests_on_abort() -> None:
     assert alive, "the surface stopped answering after the modal"
 
 
-async def test_f6_renames_the_published_selection_through_the_row_path() -> None:
-    chosen = _record()
-    console = SelectionConsole(selected=chosen.session_id)
-    opened: list[tuple[str, str | None]] = []
-    app = ProjectsPane(_on_a_console(_Listing((chosen,)), console))
-
-    async with app.run_test(size=(120, 30)) as pilot:
+async def test_f6_confirms_the_displayed_agent_and_preserves_it_on_cancel() -> None:
+    displayed, selected = _record(), _record(ordinal=2)
+    context = _on_a_console(
+        _Listing((displayed, selected)), SelectionConsole(selected=selected.session_id)
+    )
+    launch = AsyncMock()
+    app = SessionsPane(
+        replace(
+            context,
+            console_displayed_session=AsyncMock(return_value=displayed.session_id),
+            pane_idle=AsyncMock(return_value=True),
+        )
+    )
+    app.replace_with_fresh = launch
+    async with app.run_test() as pilot:
+        await pilot.press("down", "f6")
         await pilot.pause()
-
-        async def _record_detail(value: str, action: str | None = None) -> None:
-            opened.append((value, action))
-
-        app.show_detail = _record_detail  # type: ignore[assignment]
-        await pilot.press("f6")
+        assert app.screen.position == "FRESH_SESSION_CONFIRM"
+        assert "#1" in app.screen._question
+        await pilot.press("escape")
+        launch.assert_not_awaited()
+        await pilot.press("f6", "down", "enter")
         await pilot.pause()
-
-    assert opened == [(str(chosen.session_id), "rename")]
+        assert launch.await_args.args[0].session_id == displayed.session_id
 
 
 async def test_the_stop_keys_are_refused_on_the_rename_box_and_the_others_are_not() -> None:
@@ -437,7 +443,6 @@ async def test_the_stop_keys_are_refused_on_the_rename_box_and_the_others_are_no
 
     assert offered["graceful"] is False, "F8 is live on the rename box"
     assert offered["force"] is False, "F9 is live on the rename box"
-    assert offered["inspect"] is True and offered["detail"] is True and offered["rename"] is True
     assert listing.issued == [], f"a refused stop key issued {listing.issued}"
     assert landed == "RENAME", f"a refused stop key moved the owner to {landed}"
 
@@ -451,7 +456,7 @@ async def test_a_session_key_with_nothing_selected_warns_and_goes_nowhere() -> N
         await pilot.pause()
         before = position(app)
 
-        await pilot.press("f4")
+        await pilot.press("f8")
         await pilot.pause()
 
         assert position(app) == before
@@ -786,9 +791,9 @@ async def test_q_key_on_the_detail_returns_to_the_list() -> None:
     app = SessionsPane(_context(_Listing(_three_records())))
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
-        await pilot.press("f4")
+        await pilot.press("d")
         await pilot.pause()
-        assert isinstance(app.screen, SessionDetailScreen), "fixture: F4 did not open the detail"
+        assert isinstance(app.screen, SessionDetailScreen), "fixture: d did not open the detail"
 
         await pilot.press("q")
         await pilot.pause()
@@ -1011,7 +1016,7 @@ def test_the_shorts_are_the_borrowed_sources_own_words() -> None:
     """DEC-095: `setup`, `view`, `kill` are htop's and mc's words, not ones invented here."""
     shorts = " ".join(entry.short for entry in FUNCTION_KEYS)
 
-    assert shorts == "help setup view detail refresh rename addproj stop kill close projects"
+    assert shorts == "help setup panes waiting refresh fresh addproj stop kill close projects"
 
 
 def test_f9_reads_force_stop_as_the_design_draws_it() -> None:
@@ -1069,3 +1074,86 @@ async def test_settings_from_a_right_hand_console_pane_opens_in_the_projects_pan
             else:
                 assert not here, f"Settings opened in {surface.__name__}"
                 assert asked == ["settings"], f"{surface.__name__} never asked the console"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["source-busy", "working-folder", "display", "focus", "unready", "changed", "close", None],
+)
+async def test_fresh_verifies_both_sessions_before_ending_the_named_source(failure, monkeypatch):
+    source, successor = _record(), _record(ordinal=2)
+    folder = Path("/fixture/planning")
+
+    class Lifecycle(_Listing):
+        pass
+
+    listing = Lifecycle((source, successor))
+    listing.fresh_successor = AsyncMock(return_value=successor)
+    listing.fresh_folder = AsyncMock(
+        return_value=folder if failure != "working-folder" else Path("/elsewhere")
+    )
+    listing.close_fresh_predecessor = AsyncMock(
+        side_effect=ValueError("close failed") if failure == "close" else None
+    )
+    displayed = AsyncMock(
+        side_effect=[
+            source.session_id,
+            source.session_id if failure == "changed" else successor.session_id,
+        ]
+    )
+    opener = AsyncMock(return_value="cannot open" if failure == "display" else None)
+    focus = AsyncMock(return_value=failure != "focus")
+    idle = AsyncMock(side_effect=[failure != "source-busy", failure != "unready"])
+    if failure == "unready":
+        clock = iter([0.0, 61.0])
+        monkeypatch.setattr("remote_agents.adapters.tui.app.monotonic", lambda: next(clock))
+    flash = AsyncMock()
+    app = ProjectsPane(
+        replace(
+            _context(listing),
+            console_displayed_session=displayed,
+            open_in_console=opener,
+            console_focus_session=focus,
+            pane_idle=idle,
+            console_flash=flash,
+        )
+    )
+    async with app.run_test():
+        await app.replace_with_fresh(source, folder)
+        if failure in ("close", None):
+            listing.close_fresh_predecessor.assert_awaited_once_with(source, successor, folder)
+        else:
+            listing.close_fresh_predecessor.assert_not_awaited()
+        if failure == "source-busy":
+            listing.fresh_successor.assert_not_awaited()
+        else:
+            listing.fresh_successor.assert_awaited_once_with(source.session_id, folder)
+        if failure:
+            message = flash.await_args.args[0]
+            assert source.display.rendered in message
+            if failure != "source-busy":
+                assert successor.display.rendered in message
+
+
+@pytest.mark.parametrize("surface", [ProjectsPane, SessionsPane, FeedPane])
+async def test_f8_uses_the_displayed_session_over_a_different_visible_row(surface):
+    displayed, highlighted = _record(), _record(ordinal=2)
+    listing = _Listing(
+        (displayed, highlighted), observation=a_stop_that_did_not_take("still alive")
+    )
+    selected = AsyncMock(return_value=highlighted.session_id)
+    flash = AsyncMock()
+    app = surface(
+        replace(
+            _on_a_console(listing, SelectionConsole(selected=highlighted.session_id)),
+            console_displayed_session=AsyncMock(return_value=displayed.session_id),
+            console_visible_selection=selected,
+            console_flash=flash,
+        )
+    )
+    async with app.run_test() as pilot:
+        await pilot.press("f8")
+        await pilot.pause()
+        assert [command.session_id for command in listing.issued] == [displayed.session_id]
+        selected.assert_not_awaited()
+        assert any(displayed.display.rendered in call.args[0] for call in flash.await_args_list)

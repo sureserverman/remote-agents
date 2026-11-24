@@ -39,6 +39,7 @@ from remote_agents.adapters.tui.screens.base import (
 )
 from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
+    FreshSessionConfirmModal,
     RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
@@ -729,8 +730,16 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     # *pusher's* resting one, which in a feed or sessions pane process is not a project
     # list. Naming the key without naming a place is true on every surface that pushes it.
 
-    def __init__(self) -> None:
+    def __init__(self, *, waiting: bool = False) -> None:
         super().__init__()
+        self._waiting_reasons: dict[str, str] = {}
+        self.return_session: SessionId | None = None
+        self.waiting = waiting
+        if waiting:
+            self.crumb = "Waiting for me"
+            self.listing_hint = "enter open · esc back"
+            self.empty_state = "No sessions are waiting for you."
+            self.empty_status = self.empty_state
         self._auto: Timer | None = None
         #: The detach for this screen's store-change subscription, or None while it is not
         #: listening. Held rather than re-derived because `Unsubscribe` is the only handle the
@@ -830,7 +839,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         shared, so widening it is not this method's to do.
         """
         backend = self.tui.services.backend
-        if backend.usage is None and backend.git_summary is None:
+        if self.waiting or (backend.usage is None and backend.git_summary is None):
             return
         visiting = self._visit
         filled = self._resting_generation
@@ -903,6 +912,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         the guard a stop may still hold. Pausing a timer needs no such ordering, so the
         framework hook is the right one for this half.
         """
+        self._publish_selection(None)
         if self._auto is not None:
             self._auto.pause()
         # And stop listening, for the same reason rather than an additional one: a change
@@ -943,6 +953,28 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # anyway. What genuinely does not happen is a *burst*: the watcher holds one reading,
         # not a queue, so ten changes during a detour collapse to the single event above.
         self._watch_the_store()
+
+    async def _listed_here(self) -> tuple[SessionRecord, ...]:
+        records = await self.tui.load_sessions()
+        if not self.waiting:
+            return records
+        read = self.services.waiting_reason
+        if read is None:
+            raise RuntimeError("Live session prompts are unavailable.")
+        waiting = []
+        reasons = {}
+        for record in records:
+            if record.state in (
+                SessionState.STARTING,
+                SessionState.UNTRUSTED,
+                SessionState.RUNNING,
+                SessionState.FAILED,
+            ):
+                if reason := await read(record.session_id):
+                    waiting.append(record)
+                    reasons[str(record.session_id)] = reason
+        self._waiting_reasons = reasons
+        return tuple(waiting)
 
     async def _auto_reload(self) -> None:
         """The interval's re-read: quiet, cursor-preserving, and never over work in flight.
@@ -986,7 +1018,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         visiting = self._visit
         self._reading = True
         try:
-            records = await self.tui.load_sessions()
+            records = await self._listed_here()
         except Exception:
             _LOG.warning("the background session re-read failed", exc_info=True)
             return
@@ -1086,7 +1118,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         self._reading = True
         try:
             async with self.awaiting("Reading the managed sessions…"):
-                records = await self.tui.load_sessions()
+                records = await self._listed_here()
         except Exception as error:
             self.tui.report_store_failure(error, self)
             return
@@ -1314,7 +1346,9 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         contents = session_contents(parts, width, active, marks_active=True)
         for key, content in zip(keys, contents, strict=True):
             if key in held:
-                choices.replace_option_prompt(key, content)
+                choices.replace_option_prompt(
+                    key, content + f"  {self._waiting_reasons[key]}" if self.waiting else content
+                )
 
     def _resting_row(
         self,
@@ -1431,7 +1465,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # this change's Tier-1 review.
         self._drawn = {str(record.session_id): record for record in records}
         choices = self.query_one("#choices", OptionList)
-        self.set_pane_title(choices, sessions_title(records))
+        self.set_pane_title(choices, "Waiting for me" if self.waiting else sessions_title(records))
         if not records:
             self.show_choices(())
             self.set_status(self.empty_status, hint="")
@@ -1469,7 +1503,11 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # change look like a repeat.
         self._laid_out_width = width
         keys = [str(record.session_id) for record in records]
-        arrived = self._newest_arrival(records, previously_drawn) if drawn_before else None
+        arrived = (
+            self._newest_arrival(records, previously_drawn)
+            if drawn_before and not self.waiting
+            else None
+        )
         resting = self._resting_row(
             keys,
             choices,
@@ -1482,6 +1520,11 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # records it so the highlight message `show_choices` posts finds nothing to repaint.
         self._marked_row = None if resting is None else keys[resting]
         contents = session_contents(parts, width, resting, marks_active=True)
+        if self.waiting:
+            contents = [
+                content + f"  {self._waiting_reasons[key]}"
+                for key, content in zip(keys, contents, strict=True)
+            ]
         rows = tuple(zip(keys, contents, strict=True))
         if rest_on_nothing:
             # Through `show_choices`'s own `highlight=None` rather than assigning `highlighted`
@@ -1577,6 +1620,15 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             # this before `choose` is reached; the branch is here because `choose` is also
             # called directly, and because a screen should be able to answer for its own rows.
             await self.tui.go_back()
+            return
+        if self.waiting:
+            read = self.services.waiting_reason
+            if read is not None and await read(SessionId.parse(key)):
+                await self.tui._open_or_leave(key)
+                if self.services.console_focus_session is not None:
+                    await self.services.console_focus_session(SessionId.parse(key))
+            else:
+                await self.refresh_contents()
             return
         await self.tui.show_detail(key)
 
@@ -2212,6 +2264,34 @@ class SessionDetailScreen(ChoiceScreen):
             await self.show_inspect()
         elif key == "rename":
             await self.show_rename()
+        elif key == "fresh":
+            async with self.holding_the_guard():
+                record = await self.tui.current_record(self.session_value)
+                if record is None or record.state is not SessionState.RUNNING:
+                    await self.tui.dismiss_fresh_overlay()
+                    message = "Only a running session can be replaced."
+                    self.announce(message)
+                    if self.services.console_flash:
+                        await self.services.console_flash(message)
+                    return
+                try:
+                    folder = await self.services.backend.sessions.fresh_folder(record)
+                except (OSError, KeyError, ValueError) as error:
+                    await self.tui.dismiss_fresh_overlay()
+                    message = f"Cannot verify the working folder: {error}"
+                    self.announce(message)
+                    if self.services.console_flash:
+                        await self.services.console_flash(message)
+                    return
+                confirmed = await self.tui.ask_to_confirm(
+                    FreshSessionConfirmModal(
+                        f"Open a fresh {record.profile_id} session in {folder} for project "
+                        f"{record.project_id}, then close {record.display.rendered}?"
+                    )
+                )
+                await self.tui.dismiss_fresh_overlay()
+                if confirmed:
+                    await self.tui.replace_with_fresh(record, folder)
         elif key == "permissions":
             await self.show_permissions()
         elif key in _REMOTE_CONTROL_DIRECTIONS:

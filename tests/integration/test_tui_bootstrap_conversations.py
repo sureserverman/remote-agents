@@ -166,6 +166,16 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # deriving hosting from it would tell a real console pane it is a bare terminal -- and
         # the entry it would then advertise is the one that closes the pane.
         "console_hosted",
+        "console_present_overlay",
+        "console_agent_focused",
+        "console_visible_selection",
+        "console_prefix",
+        "console_cycle_session",
+        "console_focus_session",
+        "console_displayed_session",
+        "console_toggle_panes",
+        "pane_idle",
+        "waiting_reason",
         # The console capabilities (DEC-040), wired only under console hosting.
         "open_in_console",
         "console_sync",

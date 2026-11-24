@@ -36,11 +36,11 @@ _SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 #: The design's two key rows (handoff README § 2), text only.
 _FULL_KEYS = (
-    "1 help  2 settings  3 inspect  4 detail  5 refresh  6 rename  7 add project  8 stop  "
+    "1 help  2 settings  3 panes  4 waiting  5 refresh  6 fresh  7 add project  8 stop  "
     "9 force stop  10 close console  11 terminal  12 projects"
 )
 _COMPACT_KEYS = (
-    "1help 2setup 3view 4detail 5refresh 6rename 7addproj 8stop 9kill 10close 12projects"
+    "1help 2setup 3panes 4waiting 5refresh 6fresh 7addproj 8stop 9kill 10close 12projects"
 )
 
 
@@ -146,7 +146,7 @@ def test_the_compact_bar_at_100_has_no_f11(drill) -> None:
     row = _wait(lambda: (bar := drill.bar()).startswith("1help") and bar)
     drill.resize(200, 50)
 
-    assert row.startswith(_COMPACT_KEYS + " "), row
+    assert row.rstrip() == _COMPACT_KEYS or row.startswith(_COMPACT_KEYS + " "), row
     assert "11" not in row
     assert row.rstrip().endswith(("RC ", "?", "●", "○")) or row.rstrip() == _COMPACT_KEYS, row
 
@@ -173,17 +173,17 @@ def test_a_selected_row_lights_the_keys_and_the_rename_box_says_esc_cancels(dril
 
     def lit_row() -> str | None:
         styled = drill.bar(styled=True)
-        return styled if _fg_at(styled, "3 inspect") != _fg_at(styled, "11 terminal") else None
+        return styled if _fg_at(styled, "8 stop") != _fg_at(styled, "11 terminal") else None
 
     lit = _wait(lit_row, bound=40)
     assert lit, drill.screen()
 
-    drill.press("F6")
+    drill.press("r")
     typing = _wait(lambda: "esc cancels" in drill.bar(), bound=15)
     screen = drill.screen()
     drill.press("Escape")
     back = _wait(lambda: "esc cancels" not in drill.bar(), bound=15)
-    # F6 opened the session's detail under the rename box; leave it too, so the pane is
+    # Rename opened the session's detail under the rename box; leave it too, so the pane is
     # back on its list for the next drill step.
     drill.press("Escape")
     listed = _wait(lambda: "Sessions ›" not in drill.screen(), bound=15)

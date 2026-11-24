@@ -1543,6 +1543,33 @@ class TmuxTerminal:
             return RemoteControlState.UNKNOWN
         return _remote_control_state(await self._gateway.capture(session_id))
 
+    async def waiting_reason(self, session_id: SessionId) -> str | None:
+        """Read a current question from the live pane. Feed entries may already be answered."""
+        try:
+            observation = await self.inspect(session_id)
+            if observation is None or not observation.live:
+                return None
+            descriptor = self._composers.get(str(observation.profile_id))
+            if descriptor is None:
+                return None
+            capture = await self._gateway.capture(session_id, styled=True)
+            title = (await self._gateway.pane_title(session_id)).rstrip("\n")
+        except (RuntimeError, OSError, TerminalTargetMissing):
+            return None
+        state = classify(capture, descriptor, title)
+        if state in (PaneState.DIALOG, PaneState.UNKNOWN):
+            # Some agents leave an answered trust question above the live composer.
+            # Identify the type of question only after checking the current input state.
+            dialog = self._trust_dialogs.get(str(observation.profile_id))
+            if dialog and classify_trust_capture(_plain(capture), dialog) is TrustState.AWAITING:
+                return "Folder trust requested"
+            named = owner_dialog(capture, descriptor)
+            if named:
+                return named.names
+        if descriptor.action_required_title and descriptor.action_required_title.match(title):
+            return "Approval requested"
+        return "Waiting for your answer" if state is PaneState.DIALOG else None
+
     async def owner_dialog(self, session_id: SessionId) -> str | None:
         """What the dialog on this pane is called, when only the owner may answer it (BL-146).
 

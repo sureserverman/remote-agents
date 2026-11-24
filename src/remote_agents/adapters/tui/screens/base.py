@@ -1481,7 +1481,10 @@ class ChoiceScreen(Screen[None]):
         if not self.showing or self.tui.busy:
             return
         if message.action == FORCE:
-            await self.confirm_force(message.session_value)
+            try:
+                await self.confirm_force(message.session_value)
+            finally:
+                await self.tui.dismiss_force_overlay()
             return
         await self.tui.stop(message.action, message.session_value, self)
 

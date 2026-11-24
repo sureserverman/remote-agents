@@ -291,6 +291,13 @@ class ConfirmScreen(ModalScreen[bool]):
         self._answer(False)
 
 
+class FreshSessionConfirmModal(ConfirmScreen):
+    position = "FRESH_SESSION_CONFIRM"
+    question = "Replace this session with a fresh prompt?"
+    confirm_key = "fresh-confirm"
+    confirm_label = "Open fresh session"
+
+
 class ForceConfirmModal(ConfirmScreen):
     """Ask a second time before killing a running agent.
 
@@ -647,4 +654,4 @@ class HostPairingCodeModal(ModalScreen[None]):
 #: that are not here — graceful and cleanup — are absent for the same rule, recorded in the
 #: Stage 3 handoff: neither surface confirms them, and confirming on one side only would break
 #: the parity DEC-007's first mitigation exists to hold.
-ALL_CONFIRMS = (ForceConfirmModal, RemoteControlConfirmModal)
+ALL_CONFIRMS = (ForceConfirmModal, FreshSessionConfirmModal, RemoteControlConfirmModal)

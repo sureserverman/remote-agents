@@ -115,28 +115,19 @@ async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_k
     await gateway(runner).install_console_binding(
         "C-a", ConsoleBindingAction.SHOW_PROJECTS, projects
     )
-    assert runner.calls == [
-        (
+    for call, key in zip(
+        (call for call in runner.calls if call[3] == "bind-key"), ("F12", "C-a"), strict=True
+    ):
+        assert call[:-1] == (
             *_BASE,
             "bind-key",
             "-n",
             "-N",
             "remote-agents: show_projects",
-            "F12",
+            key,
             "run-shell",
-            "/usr/bin/python3 -m remote_agents console projects",
-        ),
-        (
-            *_BASE,
-            "bind-key",
-            "-n",
-            "-N",
-            "remote-agents: show_projects",
-            "C-a",
-            "run-shell",
-            "/usr/bin/python3 -m remote_agents console projects",
-        ),
-    ]
+        )
+        assert "/usr/bin/python3 -m remote_agents console projects" in call[-1]
     for key in ("", "two words", "a;b", "$(rm)", "péché", "C-", "C-;"):
         with pytest.raises(ValueError):
             await gateway(runner).install_console_binding(
@@ -190,7 +181,10 @@ async def test_a_command_with_a_space_in_its_path_stays_one_command() -> None:
         ConsoleBindingAction.SHOW_PROJECTS,
         ("/home/a b/python", "-m", "remote_agents", "console", "projects"),
     )
-    assert runner.calls[0][-1] == "'/home/a b/python' -m remote_agents console projects"
+    import shlex
+
+    script = shlex.split(runner.calls[-1][-1])[-1]
+    assert "'/home/a b/python' -m remote_agents console projects" in script
 
 
 async def test_a_command_bearing_a_hash_never_reaches_tmux_own_format_engine() -> None:
@@ -216,15 +210,15 @@ async def test_a_command_bearing_a_hash_never_reaches_tmux_own_format_engine() -
         ConsoleBindingAction.SHOW_PROJECTS,
         ("/opt/py#{pane_id}/bin/python", "-m", "remote_agents", "console", "projects"),
     )
-    command = runner.calls[0][-1]
+    command = runner.calls[-1][-1]
     assert "##{pane_id}" in command, "an unescaped # is a tmux format, not a path"
-    assert "#{pane_id}" not in command.replace("##{pane_id}", ""), "no bare format survived"
+    assert "/opt/py#{pane_id}" not in command, "the path must escape its format"
 
     runner = RecordingRunner()
     await gateway(runner).install_console_binding(
         "F12", ConsoleBindingAction.SHOW_PROJECTS, ("/opt/#(id -u)/python", "-m", "remote_agents")
     )
-    assert "##(id -u)" in runner.calls[0][-1], "#(...) runs a command through tmux's engine"
+    assert "##(id -u)" in runner.calls[-1][-1], "#(...) runs a command through tmux's engine"
 
 
 async def test_a_gone_target_is_typed_for_every_single_target_console_operation() -> None:
@@ -470,7 +464,10 @@ async def test_kill_console_names_the_console_session_and_reads_a_gone_console_a
     """
     runner = RecordingRunner()
     await gateway(runner).kill_console()
-    assert runner.calls == [(*_BASE, "kill-session", "-t", "ra-console:")]
+    assert runner.calls == [
+        (*_BASE, "display-message", "-p", "-t", "ra-console:", "#{window_zoomed_flag}|#{pane_id}"),
+        (*_BASE, "kill-session", "-t", "ra-console:"),
+    ]
 
     gone = RecordingRunner(error=RuntimeError("can't find session: ra-console"))
     await gateway(gone).kill_console()

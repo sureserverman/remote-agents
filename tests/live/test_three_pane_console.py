@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,11 @@ import pytest
 from remote_agents.adapters.agents.registry import reserved_keys_by_profile
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
-from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
+from remote_agents.application.console import (
+    CONSOLE_BINDINGS,
+    ConsoleComposer,
+    console_panes_binding,
+)
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.console import (
     ConsoleBindingAction,
@@ -163,6 +168,7 @@ async def test_the_console_comes_up_whole_and_its_keys_reach_every_pane(
         gateway,
         ("sleep", "600"),
         tmp_path,
+        panes_command=("true",),
         projects_command=("true",),
         # Stand-ins: this test is about the arrangement and the keys. What the surfaces
         # render is the second test below, and every one of their behaviours is pinned
@@ -296,8 +302,9 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
             tmp_path,
             # What the projects key runs. `-c` so the child composer reaches this socket
             # rather than the owner's real one.
+            panes_command=("true",),
             projects_command=(
-                "python3",
+                sys.executable,
                 "-c",
                 "import asyncio,sys;"
                 "from remote_agents.adapters.tmux.gateway import TmuxGateway;"
@@ -305,7 +312,7 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
                 "from remote_agents.application.console import ConsoleComposer;"
                 "from pathlib import Path;"
                 f"c=ConsoleComposer(TmuxGateway('{console_socket}',AsyncTmuxRunner()),"
-                f"('sleep','600'),Path('{tmp_path}'),projects_command=('true',),"
+                f"('sleep','600'),Path('{tmp_path}'),panes_command=('true',),projects_command=('true',),"
                 "reserved_keys={});"
                 "asyncio.run(c.show_projects())",
             ),
@@ -451,6 +458,7 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
         gateway,
         ("sleep", "600"),
         home,
+        panes_command=("true",),
         projects_command=("true",),
         pane_commands={
             slot: (
@@ -692,6 +700,7 @@ async def test_a_console_killed_while_displaying_names_the_session_it_stranded(
             TmuxGateway(console_socket, AsyncTmuxRunner()),
             ("sleep", "600"),
             tmp_path,
+            panes_command=("true",),
             projects_command=("true",),
             pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
             reserved_keys={},
@@ -793,10 +802,15 @@ async def test_a_pane_surface_in_a_test_console_never_reaches_the_production_ser
 
 
 async def _record_numbered(
-    home: Path, session_id: SessionId, sequence: int, state: str = "running"
+    home: Path,
+    session_id: SessionId,
+    sequence: int,
+    state: str = "running",
+    project_root: Path | None = None,
 ) -> None:
     """Like `_record_session`, but numbered, so three rows can be told apart on screen."""
     from datetime import UTC, datetime
+    from hashlib import sha256
 
     from remote_agents.domain.models import (
         ProfileId,
@@ -806,17 +820,21 @@ async def _record_numbered(
         SessionState,
     )
 
+    project_id = (
+        sha256(str(project_root).encode()).hexdigest()[:24] if project_root else "qualification"
+    )
     connection, store = _store(home)
     try:
         await store.save(
             SessionRecord(
                 session_id,
-                ProjectId("qualification"),
+                ProjectId(project_id),
                 ProfileId("claude"),
                 SessionDisplayIdentity("qualification", "claude", "regular", sequence),
                 SessionState(state),
                 datetime.now(UTC),
-            )
+            ),
+            project_root=project_root,
         )
     finally:
         connection.close()
@@ -925,6 +943,7 @@ async def test_the_published_selection_follows_the_cursor_over_real_tmux(tmp_pat
         gateway,
         ("sleep", "600"),
         home,
+        panes_command=("true",),
         projects_command=("true",),
         pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
         reserved_keys={},
@@ -990,6 +1009,7 @@ async def test_the_selection_dies_with_the_console_that_published_it(tmp_path: P
             gateway,
             ("sleep", "600"),
             home,
+            panes_command=("true",),
             projects_command=("true",),
             pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
             reserved_keys={},
@@ -1046,6 +1066,7 @@ async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
         gateway,
         ("sleep", "600"),
         home,
+        panes_command=("true",),
         projects_command=("true",),
         pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
         reserved_keys={},
@@ -1302,6 +1323,7 @@ async def test_the_function_keys_reach_the_pane_the_owner_is_in_and_the_agent_th
         gateway,
         ("sleep", "600"),
         home,
+        panes_command=("true",),
         projects_command=("true",),
         pane_commands={
             slot: (
@@ -1473,6 +1495,7 @@ async def test_the_function_keys_reach_the_pane_the_owner_is_in_and_the_agent_th
         assert SETTINGS_INSTRUCTION not in await capture(projects_pane), (
             "the projects pane was already showing Settings before the reserved key was pressed"
         )
+        await _type(host_socket, "C-b")
         await _type(host_socket, "F2")
         assert await waits_for_the_agent("F2"), (
             "OpenCode's own F2 was taken from the pane the owner was typing in; the console "
@@ -1595,8 +1618,11 @@ class _RealConsole:
     drove the owner's real console and is now watched for exactly that.
     """
 
-    def __init__(self, tmp_path: Path, states: tuple[str, ...]) -> None:
+    def __init__(
+        self, tmp_path: Path, states: tuple[str, ...], *, registered: bool = False
+    ) -> None:
         self.home = _fabricated_home(tmp_path)
+        self.project_root = self.home / "dev/infra/qualification" if registered else None
         #: One session per state, numbered from 1, so a row and the detail it opens can both be
         #: told apart: the list draws the `#N` marker, the detail draws only the state.
         self.states = {f"#{index}": state for index, state in enumerate(states, start=1)}
@@ -1610,12 +1636,24 @@ class _RealConsole:
         for marker, state in self.states.items():
             session_id = SessionId.new()
             self.ids[marker] = session_id
-            await _record_numbered(self.home, session_id, int(marker[1:]), state)
+            await _record_numbered(self.home, session_id, int(marker[1:]), state, self.project_root)
+        # Pin both the configuration home and the -L name resolved by production CLI verbs.
+        cli = (
+            "env",
+            f"HOME={self.home}",
+            f"TMUX=/disposable/{self.socket},0,0",
+            str(Path(__file__).resolve().parents[2] / ".venv/bin/python"),
+            "-m",
+            "remote_agents",
+            "console",
+        )
         composer = ConsoleComposer(
             self.gateway,
             ("sleep", "600"),
             self.home,
-            projects_command=("true",),
+            panes_command=(*cli, "panes"),
+            projects_command=(*cli, "projects"),
+            bindings=(*CONSOLE_BINDINGS, console_panes_binding()),
             pane_commands={
                 slot: (
                     "env",
@@ -1670,7 +1708,7 @@ class _RealConsole:
         flags = "-pe" if escapes else "-p"
         return await _run("tmux", "-L", self.socket, "capture-pane", flags, "-t", self.panes[slot])
 
-    async def draws(self, slot: str, text: str, *, seconds: float) -> bool:
+    async def draws(self, slot: str, text: str, *, seconds: float = 8.0) -> bool:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + seconds
         while loop.time() < deadline:
@@ -1761,44 +1799,211 @@ async def test_down_in_a_real_sessions_pane_publishes_the_second_row(tmp_path: P
     await _assert_production_untouched(before, "after a test console started, ran and closed")
 
 
-async def test_the_session_chord_inside_a_pane_acts_on_the_sessions_pane_s_row(
-    tmp_path: Path,
-) -> None:
-    """F4 pressed in the projects pane opens the detail of the row the sessions pane chose.
-
-    The chord is a Textual binding in one pane process that reads a selection another pane
-    process published, through the composer the surface built for itself. Driven end to end:
-    the client's F4 reaches the root binding, the binding hands it back to the projects pane
-    (it carries a slot mark), and that surface opens the second row's session, not the first.
-    """
+async def test_waiting_from_projects_ignores_an_unrelated_highlight(tmp_path: Path) -> None:
     _live_or_skip()
-    before = await _production_console_or_skip()
-
-    # Two states, because a console pane's detail draws no header and so no `#N`: what tells
-    # the two sessions apart on the detail is its `State:` line.
-    console = _RealConsole(tmp_path, ("running", "starting"))
+    ui = _RealConsole(tmp_path, ("running", "starting"))
     try:
-        await console.start()
-        first, second = await console.move_the_cursor_to_the_second_row()
-        state_of = {
-            str(session_id): f"State: {console.states[marker]}."
-            for marker, session_id in console.ids.items()
-        }
-
-        await console.focus("surface")
-        assert "State: " not in await console.capture("surface"), (
-            "the projects pane shows a detail before the chord, so this proves nothing"
-        )
-        await console.press("F4")
-
-        assert await console.draws("surface", state_of[second], seconds=10.0), (
-            f"F4 in the projects pane did not open the second row ({state_of[second]}):\n"
-            + await console.capture("surface")
-        )
-        assert state_of[first] not in await console.capture("surface"), (
-            f"the chord opened the row the cursor left ({state_of[first]})"
-        )
-        await _assert_production_untouched(before, "while a pane's chord ran in a test console")
+        await ui.start()
+        await ui.move_the_cursor_to_the_second_row()
+        await ui.focus("surface")
+        await ui.press("F4")
+        assert await ui.draws("surface", "No sessions are waiting for you.")
+        await ui.press("Escape")
+        assert await ui.draws("surface", "Projects")
     finally:
-        await console.kill()
-    await _assert_production_untouched(before, "after a test console started, ran and closed")
+        await ui.kill()
+
+
+async def test_direct_arrows_switch_the_agent_from_every_pane_and_keep_fold(tmp_path: Path) -> None:
+    """Actual client bytes traverse tmux and the real Textual session controller."""
+    _live_or_skip()
+    ui = _RealConsole(tmp_path, ("running", "running"))
+    try:
+        await ui.start()
+        await _run("tmux", "-L", ui.socket, "set-option", "-gw", "remain-on-exit", "on")
+        panes = []
+        for identity in ui.ids.values():
+            name = f"ra-{identity}"
+            pane = (
+                await _run(
+                    "tmux",
+                    "-L",
+                    ui.socket,
+                    "new-session",
+                    "-d",
+                    "-s",
+                    name,
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "sleep",
+                    "600",
+                )
+            ).strip()
+            for option, value in (
+                ("@remote_agents_schema", "2"),
+                ("@remote_agents_id", str(identity)),
+            ):
+                await _run("tmux", "-L", ui.socket, "set-option", "-p", "-t", pane, option, value)
+            panes.append(pane)
+        for slot in ("surface", "sessions", "limits", "feed"):
+            if slot != "surface":
+                await ui.focus(slot)
+            await ui.press("M-Right")
+            assert await _active_pane(ui.socket) == panes[0]
+            await ui.press("M-Left")
+            assert await _active_pane(ui.socket) == panes[1]
+        for overlay in ("F1", "F4"):
+            await ui.press(overlay)
+            assert await _active_pane(ui.socket) == ui.panes["surface"], (
+                overlay,
+                await _run(
+                    "tmux",
+                    "-L",
+                    ui.socket,
+                    "capture-pane",
+                    "-p",
+                    "-S",
+                    "-120",
+                    "-t",
+                    ui.panes["surface"],
+                ),
+            )
+            await ui.press("Escape")
+            assert await _active_pane(ui.socket) == panes[1], (overlay, await ui.capture("surface"))
+        await ui.focus("feed")
+        await ui.press("F3")
+        assert await ui.gateway.console_zoomed_pane() == panes[1]
+        await ui.press("M-Right")
+        assert await _active_pane(ui.socket) == panes[0]
+        assert await ui.gateway.console_zoomed_pane() == panes[0]
+        await ui.press("F4")
+        assert await ui.draws("surface", "No sessions are waiting for you.")
+        assert await ui.gateway.console_zoomed_pane() == ui.panes["surface"]
+        await ui.press("Escape")
+        assert await ui.gateway.console_zoomed_pane() == panes[0]
+        await ui.press("C-b")
+        await ui.press("h")
+        assert await ui.gateway.console_zoomed_pane() is None
+    finally:
+        await ui.kill()
+
+
+@pytest.mark.parametrize(
+    ("slot", "agent", "folded"),
+    [
+        (slot, agent, folded)
+        for agent in (False, True)
+        for folded in (False, True)
+        for slot in (("surface",) if folded else ("surface", "sessions", "limits", "feed"))
+    ],
+)
+async def test_console_shortcuts_reach_a_visible_destination(tmp_path, slot, agent, folded):
+    _live_or_skip()
+    ui = _RealConsole(tmp_path, ("running",), registered=True)
+    try:
+        await ui.start()
+        identity = next(iter(ui.ids.values()))
+        db, store = _store(ui.home)
+        try:
+            record = await store.get(identity)
+        finally:
+            db.close()
+        pane = (
+            await _run(
+                "tmux",
+                "-L",
+                ui.socket,
+                "new-session",
+                "-d",
+                "-s",
+                f"ra-{identity}",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "cat",
+            )
+        ).strip()
+        from remote_agents.adapters.tmux.codec import pane_mark_args
+
+        for command in pane_mark_args(identity, record.project_id, record.profile_id):
+            await _run("tmux", "-L", ui.socket, *command)
+        view = ConsoleComposer(
+            ui.gateway,
+            ("true",),
+            ui.home,
+            projects_command=("true",),
+            panes_command=("true",),
+            reserved_keys={},
+        )
+
+        async def origin():
+            if agent:
+                assert await view.show(identity) is None
+            else:
+                await view.show_projects()
+            left = pane if agent else ui.panes["surface"]
+            if folded:
+                await ui.gateway.write_console_option("@remote_agents_panes_hidden", "1")
+                await ui.gateway.zoom_console_pane(left, wanted=True)
+            await _run(
+                "tmux",
+                "-L",
+                ui.socket,
+                "select-pane",
+                "-t",
+                left if slot == "surface" else ui.panes[slot],
+            )
+            return await _active_pane(ui.socket)
+
+        for key, visible in (
+            ("F1", "Native provider F2"),
+            ("F4", "No sessions are waiting"),
+            ("F2", "Theme"),
+            ("F7", "Choose the area"),
+        ):
+            await origin()
+            await ui.press(key)
+            assert await ui.draws("surface", visible), (key, await ui.capture("surface"))
+            assert await _active_pane(ui.socket) == ui.panes["surface"]
+            await ui.press("Escape")
+
+        prior = await origin()
+        await ui.press("F5")
+        assert await _active_pane(ui.socket) == prior
+        if folded:
+            assert await ui.gateway.console_zoomed_pane() == prior
+        await ui.press("F6")
+        if agent:
+            assert await ui.draws("surface", "Open fresh session"), await ui.capture("surface")
+            await ui.press("F8")
+            assert await ui.draws("surface", "Open fresh session")
+            await ui.press("Escape")
+            assert await view.displayed_session() == identity
+        else:
+            assert await ui.draws("surface", "Display the session"), await ui.capture("surface")
+
+        await origin()
+        await ui.press("F9")
+        if agent or not folded:
+            destination = await _active_pane(ui.socket)
+            capture = await _run("tmux", "-L", ui.socket, "capture-pane", "-p", "-t", destination)
+            assert "Yes, force stop it" in capture, (slot, capture)
+            assert "#1" in capture
+            await ui.press("Escape")
+        else:
+            assert await ui.draws("surface", "Select a visible Sessions row")
+        await origin()
+        await ui.press("F12")
+        assert await _active_pane(ui.socket) == ui.panes["surface"]
+        assert await view.displayed_session() is None
+        await origin()
+        await ui.press("F10")
+        for _ in range(30):
+            if not any(p.on_console for p in await ui.gateway.pane_arrangement()):
+                break
+            await asyncio.sleep(0.2)
+        assert not any(p.on_console for p in await ui.gateway.pane_arrangement())
+        assert any(p.session_id == identity for p in await ui.gateway.pane_arrangement())
+    finally:
+        await ui.kill()

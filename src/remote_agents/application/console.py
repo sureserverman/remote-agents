@@ -167,8 +167,7 @@ class ConsoleBinding:
 
     `root` is `bind-key -n`: no prefix, so the key is one every agent on this server can never
     receive, for as long as it is bound. DEC-041 fixed that budget at one and this sub-plan
-    supersedes it at eleven; what did not change is that the argument for spending a root key
-    is the `why` above, per key.
+    extends it to the function row and session arrows. Each key carries its rationale above.
 
     `prefix` costs an agent **nothing**. tmux intercepts the prefix key in the client, before
     any key reaches a pane, so a prefix binding takes nothing from anybody — which is why the
@@ -178,71 +177,14 @@ class ConsoleBinding:
     """
 
 
-#: The console's **root** key set: the function-key row, minus the one the terminal keeps.
-#:
-#: **Supersedes DEC-041**, which fixed this budget at one key and required the argument for its
-#: size to be the decision. The budget is now eleven, and the argument is here rather than in a
-#: commit message.
-#:
-#: *What changed the arithmetic.* DEC-041 costed a root key as "a key every agent on this
-#: server can never receive", which is true and is why one was all it would spend. The premise
-#: it could not check at the time was whether the agents want these keys at all. They were
-#: checked, on 2026-09-13: Claude Code binds no function key, Codex binds none, Cursor CLI
-#: binds none (`cursor-agent --help` on 2026.09.10 names none and its config carries none), and
-#: OpenCode binds exactly one, F2. So ten of these eleven keys cost every curated agent
-#: nothing, because none of them was ever going to receive them — and the eleventh is not taken
-#: either: `FORWARD_FUNCTION_KEY` passes a reserved key *through* to the pane whose provider
-#: declared it (DEC-070), so OpenCode still gets its F2.
-#:
-#: *What is still paid.* An agent this project does not curate may bind a function key, and
-#: this set takes it. That is a real cost and it is the one being accepted: the row is the
-#: owner's whole control surface from inside a displayed agent, which is the position DEC-040
-#: puts them in most often, and there is no prefix-free key left that buys it.
-#:
-#: **F11 is absent by construction**, here and in the TUI's own table. It is the terminal's
-#: full-screen toggle almost everywhere, and an owner pressing it would have no way to tell
-#: which side swallowed it.
-#:
-#: **The eight prefix forwards are gone with the Alt layer they served.** They existed because
-#: a chord typed inside a displayed agent reached the agent; a root key does not have that
-#: problem, which is the whole reason the row is worth its cost.
+#: F1–F10, F12 and both Alt arrows are the console's direct controls (DEC-150).
+#: The provider's native F2 is reachable behind the configured tmux prefix.
+_FORWARD_COST = "Use the console command from a displayed agent or any control pane."
 
-#: The cost argument every forward in the row carries, stated once because it *is* the same
-#: argument for each of them.
-#:
-#: Deliberately says nothing about what any individual key does, and that is a layer boundary
-#: rather than brevity: the console's job is to deliver a key to the right pane, and what the
-#: key means once it lands is the surface's business (`adapters/tui/keys.py`). Ten copies of a
-#: sentence naming ten acts would be this module holding a second, drifting opinion about a
-#: table it does not own.
-_FORWARD_COST = (
-    "One of the function-key row, bound at the root so it reaches the owner inside a displayed "
-    "agent -- the one position DEC-040 puts them in where no pane-local binding can be pressed. "
-    "It costs the curated agents nothing: none of the four binds this key, and the one "
-    "reservation that exists (OpenCode's F2) is passed through to its own pane rather than "
-    "taken. What it does cost is an uncurated agent that binds a function key, which is the "
-    "price accepted when DEC-041's budget was superseded."
-)
-
-#: The nine keys the console forwards. F11 is not among them, F2 is Settings and F12 is the
-#: exchange below.
-#:
-#: **Spelled out rather than generated from a range**, for two reasons that both come down to
-#: what a reader can see. `test_the_key_budget_is_declared_in_one_place` sweeps this module for
-#: each key as a literal, so that a second budget cannot be assembled anywhere else — and a
-#: comprehension declares nothing it can find. More importantly, F11's absence is the decision
-#: here, and `range(1, 11)` states it as an off-by-one that the next author will read as a
-#: mistake and "fix".
 _FORWARDED_FUNCTION_KEYS: tuple[str, ...] = (
-    "F1",
     # F2 is Settings, bound below: it goes to the projects pane rather than the active one.
-    "F3",
-    "F4",
     "F5",
-    "F6",
-    "F7",
     "F8",
-    "F9",
     "F10",
     # F11 is the terminal's. See the set's own note above.
 )
@@ -262,11 +204,23 @@ CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
     ConsoleBinding(
         "F2",
         ConsoleBindingAction.SHOW_SETTINGS,
-        "Settings, opened in the projects pane whichever pane the owner is in (asked for on "
-        "2026-10-01: in a right-hand pane it had a third of the column). It costs what a "
-        "forward costs and no more: the same root key, still handed to OpenCode's own pane, "
-        "which binds it (DEC-070). It runs F12's command first when an agent holds the left "
-        "slot, so Settings never opens somewhere the owner cannot see it.",
+        "Open Settings on the left, including when OpenCode is focused.",
+    ),
+    ConsoleBinding("F1", ConsoleBindingAction.SHOW_HELP, "Open Help in the visible left pane."),
+    ConsoleBinding("F3", ConsoleBindingAction.TOGGLE_PANES, "Hide or show the right column."),
+    ConsoleBinding("F4", ConsoleBindingAction.SHOW_WAITING, "Show waiting sessions on the left."),
+    ConsoleBinding(
+        "F9", ConsoleBindingAction.CONFIRM_FORCE, "Show the stop confirmation on the left."
+    ),
+    ConsoleBinding("F6", ConsoleBindingAction.FRESH_SESSION, "Replace the current session."),
+    ConsoleBinding("F7", ConsoleBindingAction.SHOW_ADD_PROJECT, "Open Add Project on the left."),
+    ConsoleBinding("M-Left", ConsoleBindingAction.CYCLE_SESSION, "Show the previous session."),
+    ConsoleBinding("M-Right", ConsoleBindingAction.CYCLE_SESSION, "Show the next session."),
+    ConsoleBinding(
+        "F2",
+        ConsoleBindingAction.PROVIDER_KEY,
+        "Send native F2 to the agent.",
+        table=ConsoleKeyTable.PREFIX,
     ),
     *(
         ConsoleBinding(key, ConsoleBindingAction.FORWARD_FUNCTION_KEY, _FORWARD_COST)
@@ -568,6 +522,11 @@ class ConsoleComposer:
             command = {
                 ConsoleBindingAction.SHOW_PROJECTS: self._projects_command,
                 ConsoleBindingAction.SHOW_SETTINGS: self._projects_command,
+                ConsoleBindingAction.SHOW_WAITING: self._projects_command,
+                ConsoleBindingAction.SHOW_ADD_PROJECT: self._projects_command,
+                ConsoleBindingAction.SHOW_HELP: self._projects_command,
+                ConsoleBindingAction.FRESH_SESSION: self._projects_command,
+                ConsoleBindingAction.CONFIRM_FORCE: self._projects_command,
                 ConsoleBindingAction.TOGGLE_PANES: self._panes_command,
             }.get(binding.action, ())
             try:
@@ -932,70 +891,7 @@ class ConsoleComposer:
         try:
             async with self._links:
                 arrangement = await self._console.pane_arrangement()
-                # Before anything is measured. A console left a pane short by a stop that
-                # destroyed what it was displaying has the *sessions* pane in position 0, and
-                # every question below is asked of position -- so measuring first and moving
-                # after would answer them about the wrong pane. Reclaiming here is also what
-                # makes the click work rather than merely be refused: the owner pressed enter
-                # on a row, and the console repairing itself on the way is the answer they
-                # wanted.
-                reclaim = _reclaim_plan(arrangement)
-                if reclaim is not None:
-                    await self._reclaim(reclaim)
-                    _LOG.info("console: %s", reclaim.note)
-                    arrangement = await self._console.pane_arrangement()
-                slot = _left_slot(arrangement)
-                agent = _pane_of(arrangement, session_id)
-                if slot is None:
-                    _LOG.debug("no console slot to show %s in", session_id)
-                    return "The console has no pane to show this in. Restart it."
-                if agent is None:
-                    # The one case worth telling the owner about by name, because it is not a
-                    # fault and it has a repair: a session marked before identity moved to
-                    # the pane names no pane, so there is nothing to exchange.
-                    _LOG.debug("nothing to show for %s; the console is left as it is", session_id)
-                    return (
-                        "This session started before the console could show sessions in a "
-                        "pane, so it has nothing to swap in. Run: remote-agents "
-                        "upgrade-sessions"
-                    )
-                if slot.pane_id == agent.pane_id:
-                    return None
-                if slot.session_id is None and slot.console_slot not in (
-                    None,
-                    ConsolePaneSlot.PROJECTS.value,
-                ):
-                    # **The slot is one of the console's own panes, and not the one that is
-                    # meant to step aside.** Swapping here exiles the sessions list or the
-                    # feed into the agent's window, and the console comes back one pane
-                    # shorter every time the owner clicks a row -- which is how a console that
-                    # had already lost its surface went on to lose its sessions pane, observed
-                    # 2026-08-21. The exchange below is only ever safe against the projects
-                    # surface or against an agent that can be sent home first.
-                    #
-                    # An **unmarked** slot is deliberately still allowed: a console predating
-                    # the slot marks has an unmarked surface, and refusing that would take the
-                    # feature away from it to prevent damage it cannot suffer.
-                    _LOG.warning(
-                        "the console's left slot is its %s pane, not the projects surface; "
-                        "showing %s there would exile it",
-                        slot.console_slot,
-                        session_id,
-                    )
-                    return (
-                        "The console is a pane short, so showing this would cost it another "
-                        "one. Restart the console and try again."
-                    )
-                if slot.session_id is not None:
-                    if not await self._send_home(arrangement, slot):
-                        return "The session already on screen could not be put back."
-                    arrangement = await self._console.pane_arrangement()
-                    slot = _left_slot(arrangement)
-                    agent = _pane_of(arrangement, session_id)
-                    if slot is None or agent is None or slot.session_id is not None:
-                        _LOG.warning("the left slot did not free up; %s is not shown", session_id)
-                        return "The left pane did not free up. Try again."
-                await self._console.swap_panes(agent.pane_id, slot.pane_id)
+                return await self._show_locked(session_id, arrangement)
         except ConsoleBusy:
             # Not a fault, and not worth a traceback: the other surface is mid-exchange and
             # this one declined to decide from a reading that is about to be wrong. Pressing
@@ -1010,6 +906,149 @@ class ConsoleComposer:
         finally:
             await self._reassert_panes()
         return None
+
+    async def _show_locked(
+        self, session_id: SessionId, arrangement: tuple[HostedPane, ...]
+    ) -> str | None:
+        # Before anything is measured. A console left a pane short by a stop that
+        # destroyed what it was displaying has the *sessions* pane in position 0, and
+        # every question below is asked of position -- so measuring first and moving
+        # after would answer them about the wrong pane. Reclaiming here is also what
+        # makes the click work rather than merely be refused: the owner pressed enter
+        # on a row, and the console repairing itself on the way is the answer they
+        # wanted.
+        reclaim = _reclaim_plan(arrangement)
+        if reclaim is not None:
+            await self._reclaim(reclaim)
+            _LOG.info("console: %s", reclaim.note)
+            arrangement = await self._console.pane_arrangement()
+        slot = _left_slot(arrangement)
+        agent = _pane_of(arrangement, session_id)
+        if slot is None:
+            _LOG.debug("no console slot to show %s in", session_id)
+            return "The console has no pane to show this in. Restart it."
+        if agent is None:
+            # The one case worth telling the owner about by name, because it is not a
+            # fault and it has a repair: a session marked before identity moved to
+            # the pane names no pane, so there is nothing to exchange.
+            _LOG.debug("nothing to show for %s; the console is left as it is", session_id)
+            return (
+                "This session started before the console could show sessions in a "
+                "pane, so it has nothing to swap in. Run: remote-agents "
+                "upgrade-sessions"
+            )
+        if slot.pane_id == agent.pane_id:
+            return None
+        if slot.session_id is None and slot.console_slot not in (
+            None,
+            ConsolePaneSlot.PROJECTS.value,
+        ):
+            # **The slot is one of the console's own panes, and not the one that is
+            # meant to step aside.** Swapping here exiles the sessions list or the
+            # feed into the agent's window, and the console comes back one pane
+            # shorter every time the owner clicks a row -- which is how a console that
+            # had already lost its surface went on to lose its sessions pane, observed
+            # 2026-08-21. The exchange below is only ever safe against the projects
+            # surface or against an agent that can be sent home first.
+            #
+            # An **unmarked** slot is deliberately still allowed: a console predating
+            # the slot marks has an unmarked surface, and refusing that would take the
+            # feature away from it to prevent damage it cannot suffer.
+            _LOG.warning(
+                "the console's left slot is its %s pane, not the projects surface; "
+                "showing %s there would exile it",
+                slot.console_slot,
+                session_id,
+            )
+            return (
+                "The console is a pane short, so showing this would cost it another "
+                "one. Restart the console and try again."
+            )
+        if slot.session_id is not None:
+            if not await self._send_home(arrangement, slot):
+                return "The session already on screen could not be put back."
+            arrangement = await self._console.pane_arrangement()
+            slot = _left_slot(arrangement)
+            agent = _pane_of(arrangement, session_id)
+            if slot is None or agent is None or slot.session_id is not None:
+                _LOG.warning("the left slot did not free up; %s is not shown", session_id)
+                return "The left pane did not free up. Try again."
+        await self._console.swap_panes(agent.pane_id, slot.pane_id)
+        return None
+
+    async def cycle_session(self, records: tuple[SessionRecord, ...], step: int) -> str | None:
+        """Choose and exchange under the same cross-process arrangement lock."""
+        if step not in (-1, 1):
+            raise ValueError("session step must be -1 or 1")
+        try:
+            async with self._links:
+                arrangement = await self._console.pane_arrangement(live_only=True)
+                slot = _left_slot(arrangement)
+                current = slot.session_id if slot else None
+                candidates = [
+                    r.session_id
+                    for r in records
+                    if r.state in _DISPLAYABLE and _pane_of(arrangement, r.session_id)
+                ]
+                if not candidates:
+                    return "No sessions to switch to."
+                if candidates == [current]:
+                    return "Only one session."
+                index = (
+                    candidates.index(current) if current in candidates else (-1 if step == 1 else 0)
+                )
+                for distance in range(1, len(candidates) + 1):
+                    target = candidates[(index + step * distance) % len(candidates)]
+                    if target == current:
+                        break
+                    arrangement = await self._console.pane_arrangement(live_only=True)
+                    if _pane_of(arrangement, target) is None:
+                        continue
+                    refused = await self._show_locked(target, arrangement)
+                    if refused:
+                        return refused
+                    shown = _left_slot(await self._console.pane_arrangement())
+                    if shown is None or shown.session_id != target:
+                        return "Could not verify the displayed session."
+                    await self._console.focus_pane(shown.pane_id)
+                    return None
+                return "No other sessions to switch to."
+        except ConsoleBusy:
+            return "The console is busy. Try again."
+        finally:
+            await self._reassert_panes()
+
+    async def focus_session(self, session_id: SessionId) -> bool:
+        async with self._links:
+            slot = _left_slot(await self._console.pane_arrangement())
+            if slot is None or slot.session_id != session_id:
+                return False
+            await self._console.focus_pane(slot.pane_id)
+            return True
+
+    async def displayed_session(self) -> SessionId | None:
+        """The agent currently displayed in the left slot, independent of the list cursor."""
+        slot = _left_slot(await self._console.pane_arrangement())
+        return slot.session_id if slot is not None else None
+
+    async def present_overlay(self, pane_id: str) -> SessionId | None:
+        """Show the Projects surface, remembering the agent displaced by this overlay."""
+        try:
+            async with self._links:
+                arrangement = await self._console.pane_arrangement()
+                surface = _surface(arrangement)
+                if surface is None or surface.pane_id != pane_id:
+                    return None
+                slot = _left_slot(arrangement)
+                if slot is None:
+                    raise ValueError("The console has no left pane.")
+                previous = slot.session_id
+                if previous and not await self._send_home(arrangement, slot):
+                    raise ValueError("Could not show the console surface.")
+                await self._console.focus_pane(pane_id)
+                return previous
+        finally:
+            await self._reassert_panes()
 
     async def show_projects(self) -> None:
         """Bring the projects surface back to the left slot, wherever the exchange left it.
@@ -1716,7 +1755,8 @@ def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
 
 def _pane_of(arrangement: tuple[HostedPane, ...], session_id: SessionId) -> HostedPane | None:
     """The pane carrying one identity in its own right, or None if nothing does."""
-    return next((pane for pane in arrangement if pane.session_id == session_id), None)
+    matches = {pane.pane_id: pane for pane in arrangement if pane.session_id == session_id}
+    return next(iter(matches.values())) if len(matches) == 1 else None
 
 
 def _surface(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
