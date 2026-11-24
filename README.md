@@ -242,17 +242,14 @@ Check the result at any time:
 remote-agents doctor --json | python -m json.tool
 ```
 
-The configured owner sees `/launch`, `/resume`, `/sessions`, and `/help` in Telegram's command
-menu, which names the same places the navigation bar does. `/start` stays registered because
-Telegram requires it of every bot, and lands where `/sessions` lands: the paginated list of
-current managed sessions, whose heading carries the total, active, and preserved counts.
-`/launch` opens the paginated project list and `/resume` its resume counterpart.
-There is no Home screen — every screen closes with a fixed `Sessions · Launch · Resume` row,
-so the three destinations are one press away from wherever you are rather than one press away from a
-dashboard in front of them. The row marks the flow you are standing in, and carries no
-`Resume` at all on a host that wired no conversation service; `/resume` stays in the menu
-there, because Telegram sets that menu once for the chat rather than per screen, and answers
-that resuming is unavailable. `/help` names the actions this deployment actually offers. Search, renaming, and
+The owner’s Telegram menu includes `/sessions`, `/launch`, `/resume`, `/settings` and `/help`.
+`/start` opens Sessions, with counts of total, active and preserved sessions. Every navigable
+screen ends with **Sessions · Launch · Resume · Settings** and marks its current destination.
+Hosts without conversation support omit Resume from the row and explain its absence on `/resume`.
+Settings groups machine-wide controls under **Remote Control**, **Usage limits** and **Recovery**.
+**Codex launch permissions** opens the default picker directly. Launch and Resume also offer
+one-session overrides. Where supported, `/remote` opens Codex host controls directly.
+`/help` describes the controls this deployment offers. Search, renaming, and
 project creation use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
 leaving an input step stranded. Choosing an agent launches the session immediately — there is no
 review step and no label to supply first — and a session is named afterwards, or never, with
@@ -271,7 +268,7 @@ it drew, so a press that lands after a redraw says the screen has moved on and s
 sessions list.
 
 Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it,
-on its own row, above the fixed `Sessions · Launch · Resume` bar. A screen reachable from
+on its own row, above the fixed navigation bar. A screen reachable from
 everywhere has no parent, so both project pickers carry no `Back` at all. There is no
 `Refresh`: every screen re-derives what it shows on entry, so the view whose answer goes
 stale on its own — the sessions list, and the counts in its heading — is current whenever you

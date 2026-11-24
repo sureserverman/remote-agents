@@ -122,6 +122,7 @@ async def test_settings_opens_with_both_providers_reading_their_own_value() -> N
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Remote Control")), None)
 
     screen = chat.bot_messages[0]
     assert _claude_label(screen) == (
@@ -145,6 +146,7 @@ async def test_three_presses_of_the_claude_row_walk_the_cycle_and_come_home() ->
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Remote Control")), None)
     anchor = chat.bot_messages[0].message_id
     seen = [_claude_label(chat.messages[anchor])]
     for _ in range(3):
@@ -173,6 +175,7 @@ async def test_the_codex_row_hands_the_owner_to_the_host_screen_it_already_had()
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Remote Control")), None)
     anchor = chat.bot_messages[0].message_id
     codex_row = _row(chat.messages[anchor], HOST_REMOTE_CONTROL_TITLE)
     await boundary.callback(chat.press(codex_row), None)
@@ -194,8 +197,7 @@ async def test_a_host_that_wired_neither_row_is_told_rather_than_left_pressing()
     await boundary.settings_command(chat.message_update("/settings"), None)
 
     screen = chat.bot_messages[0]
-    assert f"{REMOTE_CONTROL_DEFAULT_TITLE} is unavailable." in screen.text, screen.text
-    assert f"{HOST_REMOTE_CONTROL_TITLE} is unavailable." in screen.text, screen.text
+    assert "Remote Control is unavailable." in screen.text
     assert not any(
         label.startswith((REMOTE_CONTROL_DEFAULT_TITLE, HOST_REMOTE_CONTROL_TITLE))
         for label in _labels(screen)
@@ -255,6 +257,7 @@ async def test_the_owner_switches_resume_after_limit_off_and_back_on_through_the
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Recovery")), None)
     anchor = chat.bot_messages[0].message_id
     assert f"{RESUME_TITLE}: {RESUME_LABELS[True]}" in _labels(chat.messages[anchor])
 
@@ -282,6 +285,7 @@ async def test_the_owner_switches_auto_rollover_on_and_back_off_through_the_chat
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Recovery")), None)
     anchor = chat.bot_messages[0].message_id
     assert f"{ROLLOVER_TITLE}: {ROLLOVER_LABELS[False]}" in _labels(chat.messages[anchor])
 
@@ -315,6 +319,7 @@ async def test_the_owner_switches_resume_interrupted_off_and_back_on_through_the
     chat = FakeChat()
 
     await boundary.settings_command(chat.message_update("/settings"), None)
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Recovery")), None)
     anchor = chat.bot_messages[0].message_id
     title = RESTART_RESUME_TITLE
     assert f"{title}: {RESTART_RESUME_LABELS[True]}" in _labels(chat.messages[anchor])
@@ -342,3 +347,51 @@ async def test_settings_tab_rebinds_buttons_after_an_uneditable_anchor() -> None
     chat.bot.edit_error = None
     await boundary.callback(chat.press(_button(current, "Launch")), None)
     assert _rows(current)[-1][1] == "• Launch"
+
+
+async def test_two_settings_survive_recomposition_and_a_bound_button_still_works(tmp_path):
+    from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+    from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+    from remote_agents.adapters.sqlite.database import open_ui_database
+    from remote_agents.application.early_reset_setting import EARLY_RESET_TITLE
+    from remote_agents.application.resume_setting import RESUME_TITLE
+    from remote_agents.composition.limits_source import ConfigEarlyResetSetting, ConfigResumeSetting
+
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    chat = FakeChat()
+
+    def compose(connection):
+        return build_private_bot(
+            7,
+            11,
+            backend=replace(
+                backend_for(sessions=_NoSessions()),
+                resume_after_limit=ConfigResumeSetting(config),
+                early_reset_notice=ConfigEarlyResetSetting(config),
+            ),
+            callbacks=SQLiteCallbackStateStore(connection),
+            anchors=SQLiteChatViewStore(connection),
+        )
+
+    database = tmp_path / "ui.sqlite3"
+    with open_ui_database(database) as first:
+        bot = compose(first)
+        await bot.sessions_command(chat.message_update("/sessions"), None)
+        anchor = chat.bot_messages[0]
+        for label in ("Settings", "Usage limits"):
+            await bot.callback(chat.press(_button(anchor, label)), None)
+        await bot.callback(chat.press(_row(anchor, EARLY_RESET_TITLE)), None)
+        await bot.callback(chat.press(_button(anchor, "‹ Back to Settings")), None)
+        await bot.callback(chat.press(_button(anchor, "Recovery")), None)
+        token = _row(anchor, RESUME_TITLE)
+    first.close()
+
+    with open_ui_database(database) as second:
+        restored = compose(second)
+        await restored.callback(chat.press(token), None)
+        assert "<b>Recovery</b>" in anchor.text
+        assert await restored.backend.resume_after_limit.read() is False
+        assert await restored.backend.early_reset_notice.read() == "6h"
+        assert len(chat.bot_messages) == 1
+    second.close()

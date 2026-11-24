@@ -6,7 +6,7 @@ qualification remains an independent final gate.
 
 ## WF-CONT-001 — Default and one-session override
 
-- **Entry:** Telegram `/settings` → `PrivateBotBoundary._settings_permissions_reply` and
+- **Entry:** Telegram Settings tab or `/settings` → Codex launch permissions → `SettingsScreens._settings_permissions_reply` and
   launch/resume selectors in `adapters/telegram/service.py`; terminal Settings →
   `SettingsScreen.choose_permissions`, `ProfilesScreen` and `ResumeConversationsScreen`.
 - **Preconditions:** A descriptor declares the provider's permission capability; the persisted

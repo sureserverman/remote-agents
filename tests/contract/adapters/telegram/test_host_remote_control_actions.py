@@ -81,7 +81,7 @@ async def _act(bot: PrivateBotBoundary, direction: RemoteControlState) -> dict[s
     confirmation that acted on its own would still pass a test that only called the second
     half.
     """
-    screen = await bot._host_remote_control_reply()
+    screen = await bot.settings._host_remote_control_reply()
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(
         _token(screen, HOST_REMOTE_CONTROL_LABELS[direction]),
@@ -90,9 +90,9 @@ async def _act(bot: PrivateBotBoundary, direction: RemoteControlState) -> dict[s
         message_id=1,
     )
     assert state is not None and state.action == "host.remote"
-    confirmation = await bot._host_remote_control_confirm_reply(state.entity_id)
+    confirmation = await bot.settings._host_remote_control_confirm_reply(state.entity_id)
     bot.callbacks.bind_pending(CHAT, 1)
-    return await bot._host_remote_control_act_reply(
+    return await bot.settings._host_remote_control_act_reply(
         state.entity_id, _token(confirmation, HOST_REMOTE_CONTROL_LABELS[direction]), 1
     )
 
@@ -117,7 +117,7 @@ async def test_the_menu_lists_the_host_toggle_only_where_it_is_wired() -> None:
 async def test_the_screen_reads_the_daemon_and_offers_the_one_open_direction() -> None:
     control = FakeHostRemoteControl(HostConnection.DISABLED)
 
-    screen = await _bot(control)._host_remote_control_reply()
+    screen = await _bot(control).settings._host_remote_control_reply()
 
     assert ON in _labels(screen), _labels(screen)
     assert OFF not in _labels(screen), "a host already off is not offered off again"
@@ -136,7 +136,7 @@ async def test_the_daemons_name_for_this_machine_passes_the_boundary_encoder() -
     control = FakeHostRemoteControl(HostConnection.CONNECTED)
     control.server_name = "<b>Paisley</b> & sons"
 
-    screen = await _bot(control)._host_remote_control_reply()
+    screen = await _bot(control).settings._host_remote_control_reply()
 
     assert "&lt;b&gt;Paisley&lt;/b&gt; &amp; sons" in screen.text, screen.text
     assert "<b>Paisley</b>" not in screen.text
@@ -146,11 +146,11 @@ async def test_the_direction_is_confirmed_before_anything_reaches_the_host() -> 
     control = FakeHostRemoteControl(HostConnection.DISABLED)
     bot = _bot(control)
 
-    screen = await bot._host_remote_control_reply()
+    screen = await bot.settings._host_remote_control_reply()
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(_token(screen, ON), owner_id=OWNER, chat_id=CHAT, message_id=1)
     assert state is not None
-    confirmation = await bot._host_remote_control_confirm_reply(state.entity_id)
+    confirmation = await bot.settings._host_remote_control_confirm_reply(state.entity_id)
 
     assert control.calls == ["status"], "the first press asks, it does not act"
     assert ON in _labels(confirmation), _labels(confirmation)
@@ -201,15 +201,15 @@ async def test_the_key_is_the_confirmation_token_the_owner_actually_pressed() ->
     """Where the key comes from, stated once: the mutation token of that exact press."""
     control = FakeHostRemoteControl(HostConnection.DISABLED)
     bot = _bot(control)
-    screen = await bot._host_remote_control_reply()
+    screen = await bot.settings._host_remote_control_reply()
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(_token(screen, ON), owner_id=OWNER, chat_id=CHAT, message_id=1)
     assert state is not None
-    confirmation = await bot._host_remote_control_confirm_reply(state.entity_id)
+    confirmation = await bot.settings._host_remote_control_confirm_reply(state.entity_id)
     bot.callbacks.bind_pending(CHAT, 1)
     token = _token(confirmation, ON)
 
-    await bot._host_remote_control_act_reply(state.entity_id, token, 1)
+    await bot.settings._host_remote_control_act_reply(state.entity_id, token, 1)
 
     assert control.claimed == {token}
 
@@ -218,17 +218,17 @@ async def test_a_replayed_confirmation_never_reaches_the_host() -> None:
     """DEC-011: the token is claimed once, and the second delivery says so instead of acting."""
     control = FakeHostRemoteControl(HostConnection.DISABLED)
     bot = _bot(control)
-    screen = await bot._host_remote_control_reply()
+    screen = await bot.settings._host_remote_control_reply()
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(_token(screen, ON), owner_id=OWNER, chat_id=CHAT, message_id=1)
     assert state is not None
-    confirmation = await bot._host_remote_control_confirm_reply(state.entity_id)
+    confirmation = await bot.settings._host_remote_control_confirm_reply(state.entity_id)
     bot.callbacks.bind_pending(CHAT, 1)
     token = _token(confirmation, ON)
-    await bot._host_remote_control_act_reply(state.entity_id, token, 1)
+    await bot.settings._host_remote_control_act_reply(state.entity_id, token, 1)
     acted = list(control.calls)
 
-    replay = await bot._host_remote_control_act_reply(state.entity_id, token, 1)
+    replay = await bot.settings._host_remote_control_act_reply(state.entity_id, token, 1)
 
     assert "already run" in replay["text"]
     assert control.calls == acted, "the redelivery stopped at the token, not at the daemon"
@@ -242,10 +242,10 @@ async def test_a_machine_that_never_answered_does_not_read_as_a_daemon_that_did(
     path fails that way. Conflating them left an owner pressing a button that could never
     explain itself, so the wording has to name the missing program.
     """
-    errored = await _bot(FakeHostRemoteControl(HostConnection.ERRORED))._host_remote_control_reply()
+    errored = await _bot(FakeHostRemoteControl(HostConnection.ERRORED)).settings._host_remote_control_reply()
     unreachable = await _bot(
         FakeHostRemoteControl(HostConnection.UNREACHABLE)
-    )._host_remote_control_reply()
+    ).settings._host_remote_control_reply()
 
     assert errored.text != unreachable.text
     assert "broken" in errored.text and "broken" not in unreachable.text
@@ -273,7 +273,7 @@ async def test_each_connection_the_daemon_can_report_reads_as_its_own_word() -> 
     """
     readings = {
         connection: _reading(
-            await _bot(FakeHostRemoteControl(connection))._host_remote_control_reply()
+            await _bot(FakeHostRemoteControl(connection)).settings._host_remote_control_reply()
         )
         for connection in HostConnection
     }
@@ -284,9 +284,9 @@ async def test_each_connection_the_daemon_can_report_reads_as_its_own_word() -> 
 async def test_a_host_that_wired_no_toggle_says_so_at_every_door() -> None:
     bot = _bot(None)
 
-    screen = await bot._host_remote_control_reply()
-    confirmation = await bot._host_remote_control_confirm_reply("active")
-    acted = await bot._host_remote_control_act_reply("active", "token", 1)
+    screen = await bot.settings._host_remote_control_reply()
+    confirmation = await bot.settings._host_remote_control_confirm_reply("active")
+    acted = await bot.settings._host_remote_control_act_reply("active", "token", 1)
 
     for text in (screen.text, confirmation.text, acted["text"]):
         assert "unavailable" in text, text
@@ -425,7 +425,7 @@ async def _pair(bot: PrivateBotBoundary) -> Sent:
 )
 async def test_pairing_is_offered_where_there_is_a_link_to_pair_to(connection) -> None:
     bot = _bot(FakeHostRemoteControl(connection))
-    assert "Pair a phone" in _labels(await bot._host_remote_control_reply())
+    assert "Pair a phone" in _labels(await bot.settings._host_remote_control_reply())
 
 
 @pytest.mark.parametrize(
@@ -441,7 +441,7 @@ async def test_pairing_is_offered_where_there_is_a_link_to_pair_to(connection) -
 async def test_pairing_is_not_offered_where_a_code_would_expire_unused(connection) -> None:
     """An action that was never available must not render as one that is broken."""
     bot = _bot(FakeHostRemoteControl(connection))
-    assert "Pair a phone" not in _labels(await bot._host_remote_control_reply())
+    assert "Pair a phone" not in _labels(await bot.settings._host_remote_control_reply())
 
 
 async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:

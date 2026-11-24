@@ -120,7 +120,7 @@ async def test_a_refused_trust_answer_keeps_the_question_answerable() -> None:
 @pytest.mark.asyncio
 async def test_a_refused_toggle_says_a_codex_session_is_still_starting() -> None:
     boundary = _boundary()
-    reply = await boundary._host_remote_control_act_reply(
+    reply = await boundary.settings._host_remote_control_act_reply(
         "active", _claimed(boundary, "host.remote.act", "active"), 1
     )
 

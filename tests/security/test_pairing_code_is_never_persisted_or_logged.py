@@ -505,7 +505,7 @@ async def test_a_remembered_screen_is_still_re_sent_so_the_guard_is_not_vacuous(
 
     _, backend = _surface_backend()
     boundary = build_private_bot(_OWNER, _CHAT, backend=backend)
-    ordinary = await boundary._host_remote_control_reply()
+    ordinary = await boundary.settings._host_remote_control_reply()
     view = LiveView(chat_id=_CHAT, anchors=_Anchors(), callbacks=boundary.callbacks)
     bot = _Bot()
 

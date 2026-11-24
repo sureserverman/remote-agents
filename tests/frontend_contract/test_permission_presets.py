@@ -212,8 +212,8 @@ async def test_settings_on_both_surfaces_persist_the_same_explicit_choices(
         await select(app, pilot, "settings:codex-permissions")
         await select(app, pilot, choice.value)
         assert await settings.read() == choice.value
-    reopened = await bot._settings_screen()
-    assert choice.label in " ".join(item.text for row in reopened.keyboard for item in row)
+    reopened = await bot.settings._permission_question("settings", "default")
+    assert any(item.text == f"{choice.label} ✓" for row in reopened.keyboard for item in row)
 
 
 @pytest.mark.parametrize("resume", [False, True], ids=["fresh", "resume"])
@@ -391,7 +391,7 @@ async def test_open_surfaces_refresh_after_another_process_saves(settings, tmp_p
     import sys
 
     bot = bot_for(settings)
-    await bot._settings_screen()
+    await bot.settings._permission_question("settings", "default")
     app = app_for(settings)
     async with app.run_test() as pilot:
         await app.show_settings()
@@ -411,8 +411,8 @@ async def test_open_surfaces_refresh_after_another_process_saves(settings, tmp_p
             "Ask me" in str(options.get_option_at_index(i).prompt)
             for i in range(options.option_count)
         )
-        screen = await bot._settings_screen()
-        assert any("Ask me" in item.text for row in screen.keyboard for item in row)
+        screen = await bot.settings._permission_question("settings", "default")
+        assert any(item.text == "Ask me ✓" for row in screen.keyboard for item in row)
 
 
 @pytest.mark.parametrize(

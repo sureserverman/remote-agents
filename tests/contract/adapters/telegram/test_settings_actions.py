@@ -1,51 +1,4 @@
-"""The bot's Settings screen: rows about this machine, their vocabularies kept apart.
-
-Sibling of `test_host_remote_control_actions.py` and deliberately not an extension of it. That
-one covers the screen whose whole subject is the Codex daemon; this one covers the screen where
-that daemon's reading sits beside Claude's stored default and beside where Claude's plan limits
-are read from -- three facts about this machine that no single row could state, which is the
-reason DEC-071 calls the first two siblings rather than one generalised toggle.
-
-What is pinned:
-
-* `/settings` is listed in the command menu and named in `/help`, so the screen is reachable
-  without the owner knowing a word this project never told them;
-* the two provider rows render the value they currently have, each read from its own
-  provider -- the file
-  for Claude, the daemon for Codex -- and reading is a read: nothing is claimed and nothing
-  acts;
-* one press of the Claude row advances the cycle by exactly one, writes that, and the screen
-  that comes back has read the new value rather than assumed it; three presses return it to
-  where it started, which is what makes one row able to reach all three states;
-* the Codex row delegates: its press lands on the shipped host screen and reaches
-  `HostRemoteControlService.set_state` through the confirmation that screen already asks --
-  the Claude port is never touched on the way;
-* a row whose provider this composition did not wire says so on the screen rather than
-  vanishing from it (DEC-061/067);
-* no row's label spells two states at once -- `on|off` tells the owner the pair and not which
-  one they are in -- and `PROVIDER_DEFAULT` is never worded as any form of off, because an
-  unset `remoteControlAtStartup` measured *connected* on this owner's account
-  (`docs/acceptance-2026-09-11-surface-refresh.md` section 8);
-* the screen closes with Back to sessions above the fixed navigation bar (DEC-032).
-
-The third row arrived with sub-plan 02's Task 1.4 and is pinned below the two above it. What it
-adds to this list:
-
-* three rows in order, and only three -- the terminal's theme and project-order rows have no
-  business on a phone, asserted against the rendered labels rather than by grepping the module;
-* one press advances the cycle by exactly one and the screen that comes back has *read* the
-  result, with the advance taken from that read and never from the value the button was drawn
-  with (a token outlives its screen, DEC-011);
-* a redelivered callback does not advance twice (`mutation=True`), because this is the row
-  whose write decides whether the service reads a credential and calls out;
-* a refused write says so rather than redrawing an unchanged row -- `write_limits_key` declines
-  several files an owner can hand-edit and cannot raise to say which, so the refusal is found by
-  the read-back;
-* `/help` names the screen on a host that wired *only* this row, which it did not until the
-  gate was widened with the screen;
-* every mark this surface puts on a button is one `unmarked` can take off, swept from the
-  module's own constants rather than kept as a list somebody has to remember.
-"""
+"""Telegram machine settings, capability visibility, confirmation and saved-value contracts."""
 
 import re
 from dataclasses import replace
@@ -211,7 +164,7 @@ async def test_both_rows_read_the_value_they_currently_have() -> None:
     claude = FakeClaudeDefault(RemoteControlDefault.OFF)
     codex = FakeHostRemoteControl(HostConnection.CONNECTED)
 
-    screen = await _bot(claude, codex)._settings_screen()
+    screen = await _bot(claude, codex).settings.remote()
 
     assert _row_label(screen, REMOTE_CONTROL_DEFAULT_TITLE) == (
         f"{REMOTE_CONTROL_DEFAULT_TITLE}: {REMOTE_CONTROL_DEFAULT_LABELS[RemoteControlDefault.OFF]}"
@@ -232,7 +185,7 @@ async def test_the_claude_row_renders_every_state_in_the_shared_words(current) -
     Parametrised over the enum rather than over a list written here, so a fourth state cannot
     be added to the domain and silently render as nothing on this screen.
     """
-    screen = await _bot(FakeClaudeDefault(current), None)._settings_screen()
+    screen = await _bot(FakeClaudeDefault(current), None).settings.remote()
 
     assert _row_label(screen, REMOTE_CONTROL_DEFAULT_TITLE).endswith(
         REMOTE_CONTROL_DEFAULT_LABELS[current]
@@ -249,7 +202,7 @@ async def test_pressing_the_claude_row_writes_the_next_state_and_reads_it_back()
     """
     claude = FakeClaudeDefault(RemoteControlDefault.ON)
     bot = _bot(claude, None)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.remote()
 
     result = await _press_claude(bot, screen)
 
@@ -271,7 +224,7 @@ async def test_three_presses_return_the_setting_to_where_it_started() -> None:
     seen = [claude.value]
 
     for _ in range(3):
-        await _press_claude(bot, await bot._settings_screen())
+        await _press_claude(bot, await bot.settings.remote())
         seen.append(claude.value)
 
     assert seen[-1] is RemoteControlDefault.ON, seen
@@ -287,7 +240,7 @@ async def test_every_claude_press_mints_its_own_idempotency_key() -> None:
     """
     claude = FakeClaudeDefault(RemoteControlDefault.ON)
     bot = _bot(claude, None)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.remote()
     label = _row_label(screen, REMOTE_CONTROL_DEFAULT_TITLE)
     token = _token(screen, label)
     bot.callbacks.bind_pending(CHAT, 1)
@@ -312,7 +265,7 @@ async def test_the_codex_row_reaches_the_daemon_and_leaves_claude_alone() -> Non
     claude = FakeClaudeDefault(RemoteControlDefault.ON)
     codex = FakeHostRemoteControl(HostConnection.DISABLED)
     bot = _bot(claude, codex)
-    settings = await bot._settings_screen()
+    settings = await bot.settings.remote()
     claude_calls_before = list(claude.calls)
 
     bot.callbacks.bind_pending(CHAT, 1)
@@ -334,9 +287,9 @@ async def test_the_codex_row_reaches_the_daemon_and_leaves_claude_alone() -> Non
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(direction_token, owner_id=OWNER, chat_id=CHAT, message_id=1)
     assert state is not None and state.action == "host.remote"
-    confirmation = await bot._host_remote_control_confirm_reply(state.entity_id)
+    confirmation = await bot.settings._host_remote_control_confirm_reply(state.entity_id)
     bot.callbacks.bind_pending(CHAT, 1)
-    await bot._host_remote_control_act_reply(state.entity_id, _token(confirmation, on), 1)
+    await bot.settings._host_remote_control_act_reply(state.entity_id, _token(confirmation, on), 1)
 
     assert HOST_REMOTE_CONTROL_TITLE in host["text"], "the row led to the host's own screen"
     assert codex.calls == ["status", "status", "set_state:active", "status"], codex.calls
@@ -353,7 +306,7 @@ async def test_a_composition_with_no_claude_port_says_so_rather_than_hiding_the_
     What must not happen is the row simply not being there -- an owner cannot tell a missing
     capability from a missing feature.
     """
-    screen = await _bot(None, FakeHostRemoteControl(HostConnection.DISABLED))._settings_screen()
+    screen = await _bot(None, FakeHostRemoteControl(HostConnection.DISABLED)).settings.remote()
 
     assert f"{REMOTE_CONTROL_DEFAULT_TITLE} is unavailable." in screen.text, screen.text
     assert not any(label.startswith(REMOTE_CONTROL_DEFAULT_TITLE) for label in _labels(screen)), (
@@ -365,7 +318,7 @@ async def test_a_composition_with_no_claude_port_says_so_rather_than_hiding_the_
 
 
 async def test_a_composition_with_no_codex_control_says_so_rather_than_hiding_the_row() -> None:
-    screen = await _bot(FakeClaudeDefault(), None)._settings_screen()
+    screen = await _bot(FakeClaudeDefault(), None).settings.remote()
 
     assert f"{HOST_REMOTE_CONTROL_TITLE} is unavailable." in screen.text, screen.text
     assert not any(label.startswith(HOST_REMOTE_CONTROL_TITLE) for label in _labels(screen))
@@ -373,7 +326,7 @@ async def test_a_composition_with_no_codex_control_says_so_rather_than_hiding_th
 
 
 async def test_a_host_that_wired_neither_row_still_draws_a_screen() -> None:
-    screen = await _bot(None, None)._settings_screen()
+    screen = await _bot(None, None).settings.remote()
 
     assert f"{REMOTE_CONTROL_DEFAULT_TITLE} is unavailable." in screen.text
     assert f"{HOST_REMOTE_CONTROL_TITLE} is unavailable." in screen.text
@@ -391,7 +344,7 @@ async def test_no_row_label_spells_two_states_at_once(current, connection) -> No
     """
     screen = await _bot(
         FakeClaudeDefault(current), FakeHostRemoteControl(connection)
-    )._settings_screen()
+    ).settings.remote()
 
     for label in _labels(screen):
         words = set(re.findall(r"\b(?:on|off)\b", label))
@@ -403,15 +356,15 @@ async def test_no_row_label_spells_two_states_at_once(current, connection) -> No
         )
 
 
-async def test_the_settings_root_closes_with_the_navigation_bar() -> None:
+async def test_the_remote_control_page_closes_with_back_and_the_navigation_bar() -> None:
     """DEC-032: one bar, one choke point, appended by `_message` and never by a screen."""
     screen = await _bot(
         FakeClaudeDefault(), FakeHostRemoteControl(HostConnection.DISABLED)
-    )._settings_screen()
+    ).settings.remote()
 
     rows = _rows(screen)
     assert rows[-1] == ["Sessions", "Launch", "Settings"], rows
-    assert all("Back to sessions" not in label for row in rows for label in row)
+    assert rows[-2] == ["‹ Back to Settings"]
     assert all(len(row) == 1 for row in rows[:-1]), f"every row is one answer wide: {rows}"
 
 
@@ -429,7 +382,7 @@ async def test_a_refused_write_says_so_rather_than_redrawing_an_unchanged_row() 
     """
     claude = FakeClaudeDefault(RemoteControlDefault.ON, refuse=True)
     bot = _bot(claude, None)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.remote()
 
     result = await _press_claude(bot, screen)
 
@@ -494,20 +447,18 @@ async def _press_limits_source(bot: PrivateBotBoundary, screen) -> dict[str, obj
     return await bot._reply_for(state.action, state.entity_id, token=token, message_id=1)
 
 
-async def test_the_screen_renders_three_rows_in_order() -> None:
-    """Three rows and no more: the two terminal preferences have no business on a phone."""
-    from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
-
-    screen = await _bot_with_limits_source(
-        FakeClaudeDefault(), FakeHostRemoteControl(HostConnection.CONNECTED), FakeLimitsSource()
-    )._settings_screen()
-
-    titles = [label.split(":")[0] for label in _labels(screen) if ":" in label]
-    assert titles[:3] == [
-        REMOTE_CONTROL_DEFAULT_TITLE,
-        HOST_REMOTE_CONTROL_TITLE,
-        LIMITS_SOURCE_TITLE,
-    ], _labels(screen)
+async def test_the_root_lists_only_available_groups_without_reading_their_ports() -> None:
+    source = FakeLimitsSource()
+    claude = FakeClaudeDefault()
+    host = FakeHostRemoteControl(HostConnection.CONNECTED)
+    bot = _bot_with_limits_source(claude, host, source)
+    screen = bot.settings.root()
+    assert [row[0] for row in _rows(screen)[:-1]] == ["Remote Control", "Usage limits"]
+    assert "Recovery is unavailable." in screen.text
+    assert source.calls == claude.calls == host.calls == []
+    await bot.settings.limits()
+    assert source.calls == ["read"]
+    assert claude.calls == host.calls == []
 
 
 async def test_the_limits_source_row_reads_the_value_it_currently_has() -> None:
@@ -515,7 +466,7 @@ async def test_the_limits_source_row_reads_the_value_it_currently_has() -> None:
 
     source = FakeLimitsSource("usage-api")
 
-    screen = await _bot_with_limits_source(None, None, source)._settings_screen()
+    screen = await _bot_with_limits_source(None, None, source).settings.limits()
 
     assert _row_label(screen, LIMITS_SOURCE_TITLE) == (
         f"{LIMITS_SOURCE_TITLE}: {LIMITS_SOURCE_LABELS['usage-api']}"
@@ -528,7 +479,7 @@ async def test_pressing_the_limits_source_row_advances_by_one_and_reads_it_back(
 
     source = FakeLimitsSource("status-line")
     bot = _bot_with_limits_source(None, None, source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     result = await _press_limits_source(bot, screen)
 
@@ -547,7 +498,7 @@ async def test_two_presses_return_the_limits_source_to_where_it_started() -> Non
     bot = _bot_with_limits_source(None, None, source)
 
     for _ in range(2):
-        screen = await bot._settings_screen()
+        screen = await bot.settings.limits()
         await _press_limits_source(bot, screen)
 
     assert source.value == "status-line"
@@ -560,7 +511,7 @@ async def test_a_redelivered_limits_source_callback_does_not_advance_twice() -> 
 
     source = FakeLimitsSource("status-line")
     bot = _bot_with_limits_source(None, None, source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
     token = _token(screen, _row_label(screen, LIMITS_SOURCE_TITLE))
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
@@ -580,7 +531,7 @@ async def test_a_refused_limits_source_write_says_so_rather_than_redrawing_an_un
 
     source = FakeLimitsSource("status-line", refuse=True)
     bot = _bot_with_limits_source(None, None, source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     result = await _press_limits_source(bot, screen)
 
@@ -596,7 +547,7 @@ async def test_a_composition_with_no_limits_source_says_so_rather_than_hiding_th
     lacks from a feature this bot lost."""
     from remote_agents.application.limits_source import LIMITS_SOURCE_TITLE
 
-    screen = await _bot_with_limits_source(FakeClaudeDefault(), None, None)._settings_screen()
+    screen = await _bot_with_limits_source(FakeClaudeDefault(), None, None).settings.limits()
 
     assert LIMITS_SOURCE_TITLE not in _labels(screen)
     assert f"{LIMITS_SOURCE_TITLE} is unavailable." in screen.text
@@ -614,7 +565,7 @@ async def test_the_bot_settings_screen_carries_no_terminal_preference() -> None:
 
     screen = await _bot_with_limits_source(
         FakeClaudeDefault(), FakeHostRemoteControl(HostConnection.CONNECTED), FakeLimitsSource()
-    )._settings_screen()
+    ).settings.limits()
 
     for word in (preferences.THEME_TITLE, preferences.PROJECT_ORDER_TITLE):
         assert all(word not in label for label in _labels(screen)), _labels(screen)
@@ -724,7 +675,7 @@ async def test_the_resume_row_reads_on_by_default() -> None:
 
     setting = FakeResumeSetting()
 
-    screen = await _bot_with_resume(setting)._settings_screen()
+    screen = await _bot_with_resume(setting).settings.recovery()
 
     assert _row_label(screen, RESUME_TITLE) == f"{RESUME_TITLE}: {RESUME_LABELS[True]}"
     assert setting.calls == ["read"], "drawing the screen reads; it must not write"
@@ -735,7 +686,7 @@ async def test_pressing_the_resume_row_flips_it_and_reads_it_back() -> None:
 
     setting = FakeResumeSetting(True)
     bot = _bot_with_resume(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
 
     result = await _press_resume(bot, screen)
 
@@ -754,7 +705,7 @@ async def test_a_redelivered_resume_callback_does_not_flip_twice() -> None:
 
     setting = FakeResumeSetting(True)
     bot = _bot_with_resume(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
     token = _token(screen, _row_label(screen, RESUME_TITLE))
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
@@ -772,7 +723,7 @@ async def test_a_refused_resume_write_says_so() -> None:
 
     setting = FakeResumeSetting(True, refuse=True)
     bot = _bot_with_resume(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
 
     result = await _press_resume(bot, screen)
 
@@ -784,7 +735,7 @@ async def test_a_refused_resume_write_says_so() -> None:
 async def test_a_composition_with_no_resume_setting_says_so_rather_than_hiding_the_row() -> None:
     from remote_agents.application.resume_setting import RESUME_TITLE
 
-    screen = await _bot_with_resume(None)._settings_screen()
+    screen = await _bot_with_resume(None).settings.recovery()
 
     assert f"{RESUME_TITLE} is unavailable." in screen.text, screen.text
     assert not any(label.startswith(RESUME_TITLE) for label in _labels(screen))
@@ -824,7 +775,7 @@ async def test_the_cursor_limits_row_reads_off_by_default() -> None:
 
     source = FakeLimitsSource("off")
 
-    screen = await _bot_with_cursor_limits(source)._settings_screen()
+    screen = await _bot_with_cursor_limits(source).settings.limits()
 
     assert _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE) == (
         f"{CURSOR_LIMITS_SOURCE_TITLE}: {CURSOR_LIMITS_SOURCE_LABELS['off']}"
@@ -841,7 +792,7 @@ async def test_pressing_the_cursor_limits_row_while_off_asks_and_writes_nothing(
 
     source = FakeLimitsSource("off")
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     asked = await _press(
         bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.ask"
@@ -865,7 +816,7 @@ async def test_confirming_cursor_limits_writes_usage_api_and_reads_it_back() -> 
 
     source = FakeLimitsSource("off")
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
     asked = await _press(
         bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.ask"
     )
@@ -890,7 +841,7 @@ async def test_a_redelivered_cursor_limits_confirmation_does_not_run_twice() -> 
 
     source = FakeLimitsSource("off")
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
     asked = _Screen(
         await _press(
             bot,
@@ -911,7 +862,7 @@ async def test_a_redelivered_cursor_limits_confirmation_does_not_run_twice() -> 
     assert "already run" in str(again["text"]), again["text"]
 
 
-async def test_cancelling_the_cursor_limits_question_returns_to_settings_unchanged() -> None:
+async def test_cancelling_the_cursor_limits_question_returns_to_usage_limits_unchanged() -> None:
     from remote_agents.application.limits_source import (
         CURSOR_LIMITS_SOURCE_LABELS,
         CURSOR_LIMITS_SOURCE_TITLE,
@@ -919,12 +870,12 @@ async def test_cancelling_the_cursor_limits_question_returns_to_settings_unchang
 
     source = FakeLimitsSource("off")
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
     asked = await _press(
         bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.ask"
     )
 
-    back = await _press(bot, _Screen(asked), "Cancel", "settings.open")
+    back = await _press(bot, _Screen(asked), "Cancel", "settings.section")
 
     assert source.value == "off"
     assert not [call for call in source.calls if call.startswith("write")]
@@ -941,7 +892,7 @@ async def test_turning_cursor_limits_off_is_one_press_and_asks_nothing() -> None
 
     source = FakeLimitsSource("usage-api")
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     result = await _press(
         bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.set"
@@ -960,7 +911,7 @@ async def test_a_cursor_limits_press_carries_its_direction_and_never_toggles() -
 
     source = FakeLimitsSource("usage-api")
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
     source.value = "off"  # the terminal's Settings screen got there first
 
     await _press(
@@ -993,7 +944,7 @@ async def test_a_refused_cursor_limits_write_says_so() -> None:
 
     source = FakeLimitsSource("usage-api", refuse=True)
     bot = _bot_with_cursor_limits(source)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     result = await _press(
         bot, screen, _row_label(screen, CURSOR_LIMITS_SOURCE_TITLE), "settings.cursor_limits.set"
@@ -1007,7 +958,7 @@ async def test_a_refused_cursor_limits_write_says_so() -> None:
 async def test_a_composition_with_no_cursor_limits_source_says_so() -> None:
     from remote_agents.application.limits_source import CURSOR_LIMITS_SOURCE_TITLE
 
-    screen = await _bot_with_cursor_limits(None)._settings_screen()
+    screen = await _bot_with_cursor_limits(None).settings.limits()
 
     assert all(not label.startswith(CURSOR_LIMITS_SOURCE_TITLE) for label in _labels(screen))
     assert f"{CURSOR_LIMITS_SOURCE_TITLE} is unavailable." in screen.text
@@ -1046,7 +997,7 @@ async def test_the_rollover_row_reads_off_by_default() -> None:
 
     setting = FakeResumeSetting(False)
 
-    screen = await _bot_with_rollover(setting)._settings_screen()
+    screen = await _bot_with_rollover(setting).settings.recovery()
 
     assert _row_label(screen, ROLLOVER_TITLE) == f"{ROLLOVER_TITLE}: {ROLLOVER_LABELS[False]}"
     assert setting.calls == ["read"], "drawing the screen reads; it must not write"
@@ -1057,7 +1008,7 @@ async def test_pressing_the_rollover_row_flips_it_and_reads_it_back() -> None:
 
     setting = FakeResumeSetting(False)
     bot = _bot_with_rollover(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
 
     result = await _press_rollover(bot, screen)
 
@@ -1076,7 +1027,7 @@ async def test_a_redelivered_rollover_callback_does_not_flip_twice() -> None:
 
     setting = FakeResumeSetting(False)
     bot = _bot_with_rollover(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
     token = _token(screen, _row_label(screen, ROLLOVER_TITLE))
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
@@ -1094,7 +1045,7 @@ async def test_a_refused_rollover_write_says_so() -> None:
 
     setting = FakeResumeSetting(False, refuse=True)
     bot = _bot_with_rollover(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
 
     result = await _press_rollover(bot, screen)
 
@@ -1106,7 +1057,7 @@ async def test_a_refused_rollover_write_says_so() -> None:
 async def test_a_composition_with_no_rollover_setting_says_so_rather_than_hiding_the_row() -> None:
     from remote_agents.application.rollover_setting import ROLLOVER_TITLE
 
-    screen = await _bot_with_rollover(None)._settings_screen()
+    screen = await _bot_with_rollover(None).settings.recovery()
 
     assert f"{ROLLOVER_TITLE} is unavailable." in screen.text, screen.text
     assert not any(label.startswith(ROLLOVER_TITLE) for label in _labels(screen))
@@ -1148,7 +1099,7 @@ async def test_the_restart_resume_row_reads_on_by_default() -> None:
 
     setting = FakeResumeSetting(True)
 
-    screen = await _bot_with_restart_resume(setting)._settings_screen()
+    screen = await _bot_with_restart_resume(setting).settings.recovery()
 
     assert (
         _row_label(screen, RESTART_RESUME_TITLE)
@@ -1165,7 +1116,7 @@ async def test_pressing_the_restart_resume_row_flips_it_and_reads_it_back() -> N
 
     setting = FakeResumeSetting(True)
     bot = _bot_with_restart_resume(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
 
     result = await _press_restart_resume(bot, screen)
 
@@ -1184,7 +1135,7 @@ async def test_a_redelivered_restart_resume_callback_does_not_flip_twice() -> No
 
     setting = FakeResumeSetting(True)
     bot = _bot_with_restart_resume(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
     token = _token(screen, _row_label(screen, RESTART_RESUME_TITLE))
     bot.callbacks.bind_pending(CHAT, 1)
     state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
@@ -1205,7 +1156,7 @@ async def test_a_refused_restart_resume_write_says_so() -> None:
 
     setting = FakeResumeSetting(True, refuse=True)
     bot = _bot_with_restart_resume(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.recovery()
 
     result = await _press_restart_resume(bot, screen)
 
@@ -1217,7 +1168,7 @@ async def test_a_refused_restart_resume_write_says_so() -> None:
 async def test_an_unwired_restart_resume_setting_says_so_rather_than_hiding_the_row() -> None:
     from remote_agents.application.restart_resume_setting import RESTART_RESUME_TITLE
 
-    screen = await _bot_with_restart_resume(None)._settings_screen()
+    screen = await _bot_with_restart_resume(None).settings.recovery()
 
     assert f"{RESTART_RESUME_TITLE} is unavailable." in screen.text, screen.text
     assert not any(label.startswith(RESTART_RESUME_TITLE) for label in _labels(screen))
@@ -1259,7 +1210,7 @@ async def test_the_early_reset_row_reads_the_stored_choice() -> None:
 
     setting = FakeLimitsSource("1h")
 
-    screen = await _bot_with_early_reset(setting)._settings_screen()
+    screen = await _bot_with_early_reset(setting).settings.limits()
 
     assert (
         _row_label(screen, EARLY_RESET_TITLE) == f"{EARLY_RESET_TITLE}: {EARLY_RESET_LABELS['1h']}"
@@ -1278,7 +1229,7 @@ async def test_pressing_the_early_reset_row_advances_it_and_reads_it_back(
 
     setting = FakeLimitsSource(before)
     bot = _bot_with_early_reset(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     result = await _press_early_reset(bot, screen)
 
@@ -1299,7 +1250,7 @@ async def test_a_refused_early_reset_write_says_so() -> None:
 
     setting = FakeLimitsSource("1h", refuse=True)
     bot = _bot_with_early_reset(setting)
-    screen = await bot._settings_screen()
+    screen = await bot.settings.limits()
 
     result = await _press_early_reset(bot, screen)
 
@@ -1311,6 +1262,26 @@ async def test_a_refused_early_reset_write_says_so() -> None:
 async def test_an_unwired_early_reset_setting_says_so_rather_than_hiding_the_row() -> None:
     from remote_agents.application.early_reset_setting import EARLY_RESET_TITLE
 
-    screen = await _bot_with_early_reset(None)._settings_screen()
+    screen = await _bot_with_early_reset(None).settings.limits()
 
     assert f"{EARLY_RESET_TITLE} is unavailable." in screen.text, screen.text
+
+
+@pytest.mark.parametrize(
+    ("capability", "entry"),
+    [
+        ("claude_remote_control_default", "Remote Control"),
+        ("host_remote_control", "Remote Control"),
+        ("claude_limits_source", "Usage limits"),
+        ("cursor_limits_source", "Usage limits"),
+        ("early_reset_notice", "Usage limits"),
+        ("resume_after_limit", "Recovery"),
+        ("resume_interrupted", "Recovery"),
+        ("auto_rollover", "Recovery"),
+        ("permission_presets", "Codex launch permissions"),
+    ],
+)
+def test_each_capability_has_one_root_destination_without_reading_it(capability, entry):
+    bot = _bot(None, None)
+    bot.backend = replace(bot.backend, **{capability: object()})
+    assert _rows(bot.settings.root())[:-1] == [[entry]]

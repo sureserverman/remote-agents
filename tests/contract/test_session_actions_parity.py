@@ -296,7 +296,7 @@ async def _telegram_host_offer(status) -> tuple[frozenset[str], bool]:
 
     control = FakeHostRemoteControl(status.connection)
     bot = build_private_bot(7, 11, backend=backend_for(host_remote_control=control))
-    screen = await bot._host_remote_control_reply()
+    screen = await bot.settings._host_remote_control_reply()
     labels = [unmarked(unpadded(button.text)) for row in screen.keyboard for button in row]
     words = frozenset(_HOST_LABELS.values())
     offered = frozenset(label for label in labels if label in words)
