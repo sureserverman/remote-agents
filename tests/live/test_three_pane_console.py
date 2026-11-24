@@ -1956,6 +1956,23 @@ async def test_console_shortcuts_reach_a_visible_destination(tmp_path, slot, age
             )
             return await _active_pane(ui.socket)
 
+        left = pane if agent else ui.panes["surface"]
+        for chord in (("F3",), ("C-b", "h")):
+            await origin()
+            for expect_folded in (not folded, folded):
+                for key in chord:
+                    await ui.press(key)
+                folded_now = await ui.gateway.console_zoomed_pane()
+                assert folded_now == (left if expect_folded else None)
+                assert await view.displayed_session() == (identity if agent else None)
+
+        for key in ("M-Left", "M-Right"):
+            prior = await origin()
+            await ui.press(key)
+            assert await view.displayed_session() == identity
+            assert await _active_pane(ui.socket) == (prior if agent else pane)
+            assert await ui.gateway.console_zoomed_pane() == (pane if folded else None)
+
         for key, visible in (
             ("F1", "Native provider F2"),
             ("F4", "No sessions are waiting"),
