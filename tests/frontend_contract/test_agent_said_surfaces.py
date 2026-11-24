@@ -88,7 +88,7 @@ async def _telegram_detail(record: SessionRecord, words: dict[str, str]) -> list
     boundary = build_private_bot(
         7, 11, backend=backend_for(sessions=_Sessions(record), last_words=_reader(words))
     )
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     return [line for line in _plain(detail.text).splitlines() if "said" in line]
 
 
@@ -152,7 +152,9 @@ async def test_the_bot_list_carries_the_line_under_the_row_in_one_read() -> None
             last_words=_reader({str(first.session_id): WORDS}, calls),
         ),
     )
-    page = _plain((await boundary._sessions_reply(records=(first, second))).text).splitlines()
+    page = _plain(
+        (await boundary.sessions._sessions_reply(records=(first, second))).text
+    ).splitlines()
 
     start = next(i for i, line in enumerate(page) if line.startswith("first-project"))
     assert page[start + 2] == LINE
@@ -170,8 +172,8 @@ async def test_a_failing_read_costs_the_line_never_the_screen() -> None:
     boundary = build_private_bot(
         7, 11, backend=backend_for(sessions=_Sessions(record), last_words=broken)
     )
-    detail = await boundary._detail_reply(str(record.session_id))
-    page = await boundary._sessions_reply(records=(record,))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
+    page = await boundary.sessions._sessions_reply(records=(record,))
 
     assert "said" not in _plain(detail.text)
     assert "said" not in _plain(page.text)
@@ -197,12 +199,12 @@ async def test_a_full_page_of_long_escaped_words_still_fits_one_message() -> Non
             last_words=_reader({str(record.session_id): worst for record in records}),
         ),
     )
-    page = await boundary._sessions_reply(records=records)
+    page = await boundary.sessions._sessions_reply(records=records)
     lines = [line for line in _plain(page.text).splitlines() if line.startswith("agent said")]
 
     assert len(lines) == 8
     assert all(len(line) <= UNIFORM_ROW_WIDTH for line in lines)
     assert all(line.endswith("…") for line in lines)
     # The detail keeps the whole line.
-    detail = await boundary._detail_reply(str(records[0].session_id))
+    detail = await boundary.sessions._detail_reply(str(records[0].session_id))
     assert f"agent said: {worst}" in _plain(detail.text)

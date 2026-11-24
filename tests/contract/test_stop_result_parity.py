@@ -141,7 +141,7 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
     # The token is minted unbound, exactly as a real render mints it; delivering the screen
     # is what makes it pressable.
     boundary.callbacks.bind_pending(11, 100)
-    reply = await boundary._stop_reply("graceful", token, 100)
+    reply = await boundary.sessions._stop_reply("graceful", token, 100)
     assert launcher.issued, "the bot never issued the stop, so this asserts nothing about it"
     return unescape(str(reply["text"]))
 
@@ -300,7 +300,7 @@ async def _telegram_said_force(record: SessionRecord, detail: str) -> str:
     )
     assert token is not None, "the bot offered no force stop, so nothing was exercised"
     boundary.callbacks.bind_pending(11, 100)
-    reply = await boundary._stop_reply(CONFIRMED_FORCE, token, 100)
+    reply = await boundary.sessions._stop_reply(CONFIRMED_FORCE, token, 100)
     assert launcher.issued, "the bot never issued the force, so this asserts nothing about it"
     return unescape(str(reply["text"]))
 

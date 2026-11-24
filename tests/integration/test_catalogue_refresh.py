@@ -340,9 +340,13 @@ async def test_ranked_catalogue_puts_the_recently_used_project_first_everywhere(
 
     boundary = await _ranked_boundary(dev_root, registry_path, [_usage(newest.opaque_id, 3, 1)])
 
-    launch = boundary._projects_reply(boundary.catalogue, view_id="all")
-    resume = boundary._projects_reply(boundary.catalogue, view_id="all", flow="resume")
-    found = boundary._projects_reply(search_catalogue(boundary.catalogue, "e"), view_id="search")
+    launch = boundary.launch_resume._projects_reply(boundary.catalogue, view_id="all")
+    resume = boundary.launch_resume._projects_reply(
+        boundary.catalogue, view_id="all", flow="resume"
+    )
+    found = boundary.launch_resume._projects_reply(
+        search_catalogue(boundary.catalogue, "e"), view_id="search"
+    )
     assert boundary.catalogue[0].name == "new-project"
     for screen in (launch, resume, found):
         assert screen.keyboard[0][0].text == "new-project", screen.text

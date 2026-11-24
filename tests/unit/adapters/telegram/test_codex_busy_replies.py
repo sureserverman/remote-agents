@@ -100,7 +100,9 @@ def _labels(reply: dict[str, object]) -> list[str]:
 async def test_a_refused_launch_says_why_and_offers_a_fresh_press() -> None:
     boundary = _boundary()
     entity = f"{PROJECT.opaque_id}|codex"
-    reply = await boundary._launch_reply(entity, _claimed(boundary, "launch.profile", entity), 1)
+    reply = await boundary.launch_resume._launch_reply(
+        entity, _claimed(boundary, "launch.profile", entity), 1
+    )
 
     assert "Codex Remote Control is changing" in str(reply["text"])
     assert "Nothing was started" in str(reply["text"])
@@ -111,7 +113,9 @@ async def test_a_refused_launch_says_why_and_offers_a_fresh_press() -> None:
 async def test_a_refused_trust_answer_keeps_the_question_answerable() -> None:
     boundary = _boundary()
     entity = str(UNTRUSTED.session_id)
-    reply = await boundary._trust_reply(entity, _claimed(boundary, "session.trust", entity), 1)
+    reply = await boundary.sessions._trust_reply(
+        entity, _claimed(boundary, "session.trust", entity), 1
+    )
 
     assert "nothing was sent" in str(reply["text"])
     assert "Trust" in _labels(reply)

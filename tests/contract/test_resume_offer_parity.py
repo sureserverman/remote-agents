@@ -125,7 +125,7 @@ async def _telegram_offers(summaries: tuple[ConversationSummary, ...]) -> set[st
     boundary = build_private_bot(
         7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=_Conversations(summaries))
     )
-    reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
+    reply = await boundary.launch_resume._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
     # The tokens are minted unbound, exactly as a real render mints them; binding them to a
     # message is what a delivered screen does and what makes `resolve` answer.
     boundary.callbacks.bind_pending(11, 100)
@@ -179,7 +179,7 @@ async def _telegram_said(summaries: tuple[ConversationSummary, ...]) -> str:
     boundary = build_private_bot(
         7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=_Conversations(summaries))
     )
-    reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
+    reply = await boundary.launch_resume._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
     return unescape(str(reply.text))
 
 
@@ -328,7 +328,7 @@ async def test_neither_surface_resumes_a_conversation_the_policy_refuses() -> No
         "resume.confirm", str(refused.reference), 7, 11, mutation=True
     )
     boundary.callbacks.bind_pending(11, 100)
-    reply = await boundary._resume_reply(str(refused.reference), token, 100)
+    reply = await boundary.launch_resume._resume_reply(str(refused.reference), token, 100)
 
     assert "cannot be resumed" in unescape(str(reply["text"])).casefold(), (
         f"the bot resumed a conversation the policy refuses: {reply['text']!r}"
@@ -388,7 +388,7 @@ async def test_both_surfaces_ask_the_catalogue_for_the_same_page_size() -> None:
     boundary = build_private_bot(
         7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=telegram_port)
     )
-    await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
+    await boundary.launch_resume._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
 
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import TuiContext

@@ -107,8 +107,8 @@ async def test_sessions_notice_leads_the_screen_without_disturbing_what_it_showe
     """
     boundary = _sessions_boundary(_a_running_session())
 
-    plain = await boundary._sessions_reply()
-    noticed = await boundary._sessions_reply(notice="Stopped Demo")
+    plain = await boundary.sessions._sessions_reply()
+    noticed = await boundary.sessions._sessions_reply(notice="Stopped Demo")
 
     assert noticed.text == f"Stopped Demo\n{plain.text}"
     header = "Stopped Demo\n<b>Sessions</b> · 1  🟢 1\n\n🟢 <b>ACTIVE</b>"
@@ -127,7 +127,7 @@ async def test_sessions_notice_is_escaped_because_it_carries_wording_from_a_fail
     """
     boundary = _sessions_boundary(_a_running_session())
 
-    rendered = await boundary._sessions_reply(notice="Stopped <b>Demo</b> & co")
+    rendered = await boundary.sessions._sessions_reply(notice="Stopped <b>Demo</b> & co")
 
     assert rendered.text.startswith("Stopped &lt;b&gt;Demo&lt;/b&gt; &amp; co\n")
     assert "<b>Demo</b>" not in rendered.text
@@ -142,8 +142,8 @@ async def test_sessions_notice_survives_the_list_being_empty() -> None:
     """
     boundary = _sessions_boundary()
 
-    plain = await boundary._sessions_reply()
-    noticed = await boundary._sessions_reply(notice="Stopped Demo")
+    plain = await boundary.sessions._sessions_reply()
+    noticed = await boundary.sessions._sessions_reply(notice="Stopped Demo")
 
     counts = " · 0"
     assert plain.text == f"<b>Sessions</b>{counts}\nNothing is running."
@@ -158,8 +158,8 @@ async def test_sessions_notice_left_unset_renders_byte_identically_to_before() -
     boundary = _sessions_boundary(_a_running_session())
 
     # The counts are the header now; what this pins is that `None` adds nothing to it.
-    plain = (await boundary._sessions_reply()).text
+    plain = (await boundary.sessions._sessions_reply()).text
     assert plain.startswith(
         "<b>Sessions</b> · 1  🟢 1\n\n🟢 <b>ACTIVE</b>\n<b>Demo · Claude</b> #1\n"
     )
-    assert (await boundary._sessions_reply(notice=None)).text == plain
+    assert (await boundary.sessions._sessions_reply(notice=None)).text == plain

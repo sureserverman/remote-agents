@@ -72,11 +72,11 @@ async def test_copy_attach_requires_live_matching_project_and_profile_evidence()
         ),
     )
 
-    detail = await boundary._detail_reply(str(session_id))
+    detail = await boundary.sessions._detail_reply(str(session_id))
     attach = next(
         button for row in detail.keyboard for button in row if button.text.endswith("Copy attach")
     )
-    response = await boundary._attach_reply(str(session_id))
+    response = await boundary.sessions._attach_reply(str(session_id))
 
     assert attach.callback_data.startswith("c1_")
     assert f"ra-{session_id}:" in response.text
@@ -126,8 +126,8 @@ async def test_a_preserved_pane_is_offered_a_read_only_attach() -> None:
         ),
     )
 
-    detail = await boundary._detail_reply(str(session_id))
-    response = await boundary._attach_reply(str(session_id))
+    detail = await boundary.sessions._detail_reply(str(session_id))
+    response = await boundary.sessions._attach_reply(str(session_id))
 
     assert "Copy attach" in [
         button.text.split(" ", 1)[-1] for row in detail.keyboard for button in row
@@ -153,7 +153,7 @@ async def test_copy_attach_is_hidden_when_the_pane_is_not_currently_live() -> No
     )
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=Launcher(record, None)))
 
-    detail = await boundary._detail_reply(str(session_id))
+    detail = await boundary.sessions._detail_reply(str(session_id))
 
     assert "Copy attach" not in [
         button.text.split(" ", 1)[-1] for row in detail.keyboard for button in row
@@ -197,8 +197,8 @@ async def test_a_pane_owned_by_another_project_is_refused_on_the_row_and_on_the_
         7, 11, backend=backend_for(sessions=Launcher(record, someone_elses_pane))
     )
 
-    detail = await boundary._detail_reply(str(session_id))
-    response = await boundary._attach_reply(str(session_id))
+    detail = await boundary.sessions._detail_reply(str(session_id))
+    response = await boundary.sessions._attach_reply(str(session_id))
 
     assert "Copy attach" not in [
         button.text.split(" ", 1)[-1] for row in detail.keyboard for button in row

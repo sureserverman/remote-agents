@@ -71,7 +71,7 @@ def _boundary(usage: object) -> PrivateBotBoundary:
 
 
 async def _detail_text(usage: object) -> str:
-    rendered = await _boundary(usage)._detail_reply(str(SESSION))
+    rendered = await _boundary(usage).sessions._detail_reply(str(SESSION))
     return rendered.text
 
 
@@ -181,7 +181,7 @@ async def test_the_sessions_screen_carries_a_group_of_lines_per_agent() -> None:
             ),
             AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
         )
-    )._sessions_reply()
+    ).sessions._sessions_reply()
 
     # The `Plan limits` block: each agent's name over one `<code>` line per window, the fixed
     # 5h and week kinds always drawn, then the borrowed source and the age (DEC-061).
@@ -211,7 +211,7 @@ async def test_an_empty_list_still_carries_the_agents_limits() -> None:
         profiles=(ProfileAvailability("claude", True, None),),
     )
 
-    text = (await empty._sessions_reply()).text
+    text = (await empty.sessions._sessions_reply()).text
 
     assert "Nothing is running." in text
     assert "codex\n<code>5h ░░░░░░░░</code>\n<code>wk █████░░░ 61%</code>" in text
@@ -219,7 +219,7 @@ async def test_an_empty_list_still_carries_the_agents_limits() -> None:
 
 @pytest.mark.asyncio
 async def test_a_host_that_wired_no_limits_reader_renders_no_block() -> None:
-    text = (await _account_boundary(None)._sessions_reply()).text
+    text = (await _account_boundary(None).sessions._sessions_reply()).text
 
     assert "Sessions" in text
     assert "5h" not in text and "week" not in text
@@ -244,7 +244,7 @@ async def test_a_limits_reader_that_raises_marks_every_agent_unreadable() -> Non
             ProfileAvailability("claude", True, None),
             ProfileAvailability("codex", False, "not_installed"),
         ),
-    )._sessions_reply()
+    ).sessions._sessions_reply()
 
     assert "Sessions" in rendered.text
     assert rendered.keyboard
@@ -266,7 +266,7 @@ async def test_an_agent_that_answered_nothing_keeps_its_row_and_names_its_silenc
     text = (
         await _account_boundary(
             _limits_reader(AgentLimits(ProfileId("claude"), ()))
-        )._sessions_reply()
+        ).sessions._sessions_reply()
     ).text
 
     assert text.endswith("\n\n<b>Plan limits</b>\nclaude\n<code>no reading yet</code>")
@@ -290,7 +290,7 @@ async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
             ),
         ),
         profiles=(ProfileAvailability("opencode", True, None),),
-    )._sessions_reply()
+    ).sessions._sessions_reply()
 
     assert "Plan limits" not in rendered.text
 

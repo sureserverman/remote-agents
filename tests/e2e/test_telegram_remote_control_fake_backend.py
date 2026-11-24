@@ -92,7 +92,7 @@ async def test_one_press_carries_the_direction_the_real_pane_read_implies(
     record, store, terminal, service = _wired(reading)
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=service))
 
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     token = next(
         button.callback_data
         for row in detail.keyboard
@@ -102,7 +102,7 @@ async def test_one_press_carries_the_direction_the_real_pane_read_implies(
     boundary.callbacks.bind_pending(11, 1)
     pressed = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
     assert pressed is not None
-    confirmation = await boundary._remote_control_confirm_reply(pressed.entity_id)
+    confirmation = await boundary.sessions._remote_control_confirm_reply(pressed.entity_id)
     boundary.callbacks.bind_pending(11, 1)
     mutation = boundary.callbacks.resolve(
         confirmation.keyboard[0][0].callback_data, owner_id=7, chat_id=11, message_id=1

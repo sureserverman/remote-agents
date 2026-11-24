@@ -6,6 +6,7 @@ from dataclasses import replace
 from html import escape
 
 from remote_agents.adapters.telegram.callbacks import permission_entity, split_permission_entity
+from remote_agents.adapters.telegram.labels import _LIMITS_EMOJI, _REMOTE_EMOJI
 from remote_agents.adapters.telegram.presenters import Button, RenderedMessage
 from remote_agents.adapters.telegram.screen import ScreenActions
 from remote_agents.adapters.telegram.screen import reply_arguments as _reply_arguments
@@ -59,9 +60,6 @@ from remote_agents.domain.remote_control import (
     RemoteControlState,
 )
 from remote_agents.ports.host_remote_control import CodexRemoteControlBusy
-
-_REMOTE_EMOJI = "\U0001f4e1"  # 📡
-_LIMITS_EMOJI = "\U0001f4ca"  # 📊
 
 _HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
     HostConnection.CONNECTED: "on",
@@ -363,7 +361,8 @@ class SettingsScreens(ScreenActions):
         lines = ["<b>Remote Control</b>"]
         rows: list[tuple[Button, ...]] = []
         lines.append(
-            "Claude sets the default for future sessions. Codex controls enrollment for the whole machine."
+            "Claude sets the default for future sessions. "
+            "Codex controls enrollment for the whole machine."
         )
         default = self.backend.claude_remote_control_default
         if default is None:

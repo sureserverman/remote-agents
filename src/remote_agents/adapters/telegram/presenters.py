@@ -169,7 +169,7 @@ def uniform_keyboard(
     characters inside a session's name; padding the bar puts them inside three fixed words.
 
     The deficit is spread across that row's buttons rather than dropped on one, so a two- or
-    three-button bar stays visually even instead of gaining one stretched cell.
+    navigation bar stays visually even instead of gaining one stretched cell.
 
     Only callbacks are preserved verbatim — the token is the thing a press is looked up by, and
     nothing here may touch it.

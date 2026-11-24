@@ -77,7 +77,7 @@ async def _telegram_detail_git(record: SessionRecord, read: SessionGit | None) -
     boundary = build_private_bot(
         7, 11, backend=backend_for(sessions=_Sessions(record), git_summary=_reader(read))
     )
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     return [
         line.removeprefix("git").strip()
         for line in _plain(detail.text).splitlines()
@@ -144,7 +144,7 @@ async def _telegram_row(record: SessionRecord, read: SessionGit | None) -> tuple
     boundary = build_private_bot(
         7, 11, backend=backend_for(sessions=_Sessions(record), git_summary=_reader(read))
     )
-    page = _plain((await boundary._sessions_reply(records=(record,))).text).splitlines()
+    page = _plain((await boundary.sessions._sessions_reply(records=(record,))).text).splitlines()
     first = next(
         index for index, line in enumerate(page) if line.startswith(record.display.project_slug)
     )

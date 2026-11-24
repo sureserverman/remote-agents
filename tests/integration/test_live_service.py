@@ -272,7 +272,7 @@ async def test_the_launch_reply_names_remote_control_only_when_the_launch_carrie
         "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+    reply = await boundary.launch_resume._launch_reply("a" * 24 + "|claude", token, 1)
 
     assert "Session created" in reply["text"]
     assert ("with Remote Control" in reply["text"]) is carried, (
@@ -307,7 +307,7 @@ async def test_a_genuinely_failed_launch_no_longer_blames_workspace_trust() -> N
         "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
+    reply = await boundary.launch_resume._launch_reply("a" * 24 + "|cursor-agent", token, 1)
 
     assert "Session did not become ready" in reply["text"]
     assert "never approved remotely" not in reply["text"]
@@ -350,7 +350,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
         ),
     )
 
-    reply = await boundary._sessions_reply()
+    reply = await boundary.sessions._sessions_reply()
 
     labels = tuple(unpadded(button.text) for row in reply.keyboard for button in row)
     assert labels[0] == "🟢 #1 Demo", labels
@@ -444,7 +444,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     launcher.records = [session]
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher, capture=capture))
     await boundary.start(_trusted_update(message=_Message()), None)
-    detail = await boundary._detail_reply(str(session.session_id), 1)
+    detail = await boundary.sessions._detail_reply(str(session.session_id), 1)
     boundary.callbacks.bind_pending(11, 1)
     inspect = next(
         button.callback_data
@@ -480,7 +480,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
     launcher.records = [session]
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher, capture=capture))
     await boundary.start(_trusted_update(message=_Message()), None)
-    detail = await boundary._detail_reply(str(session.session_id), 1)
+    detail = await boundary.sessions._detail_reply(str(session.session_id), 1)
     boundary.callbacks.bind_pending(11, 1)
     inspect = next(
         button.callback_data
@@ -997,8 +997,8 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     """
     boundary = build_private_bot(7, 11, backend=backend_for(catalogue=_catalogue(94)))
 
-    resume = boundary._resume_projects_reply()
-    launch = boundary._projects_reply(boundary.catalogue, view_id="all")
+    resume = boundary.launch_resume._resume_projects_reply()
+    launch = boundary.launch_resume._projects_reply(boundary.catalogue, view_id="all")
 
     assert len(resume.keyboard) == len(launch.keyboard)
     assert resume.text.startswith("<b>Resume 1/10</b>")
@@ -1014,9 +1014,9 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
     """A project chosen after paging or searching must still resume, never launch."""
     boundary = build_private_bot(7, 11, backend=backend_for(catalogue=_catalogue(30)))
-    boundary._resume_projects_reply()
+    boundary.launch_resume._resume_projects_reply()
 
-    second = boundary._project_page_reply("all|2", flow="resume")
+    second = boundary.launch_resume._project_page_reply("all|2", flow="resume")
 
     def _action(token: str) -> str | None:
         boundary.callbacks.bind_pending(11, 1)
@@ -1031,15 +1031,17 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
     """Launch and resume both store a view called "all"; keying by flow keeps them apart."""
     boundary = build_private_bot(7, 11, backend=backend_for(catalogue=_catalogue(30)))
-    boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
+    boundary.launch_resume._projects_reply(_catalogue(30), view_id="search", flow="launch")
 
     # Resume never stored a "search" view, so paging into one is refused rather than
     # silently answered with the launch flow's results. Only a search is refused: an "all"
     # view is reconstructible from the catalogue and re-renders instead.
-    assert boundary._project_page_reply("search|2", flow="resume").text == (
+    assert boundary.launch_resume._project_page_reply("search|2", flow="resume").text == (
         "That search is no longer open. Search again."
     )
-    assert boundary._project_page_reply("all|2", flow="resume").text.startswith("<b>Resume 2/3</b>")
+    assert boundary.launch_resume._project_page_reply("all|2", flow="resume").text.startswith(
+        "<b>Resume 2/3</b>"
+    )
 
 
 def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launcher]:
@@ -1062,7 +1064,7 @@ async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, _ = _stop_boundary(running)
 
-    detail = await boundary._detail_reply(str(running.session_id))
+    detail = await boundary.sessions._detail_reply(str(running.session_id))
 
     # `unmarked` takes the bot's own marks off (`📄 Inspect` → `Inspect`); the shape is what is
     # asserted: reads paired on their row, stops on their own, then the way back, then the bar.
@@ -1083,8 +1085,8 @@ async def test_no_screen_offers_refresh_now_that_every_route_re_reads() -> None:
     """
     boundary, _ = _stop_boundary(_record(SessionState.RUNNING, "active", ProjectId("a" * 24)))
 
-    sessions = await boundary._sessions_reply()
-    projects = boundary._projects_reply(boundary.catalogue, view_id="all")
+    sessions = await boundary.sessions._sessions_reply()
+    projects = boundary.launch_resume._projects_reply(boundary.catalogue, view_id="all")
 
     sessions_labels = {unpadded(button.text) for row in sessions.keyboard for button in row}
     project_labels = {unpadded(button.text) for row in projects.keyboard for button in row}
@@ -1121,7 +1123,7 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
     boundary, _ = _stop_boundary(*records)
     boundary.session_page_size = 4
 
-    listing = await boundary._sessions_reply(3)
+    listing = await boundary.sessions._sessions_reply(3)
     assert "Sessions 3/3" in listing.text
     row = next(
         button
@@ -1133,7 +1135,7 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
     boundary.callbacks.bind_pending(11, 1)
     opened = boundary.callbacks.resolve(row.callback_data, owner_id=7, chat_id=11, message_id=1)
     assert opened is not None
-    detail = await boundary._detail_reply(opened.entity_id)
+    detail = await boundary.sessions._detail_reply(opened.entity_id)
 
     back = next(
         button
@@ -1147,7 +1149,7 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
     assert state is not None
     assert state.action == "sessions.page"
     assert state.entity_id == "3"
-    returned = await boundary._sessions_reply(int(state.entity_id))
+    returned = await boundary.sessions._sessions_reply(int(state.entity_id))
     assert "Sessions 3/3" in returned.text
 
 
@@ -1159,9 +1161,9 @@ async def test_the_sessions_list_pages_instead_of_growing_past_the_message() -> 
     boundary, _ = _stop_boundary(*records)
     boundary.session_page_size = 4
 
-    first = await boundary._sessions_reply()
-    last = await boundary._sessions_reply(3)
-    beyond = await boundary._sessions_reply(99)
+    first = await boundary.sessions._sessions_reply()
+    last = await boundary.sessions._sessions_reply(3)
+    beyond = await boundary.sessions._sessions_reply(99)
 
     assert first.text.startswith("<b>Sessions 1/3</b> · ")
     assert [unpadded(button.text) for button in first.keyboard[-2]] == ["Next"]
@@ -1184,7 +1186,7 @@ async def test_force_confirmation_names_the_session_and_buffers_the_kill_from_th
     )
     boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("force", token, 1)
+    reply = await boundary.sessions._stop_reply("force", token, 1)
 
     rows = [
         [unpadded(button.text) for button in row] for row in reply["reply_markup"].inline_keyboard
@@ -1207,7 +1209,7 @@ async def test_a_completed_stop_names_the_session_and_what_became_of_its_output(
     )
     boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token, 1)
+    reply = await boundary.sessions._stop_reply("graceful", token, 1)
 
     assert launcher.stopped == ["graceful"]
     assert subject in reply["text"]
@@ -1226,7 +1228,7 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     )
     boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token, 1)
+    reply = await boundary.sessions._stop_reply("graceful", token, 1)
 
     assert "is still running" in reply["text"]
     assert "did not exit in time" in reply["text"]
@@ -1362,7 +1364,7 @@ async def test_the_bot_names_which_cause_left_the_session_running(
     )
     boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token, 1)
+    reply = await boundary.sessions._stop_reply("graceful", token, 1)
 
     assert names in reply["text"], reply["text"]
     assert denies not in reply["text"], reply["text"]
@@ -1389,7 +1391,7 @@ async def test_a_stop_button_survives_the_render_that_drew_it() -> None:
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, launcher = _stop_boundary(running)
     await boundary.start(_trusted_update(message=_Message()), None)
-    rendered = _reply_arguments(await boundary._sessions_reply())
+    rendered = _reply_arguments(await boundary.sessions._sessions_reply())
     sessions = _Callback(_button(rendered, "Sessions"))
     boundary.callbacks.bind_pending(11, sessions.message.message_id)
 
@@ -1411,7 +1413,7 @@ async def test_the_force_confirmation_button_survives_the_render_that_drew_it() 
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, launcher = _stop_boundary(running)
     await boundary.start(_trusted_update(message=_Message()), None)
-    rendered = _reply_arguments(await boundary._sessions_reply())
+    rendered = _reply_arguments(await boundary.sessions._sessions_reply())
     sessions = _Callback(_button(rendered, "Sessions"))
     boundary.callbacks.bind_pending(11, sessions.message.message_id)
 
@@ -2293,7 +2295,7 @@ async def test_an_untrusted_launch_asks_the_question_instead_of_reporting_a_fail
         "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+    reply = await boundary.launch_resume._launch_reply("a" * 24 + "|claude", token, 1)
 
     assert "did not become ready" not in reply["text"]
     assert "never approved remotely" not in reply["text"]
@@ -2338,7 +2340,7 @@ async def test_an_untrusted_launch_of_a_readable_dialog_offers_both_answers() ->
         "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
+    reply = await boundary.launch_resume._launch_reply("a" * 24 + "|cursor-agent", token, 1)
 
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
@@ -2371,7 +2373,7 @@ async def test_an_untrusted_launch_of_an_agent_that_asks_nothing_offers_only_the
         "launch.profile", "a" * 24 + "|opencode", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|opencode", token, 1)
+    reply = await boundary.launch_resume._launch_reply("a" * 24 + "|opencode", token, 1)
 
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
@@ -2415,7 +2417,7 @@ async def test_a_bot_launch_stands_the_notification_pass_down_for_that_session(t
             "launch.profile", "a" * 24 + "|claude", 7, 11, 1, mutation=True
         )
 
-        await boundary._launch_reply("a" * 24 + "|claude", token, 1)
+        await boundary.launch_resume._launch_reply("a" * 24 + "|claude", token, 1)
 
         assert boundary.trust_notifier is not None
         assert str(launcher.launch_result.session_id) in boundary.trust_notifier._asked_on_screen, (

@@ -73,13 +73,13 @@ def _toggle_token(detail) -> str | None:
 
 async def _confirm_for(boundary, launcher):
     """Press the toggle and return (the confirm screen, the mutation button's entity id)."""
-    detail = await boundary._detail_reply(str(launcher.record.session_id))
+    detail = await boundary.sessions._detail_reply(str(launcher.record.session_id))
     token = _toggle_token(detail)
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)
     state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
     assert state is not None and state.action == "remote.control"
-    confirmation = await boundary._remote_control_confirm_reply(state.entity_id)
+    confirmation = await boundary.sessions._remote_control_confirm_reply(state.entity_id)
     boundary.callbacks.bind_pending(11, 1)
     mutation = boundary.callbacks.resolve(
         confirmation.keyboard[0][0].callback_data, owner_id=7, chat_id=11, message_id=1
@@ -92,7 +92,7 @@ async def test_a_running_claude_session_carries_exactly_one_remote_control_butto
     launcher = Launcher(_record())
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher))
 
-    detail = await boundary._detail_reply(str(launcher.record.session_id))
+    detail = await boundary.sessions._detail_reply(str(launcher.record.session_id))
 
     labels = [button.text for row in detail.keyboard for button in row]
     assert [label for label in labels if "Remote Control" in label] == ["📡 Remote Control"]
@@ -103,7 +103,10 @@ async def test_a_non_claude_session_carries_no_remote_control_button() -> None:
     launcher = Launcher(_record(profile="codex"))
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher))
 
-    assert _toggle_token(await boundary._detail_reply(str(launcher.record.session_id))) is None
+    assert (
+        _toggle_token(await boundary.sessions._detail_reply(str(launcher.record.session_id)))
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -165,7 +168,7 @@ async def test_claude_remote_control_requires_confirmation_and_uses_opaque_callb
 
     confirmation, entity_id = await _confirm_for(boundary, launcher)
     boundary.callbacks.bind_pending(11, 1)
-    result = await boundary._remote_control_reply(
+    result = await boundary.sessions._remote_control_reply(
         entity_id, confirmation.keyboard[0][0].callback_data, 1
     )
 
@@ -187,7 +190,7 @@ async def test_a_refusal_says_why_and_that_nothing_changed() -> None:
 
     confirmation, entity_id = await _confirm_for(boundary, launcher)
     boundary.callbacks.bind_pending(11, 1)
-    result = await boundary._remote_control_reply(
+    result = await boundary.sessions._remote_control_reply(
         entity_id, confirmation.keyboard[0][0].callback_data, 1
     )
 

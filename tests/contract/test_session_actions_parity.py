@@ -134,7 +134,7 @@ class _Launcher(SessionUseCaseDouble):
 async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=_Launcher(record)))
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     # `unmarked` strips the bot's own mark (`⏹ Stop and close` → `Stop and close`): the mark is
     # this surface's presentation and the word behind it is what the policy pins.
     return {
@@ -238,7 +238,7 @@ async def _telegram_remote_control(record: SessionRecord) -> list[str]:
         backend=backend_for(sessions=_Launcher(record)),
         profiles=(ProfileAvailability("claude", True, None),),
     )
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     return [
         unmarked(button.text)
         for row in detail.keyboard
@@ -533,7 +533,7 @@ def _rollover_backend(sessions, book, switch_on: bool):
 
 async def _telegram_rollover_rows(record, book, switch_on) -> set[str]:
     boundary = build_private_bot(7, 11, backend=_rollover_backend(_Stops(record), book, switch_on))
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     return {
         _ROLLOVER_WORDS[unmarked(button.text)]
         for row in detail.keyboard
@@ -635,7 +635,7 @@ async def _telegram_press(record, book, switch_on, action: str) -> tuple[str, li
     """Press the drawn button (or, when it is not drawn, the press a stale one would make)."""
     sessions = _Stops(record)
     boundary = build_private_bot(7, 11, backend=_rollover_backend(sessions, book, switch_on))
-    detail = await boundary._detail_reply(str(record.session_id))
+    detail = await boundary.sessions._detail_reply(str(record.session_id))
     label = ROLLOVER_ACTION_LABELS[action]
     tokens = [
         button.callback_data

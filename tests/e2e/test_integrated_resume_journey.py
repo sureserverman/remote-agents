@@ -107,14 +107,16 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         names=profile_names(),
     )
     try:
-        profiles = await boundary._resume_profiles_reply(project.opaque_id)
+        profiles = await boundary.launch_resume._resume_profiles_reply(project.opaque_id)
         assert profiles.keyboard[0][0].text == "Claude"
-        catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
+        catalogue = await boundary.launch_resume._resume_catalogue_reply(
+            f"{project.opaque_id}|claude|1"
+        )
         boundary.callbacks.bind_pending(11, 1)
         selection = catalogue.keyboard[0][0].callback_data
         selected = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, message_id=1)
         assert selected is not None
-        await boundary._resume_reply(selected.entity_id, selection, 1)
+        await boundary.launch_resume._resume_reply(selected.entity_id, selection, 1)
 
         record = (await service.list_sessions())[0]
         assert record.state is SessionState.RUNNING
@@ -123,7 +125,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         assert inspection is not None and inspection.text.startswith("READY")
 
         boundary.callbacks.bind_pending(11, 1)
-        detail = await boundary._detail_reply(str(record.session_id), 1)
+        detail = await boundary.sessions._detail_reply(str(record.session_id), 1)
         graceful = next(
             button.callback_data
             for row in detail.keyboard
@@ -131,14 +133,14 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
             if unmarked(button.text) == ACTION_LABELS[GRACEFUL]
         )
         boundary.callbacks.bind_pending(11, 1)
-        outcome = await boundary._stop_reply("graceful", graceful, 1)
+        outcome = await boundary.sessions._stop_reply("graceful", graceful, 1)
         assert (await service.list_sessions())[0].state is SessionState.ENDED
         # The result names the session it acted on and says what became of its output.
         assert "The session has ended" in outcome["text"]
 
         # The one button did the whole stop: the reopened detail has no second step left.
         boundary.callbacks.bind_pending(11, 1)
-        detail = await boundary._detail_reply(str(record.session_id), 1)
+        detail = await boundary.sessions._detail_reply(str(record.session_id), 1)
         labels = [button.text for row in detail.keyboard for button in row]
         assert labels == ["‹ Back to sessions", "Sessions", "Launch", "Resume", "Settings"]
     finally:

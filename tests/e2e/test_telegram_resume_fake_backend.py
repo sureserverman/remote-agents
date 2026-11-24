@@ -87,13 +87,15 @@ async def test_owner_resume_journey_uses_a_catalogue_reference_not_provider_inpu
         ),
         profiles=(ProfileAvailability("claude", True),),
     )
-    catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
+    catalogue = await boundary.launch_resume._resume_catalogue_reply(
+        f"{project.opaque_id}|claude|1"
+    )
     selection = catalogue.keyboard[0][0].callback_data
     boundary.callbacks.bind_pending(11, 1)
     selected = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, message_id=1)
     assert selected is not None
 
-    await boundary._resume_reply(selected.entity_id, selection, 1)
+    await boundary.launch_resume._resume_reply(selected.entity_id, selection, 1)
 
     assert len(launcher.commands) == 1
     assert launcher.commands[0].conversation.provider_conversation_id.value == "provider-id"

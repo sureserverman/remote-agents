@@ -78,8 +78,8 @@ async def _telegram(record: SessionRecord, used: int, mark_at: dict[str, int]) -
         11,
         backend=backend_for(sessions=_Sessions(record), usage=_usage(used), mark_at=mark_at),
     )
-    page = _plain((await boundary._sessions_reply(records=(record,))).text)
-    detail = _plain((await boundary._detail_reply(str(record.session_id))).text)
+    page = _plain((await boundary.sessions._sessions_reply(records=(record,))).text)
+    detail = _plain((await boundary.sessions._detail_reply(str(record.session_id))).text)
     return page + "\n" + detail
 
 

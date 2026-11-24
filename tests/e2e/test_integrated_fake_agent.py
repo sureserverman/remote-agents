@@ -166,7 +166,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
             )
         ).record
         assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
-        listed = await boundary._sessions_reply()
+        listed = await boundary.sessions._sessions_reply()
         assert "<b>Sessions</b> · 1  🟢 1" in listed.text, "it is on the list before the stop"
 
         token = boundary.stops.offer(
@@ -175,7 +175,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
         assert token is not None
         boundary.callbacks.bind_pending(11, 1)
 
-        reply = await boundary._stop_reply("graceful", token, 1)
+        reply = await boundary.sessions._stop_reply("graceful", token, 1)
 
         assert (await service.list_sessions())[0].state is SessionState.ENDED
         assert reply["text"].startswith("Stopped ")
@@ -237,7 +237,7 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
         assert inspect_capture(await _capture(gateway, records[0].session_id)).text.startswith(
             "READY"
         )
-        listed = await boundary._sessions_reply()
+        listed = await boundary.sessions._sessions_reply()
         assert "<b>Sessions</b> · 1  🟢 1" in listed.text
         assert "opaque-editor" in listed.keyboard[0][0].text
     finally:

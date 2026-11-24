@@ -89,7 +89,7 @@ async def _telegram(sessions: _Sessions) -> tuple[list[str], list[str]]:
         backend=backend_for(sessions=sessions),
         trust_dialogs=profile_trust_dialogs(),
     )
-    detail = await boundary._detail_reply(str(sessions.record.session_id))
+    detail = await boundary.sessions._detail_reply(str(sessions.record.session_id))
     # The bot labels each fact (`dialog   …`, as `git` and `context`); the words are after it.
     lines = [
         re.sub(r"^dialog\s+", "", line)

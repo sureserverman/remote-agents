@@ -1,6 +1,7 @@
 """Global destinations on the private bot's interactive screens."""
 
 from collections.abc import Callable
+from html import escape
 
 from remote_agents.adapters.telegram.presenters import Button
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
@@ -42,3 +43,24 @@ def navigation_row(
         for tab, label, action, entity in _DESTINATIONS
         if tab != "resume" or can_resume
     )
+
+
+def notice_line(notice: str | None) -> str:
+    """The lead line, or nothing at all — never an empty line where a notice would be.
+
+    `None` has to render byte-identically to the screen before this parameter existed,
+    or every test pinning the sessions list becomes a test of this function instead.
+    """
+    return "" if notice is None else f"{escape(notice)}\n"
+
+
+def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
+    return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))
+
+
+def _page_number(value: str) -> int:
+    """Read a page from a token this bot minted, falling back to the first page."""
+    try:
+        return int(value)
+    except ValueError:
+        return 1

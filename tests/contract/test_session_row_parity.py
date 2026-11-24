@@ -251,7 +251,7 @@ def _backend(book: RolloverBook):
 async def _bot_notes(book: RolloverBook) -> dict[int, str]:
     """Each row's second line as the bot sent it, unescaped, keyed by its sequence."""
     boundary = build_private_bot(7, 11, backend=_backend(book))
-    reply = await boundary._sessions_reply()
+    reply = await boundary.sessions._sessions_reply()
     lines = dict(re.findall(r"</b> #(\d+)\n<code>(.*?)</code>", reply.text))
     return {int(sequence): html.unescape(line) for sequence, line in lines.items()}
 
@@ -302,7 +302,7 @@ async def test_both_surfaces_draw_the_same_rollover_notes(tmp_path: Path) -> Non
 
 async def test_without_a_rollover_book_neither_surface_draws_a_rollover_note() -> None:
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=_Listing(), rollovers=None))
-    reply = await boundary._sessions_reply()
+    reply = await boundary.sessions._sessions_reply()
 
     for note in _EXPECTED_NOTES.values():
         assert note not in html.unescape(reply.text)

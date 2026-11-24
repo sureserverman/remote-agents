@@ -133,3 +133,16 @@ def test_the_bar_is_built_in_exactly_one_place() -> None:
         f"service.py calls render_message {calls} times, expected {expected} ({_why}). A new "
         "direct call is a screen built outside the one place the navigation bar is appended."
     )
+
+
+def test_screen_families_do_not_import_the_delivery_boundary() -> None:
+    for name in ("sessions", "launch_resume", "schedules", "settings", "navigation", "screen"):
+        tree = ast.parse((_TELEGRAM / f"{name}.py").read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                imports = [node.module or "", *(alias.name for alias in node.names)]
+            else:
+                continue
+            assert all(ref.split(".")[-1] != "service" for ref in imports), name

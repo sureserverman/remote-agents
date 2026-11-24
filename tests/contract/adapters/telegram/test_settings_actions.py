@@ -585,14 +585,14 @@ def test_every_button_mark_this_surface_defines_is_one_unmarked_can_take_off() -
     Swept from the module's own `_*_EMOJI` constants, so a seventh mark added without being
     registered fails here rather than in whichever screen's test happens to read a label first.
     """
-    from remote_agents.adapters.telegram import service
+    from remote_agents.adapters.telegram import labels
 
     marks = {
         value
-        for name, value in vars(service).items()
+        for name, value in vars(labels).items()
         if name.endswith("_EMOJI") and isinstance(value, str)
     }
-    marks |= set(service._ACTION_EMOJI.values())
+    marks |= set(labels._ACTION_EMOJI.values())
 
     unregistered = sorted(mark for mark in marks if unmarked(f"{mark} Label") != "Label")
 

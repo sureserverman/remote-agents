@@ -28,17 +28,15 @@ the assertions are about *sequence* as much as occurrence: attaching the notifie
 `initialize()` would leave it holding a bot that is not ready, and stopping the application
 before its updater would drop updates already in flight.
 
-Stated limit: no update is ever dispatched through the assembled application, so this
-covers *wiring*, not the handlers' behaviour. That behaviour is covered -- the boundary is
-driven end to end against a fake backend in `tests/e2e/test_telegram_fake_backend.py`. The
-two halves meet at the handler list this file pins.
+The registered-handler journey drives the application’s command and button callbacks with a
+fake chat and real configuration and callback stores.
 """
 
 from __future__ import annotations
 
 import asyncio
 import signal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import pytest
@@ -495,3 +493,63 @@ async def test_an_error_handler_is_registered_before_any_handler_that_can_raise(
     assert harness.log.index("add_error_handler") < harness.log.index("add_handler"), (
         "the error handler must be registered before the handlers it answers for"
     )
+
+
+async def test_registered_handlers_reach_all_tabs_and_write_recovery_once(monkeypatch, tmp_path):
+    from contextlib import closing
+    from unittest.mock import AsyncMock
+
+    from fake_telegram import FakeChat
+
+    from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+    from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+    from remote_agents.adapters.sqlite.database import open_ui_database
+    from remote_agents.adapters.telegram.labels import unmarked
+    from remote_agents.adapters.telegram.presenters import unpadded
+    from remote_agents.application.resume_setting import RESUME_LABELS, RESUME_TITLE
+    from remote_agents.composition.limits_source import ConfigResumeSetting
+
+    harness = _harness(monkeypatch)
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\ndev_root = "/tmp"\n\n[limits]\nmax_label_length = 40\n')
+    setting = ConfigResumeSetting(config)
+    write = AsyncMock(wraps=setting.write)
+    monkeypatch.setattr(setting, "write", write)
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    with closing(open_ui_database(tmp_path / "ui.sqlite3")) as connection:
+        boundary = build_private_bot(
+            OWNER,
+            CHAT,
+            backend=replace(backend_for(conversations=AsyncMock()), resume_after_limit=setting),
+            callbacks=SQLiteCallbackStateStore(connection),
+            anchors=SQLiteChatViewStore(connection),
+        )
+        await run_private_bot(SECRETS, boundary)
+        handlers = harness.application.handlers
+        sessions = next(
+            h for h in handlers if isinstance(h, CommandHandler) and "sessions" in h.commands
+        )
+        presses = next(h for h in handlers if isinstance(h, CallbackQueryHandler))
+        await sessions.callback(chat.message_update("/sessions"), None)
+        (anchor,) = chat.bot_messages
+
+        def buttons():
+            return {
+                unmarked(unpadded(b.text)): b.callback_data
+                for row in anchor.reply_markup.inline_keyboard
+                for b in row
+            }
+
+        for tab in ("Launch", "Resume", "Settings"):
+            await presses.callback(chat.press(buttons()[tab]), None)
+            assert f"• {tab}" in buttons()
+        await presses.callback(chat.press(buttons()["Recovery"]), None)
+        token = buttons()[f"{RESUME_TITLE}: {RESUME_LABELS[True]}"]
+        await presses.callback(chat.press(token), None)
+        assert f"{RESUME_TITLE}: {RESUME_LABELS[False]}" in buttons()
+        await presses.callback(chat.press(token, on=anchor.message_id), None)
+        write.assert_awaited_once_with(False)
+        assert await ConfigResumeSetting(config).read() is False
+        await presses.callback(chat.press(buttons()["• Sessions"]), None)
+        assert "• Sessions" in buttons()
+        assert chat.bot_messages == [anchor]

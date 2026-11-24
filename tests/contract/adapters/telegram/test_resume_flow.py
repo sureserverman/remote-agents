@@ -95,8 +95,10 @@ async def test_resume_picker_is_opaque_paginated_and_is_a_single_mutating_press(
         names=profile_names(),
     )
 
-    profiles = await boundary._resume_profiles_reply(project.opaque_id)
-    catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
+    profiles = await boundary.launch_resume._resume_profiles_reply(project.opaque_id)
+    catalogue = await boundary.launch_resume._resume_catalogue_reply(
+        f"{project.opaque_id}|claude|1"
+    )
     selection = catalogue.keyboard[0][0].callback_data
     boundary.callbacks.bind_pending(11, 1)
     selection_state = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, message_id=1)
@@ -106,12 +108,12 @@ async def test_resume_picker_is_opaque_paginated_and_is_a_single_mutating_press(
     assert "provider-private-id" not in catalogue.text + selection
 
     # One press, not two: the row carries the mutation rather than opening a review.
-    result = await boundary._resume_reply(selection_state.entity_id, selection, 1)
+    result = await boundary.launch_resume._resume_reply(selection_state.entity_id, selection, 1)
 
     assert "Session resumed" in result["text"]
     assert len(launcher.commands) == 1
     assert launcher.commands[0].conversation == resolved
-    replayed = await boundary._resume_reply(selection_state.entity_id, selection, 1)
+    replayed = await boundary.launch_resume._resume_reply(selection_state.entity_id, selection, 1)
     assert replayed["text"] == "That action has already run."
 
 
@@ -138,7 +140,9 @@ async def test_resume_picker_renders_a_bounded_provider_title_without_its_source
         names=profile_names(),
     )
 
-    catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
+    catalogue = await boundary.launch_resume._resume_catalogue_reply(
+        f"{project.opaque_id}|claude|1"
+    )
 
     assert catalogue.keyboard[0][0].text.startswith(
         "A useful title that comfortably identifies this"
@@ -177,7 +181,7 @@ async def test_an_existing_resume_without_a_verified_pane_reports_a_named_hold()
         "resume.confirm", str(summary.reference), 7, 11, mutation=True
     )
     boundary.callbacks.bind_pending(11, 100)
-    reply = await boundary._resume_reply(str(summary.reference), token, 100)
+    reply = await boundary.launch_resume._resume_reply(str(summary.reference), token, 100)
     assert "resume is on hold" in reply["text"].casefold()
     assert "nothing new was started" in reply["text"].casefold()
     assert "Session resumed" not in reply["text"]

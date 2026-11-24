@@ -106,8 +106,8 @@ async def _send(boundary: PrivateBotBoundary, text: str) -> dict[str, object]:
 async def test_the_launch_list_offers_add_project_only_when_a_creator_is_configured() -> None:
     """Home used to carry this. Task 2.2 moved it to the launch picker; the gating claim is
     unchanged and is pinned on whichever screen offers the button."""
-    with_creator = _boundary(FakeCreator())._projects_reply((), view_id="all")
-    without_creator = _boundary()._projects_reply((), view_id="all")
+    with_creator = _boundary(FakeCreator()).launch_resume._projects_reply((), view_id="all")
+    without_creator = _boundary().launch_resume._projects_reply((), view_id="all")
 
     labels = lambda rendered: [b.text for row in rendered.keyboard for b in row]  # noqa: E731
     assert "Add Project" in labels(with_creator)
@@ -127,7 +127,14 @@ async def test_an_area_that_the_identity_rule_rejects_is_never_offered() -> None
 
     rendered = await boundary._reply_for("project.open", "areas")
 
-    assert _buttons(rendered) == ["infra", "big-projects", "Cancel", "Sessions", "Launch", "Settings"]
+    assert _buttons(rendered) == [
+        "infra",
+        "big-projects",
+        "Cancel",
+        "Sessions",
+        "Launch",
+        "Settings",
+    ]
 
 
 async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> None:

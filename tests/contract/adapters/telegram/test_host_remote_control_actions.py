@@ -242,7 +242,9 @@ async def test_a_machine_that_never_answered_does_not_read_as_a_daemon_that_did(
     path fails that way. Conflating them left an owner pressing a button that could never
     explain itself, so the wording has to name the missing program.
     """
-    errored = await _bot(FakeHostRemoteControl(HostConnection.ERRORED)).settings._host_remote_control_reply()
+    errored = await _bot(
+        FakeHostRemoteControl(HostConnection.ERRORED)
+    ).settings._host_remote_control_reply()
     unreachable = await _bot(
         FakeHostRemoteControl(HostConnection.UNREACHABLE)
     ).settings._host_remote_control_reply()
@@ -345,7 +347,7 @@ async def test_the_sessions_list_reports_this_machine_under_the_plan_limits(sess
         profiles=(ProfileAvailability("claude", True, None),),
     )
 
-    text = (await bot._sessions_reply()).text
+    text = (await bot.sessions._sessions_reply()).text
 
     assert f"{HOST_REMOTE_CONTROL_TITLE} · on (Paisleys-Blender)" in text
     assert text.index("Plan limits") < text.index(HOST_REMOTE_CONTROL_TITLE)
@@ -356,7 +358,7 @@ async def test_a_host_with_no_toggle_leaves_the_sessions_list_as_it_was() -> Non
         OWNER, CHAT, backend=backend_for(sessions=_NoSessions(), limits=_one_limit)
     )
 
-    text = (await bot._sessions_reply()).text
+    text = (await bot.sessions._sessions_reply()).text
 
     assert HOST_REMOTE_CONTROL_TITLE not in text
     assert "Plan limits" in text

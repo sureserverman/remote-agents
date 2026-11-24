@@ -37,6 +37,7 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS, unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
+from remote_agents.adapters.telegram.sessions import SessionScreens
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_TITLE
@@ -2023,7 +2024,7 @@ async def test_a_stale_trust_press_says_so_instead_of_going_silent() -> None:
         "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+    reply = await boundary.sessions._trust_reply(str(untrusted.session_id), token, 1)
 
     assert "already been answered" in reply["text"], reply["text"]
     assert "Nothing was sent to it" in reply["text"]
@@ -2312,7 +2313,7 @@ async def test_a_press_that_pressed_nothing_does_not_report_it_as_trusted() -> N
         "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+    reply = await boundary.sessions._trust_reply(str(untrusted.session_id), token, 1)
 
     assert "Trusted" not in reply["text"], (
         f"nothing was sent to the pane, so this may not report success: {reply['text']!r}"
@@ -2341,7 +2342,7 @@ async def test_a_press_that_landed_still_reports_success() -> None:
         "session.trust", str(record.session_id), 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._trust_reply(str(record.session_id), token, 1)
+    reply = await boundary.sessions._trust_reply(str(record.session_id), token, 1)
 
     assert "Trusted" in reply["text"], reply["text"]
     assert launcher.answered == [record.session_id]
@@ -2378,7 +2379,7 @@ async def test_a_press_whose_pane_stopped_asking_does_not_claim_it_is_still_wait
         "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+    reply = await boundary.sessions._trust_reply(str(untrusted.session_id), token, 1)
 
     assert "Trusted" not in reply["text"], reply["text"]
     assert "nothing was sent" in reply["text"].lower(), reply["text"]
@@ -2418,7 +2419,7 @@ async def test_a_press_that_landed_but_left_the_question_up_does_not_invite_a_de
         "session.trust", str(untrusted.session_id), 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._trust_reply(str(untrusted.session_id), token, 1)
+    reply = await boundary.sessions._trust_reply(str(untrusted.session_id), token, 1)
 
     assert "Try again" not in reply["text"], (
         f"the token is already spent, so a retry on this button cannot work: {reply['text']!r}"
@@ -2521,8 +2522,8 @@ async def test_the_page_the_owner_was_on_survives_the_redraw() -> None:
     chat = FakeChat()
     boundary = _boundary(*_many_sessions(40))
     await boundary.sessions_command(chat.message_update("/sessions"), None)
-    page_two = await boundary._sessions_reply(2)
-    boundary._sessions_page = 2
+    page_two = await boundary.sessions._sessions_reply(2)
+    boundary._session_list_state.page = 2
 
     boundary._redraw_allowed_at = 0.0
     redrawn = await boundary.redraw_sessions_if_open(chat.bot)
@@ -2843,15 +2844,15 @@ async def test_a_press_landing_mid_redraw_is_not_drawn_over(monkeypatch) -> None
 
     # Patched on the class: the boundary declares `__slots__`, so an instance attribute is
     # refused -- which is itself the reason this seam is a method rather than a callable field.
-    original = PrivateBotBoundary._sessions_reply
+    original = SessionScreens._sessions_reply
 
     async def press_lands_while_we_read(self, *args, **kwargs):
         rendered = await original(self, *args, **kwargs)
         # The owner presses while the page is still being assembled.
-        self._handling_press = True
+        boundary._handling_press = True
         return rendered
 
-    monkeypatch.setattr(PrivateBotBoundary, "_sessions_reply", press_lands_while_we_read)
+    monkeypatch.setattr(SessionScreens, "_sessions_reply", press_lands_while_we_read)
     boundary._redraw_allowed_at = 0.0
 
     assert await boundary.redraw_sessions_if_open(chat.bot) is False, (
@@ -2870,14 +2871,14 @@ async def test_a_redraw_whose_screen_changed_under_it_does_not_edit(monkeypatch)
     boundary = _boundary(_a_running_session())
     await boundary.sessions_command(chat.message_update("/sessions"), None)
 
-    original = PrivateBotBoundary._sessions_reply
+    original = SessionScreens._sessions_reply
 
     async def they_navigate_away_while_we_read(self, *args, **kwargs):
         rendered = await original(self, *args, **kwargs)
-        await self.help_command(chat.message_update("/help"), None)
+        await boundary.help_command(chat.message_update("/help"), None)
         return rendered
 
-    monkeypatch.setattr(PrivateBotBoundary, "_sessions_reply", they_navigate_away_while_we_read)
+    monkeypatch.setattr(SessionScreens, "_sessions_reply", they_navigate_away_while_we_read)
     boundary._redraw_allowed_at = 0.0
     await boundary.redraw_sessions_if_open(chat.bot)
 

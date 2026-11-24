@@ -222,9 +222,9 @@ async def test_both_flows_carry_only_the_deliberate_override(settings, choice, r
     sessions = Sessions()
     bot, chat = bot_for(settings, sessions), FakeChat()
     if resume:
-        rendered = await bot._resume_catalogue_reply(f"{PROJECT.opaque_id}|codex|1")
+        rendered = await bot.launch_resume._resume_catalogue_reply(f"{PROJECT.opaque_id}|codex|1")
     else:
-        rendered = await bot._profiles_reply(PROJECT.opaque_id)
+        rendered = await bot.launch_resume._profiles_reply(PROJECT.opaque_id)
     # Use a real message and bound callback state for the optional picker.
     from remote_agents.adapters.telegram.service import _reply_arguments
 
@@ -323,7 +323,9 @@ async def test_session_inspection_names_the_snapshot_instead_of_the_new_default(
             return (self.record,)
 
     sessions = Existing()
-    screen = await bot_for(settings, sessions)._detail_reply(str(sessions.record.session_id))
+    screen = await bot_for(settings, sessions).sessions._detail_reply(
+        str(sessions.record.session_id)
+    )
     assert "Launch permissions" in screen.text and "Ask me" in screen.text
     app = app_for(settings, sessions)
     async with app.run_test() as pilot:
@@ -360,7 +362,9 @@ async def test_session_inspection_says_whether_the_permissions_were_applied_on_b
     assert permission_state_line(PermissionPreset.ASK, state) == said
     expected = f"Launch permissions: Ask me (requested at launch); {said}"
 
-    screen = await bot_for(settings, sessions)._detail_reply(str(sessions.record.session_id))
+    screen = await bot_for(settings, sessions).sessions._detail_reply(
+        str(sessions.record.session_id)
+    )
     assert expected in screen.text
     app = app_for(settings, sessions)
     async with app.run_test() as pilot:

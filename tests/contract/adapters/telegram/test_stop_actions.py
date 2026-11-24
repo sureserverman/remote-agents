@@ -229,7 +229,7 @@ async def test_a_clean_stop_lands_on_list_naming_what_ended() -> None:
     record = _a_session()
     boundary = _stopped_boundary()  # it ended, so it is no longer listed
 
-    rendered = await boundary._stop_outcome_landing("graceful", record)
+    rendered = await boundary.sessions._stop_outcome_landing("graceful", record)
 
     assert rendered.text.startswith("Stopped Demo · Claude · regular · #1\n")
     assert "The session has ended." in rendered.text
@@ -252,7 +252,7 @@ async def test_a_graceful_timeout_lands_on_list_with_its_words_unchanged() -> No
     record = _a_session()
     boundary = _stopped_boundary(record)  # the stop did not take, so it is still listed
 
-    rendered = await boundary._stop_outcome_landing("graceful", record, failure)
+    rendered = await boundary.sessions._stop_outcome_landing("graceful", record, failure)
 
     assert rendered.text.startswith("Demo · Claude · regular · #1 is still running\n")
     assert escape(failure.summary) in rendered.text
@@ -275,7 +275,7 @@ async def test_a_stop_that_failed_for_a_departed_session_lands_on_list_with_its_
     record = _a_session()
     boundary = _stopped_boundary()  # gone from the list, while the stop reported failure
 
-    rendered = await boundary._stop_outcome_landing("graceful", record, failure)
+    rendered = await boundary.sessions._stop_outcome_landing("graceful", record, failure)
 
     assert rendered.text.startswith("Demo · Claude · regular · #1 is no longer listed\n")
     assert escape(failure.summary) in rendered.text
@@ -296,7 +296,7 @@ async def test_a_stop_outcome_lands_on_list_with_the_session_name_escaped() -> N
         datetime(2026, 8, 10, tzinfo=UTC),
     )
 
-    rendered = await _stopped_boundary()._stop_outcome_landing("graceful", record)
+    rendered = await _stopped_boundary().sessions._stop_outcome_landing("graceful", record)
 
     assert "&lt;b&gt;Demo&lt;/b&gt;" in rendered.text
     assert "<b>Demo</b>" not in rendered.text
@@ -319,11 +319,11 @@ async def test_every_stop_action_lands_on_list_with_its_own_lead_line(action, le
     """
     record = _a_session()
 
-    ended_alone = await _stopped_boundary()._stop_outcome_landing(action, record)
+    ended_alone = await _stopped_boundary().sessions._stop_outcome_landing(action, record)
     # And again with a survivor on the list, so the lead line is checked over rows as well as
     # over the empty state — the two branches of `_sessions_reply` render the notice
     # separately, and only one of them was covered when this was written.
-    with_survivor = await _stopped_boundary(_another_session())._stop_outcome_landing(
+    with_survivor = await _stopped_boundary(_another_session()).sessions._stop_outcome_landing(
         action, record
     )
 
@@ -379,7 +379,7 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token, 1)
+    reply = await boundary.sessions._stop_reply("graceful", token, 1)
 
     assert launcher.stopped == [], "a refused stop dispatches nothing"
     assert reply["text"].startswith("That session moved on before this could run")
@@ -408,7 +408,7 @@ async def test_force_confirms_before_anything_lands_on_list() -> None:
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("force", token, 1)
+    reply = await boundary.sessions._stop_reply("force", token, 1)
 
     assert "Force stop" in reply["text"]
     assert "cannot be undone" in reply["text"]
@@ -442,8 +442,8 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)
 
-    first = await boundary._stop_reply("graceful", token, 1)
-    second = await boundary._stop_reply("graceful", token, 1)
+    first = await boundary.sessions._stop_reply("graceful", token, 1)
+    second = await boundary.sessions._stop_reply("graceful", token, 1)
 
     assert launcher.stopped == ["graceful"], "the repeat was dropped, not serviced twice"
     assert first["text"].startswith("Stopped ")
@@ -456,4 +456,6 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     # destinations on every screen alike -- a signature that cannot distinguish the list
     # from anywhere else.
     assert "Sessions" in second["text"]
-    assert labels == ["Sessions", "Launch", "Settings"], "it answers on the list, whose way out is the bar"
+    assert labels == ["Sessions", "Launch", "Settings"], (
+        "it answers on the list, whose way out is the bar"
+    )

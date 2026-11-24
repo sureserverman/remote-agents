@@ -265,7 +265,7 @@ async def test_both_resume_surfaces_offer_the_real_folder_catalogue(rig, surface
         from remote_agents.adapters.telegram.service import build_private_bot
 
         boundary = build_private_bot(7, 11, backend=backend)
-        reply = await boundary._resume_catalogue_reply(f"{PROJECT}|codex|1")
+        reply = await boundary.launch_resume._resume_catalogue_reply(f"{PROJECT}|codex|1")
         boundary.callbacks.bind_pending(11, 100)
         offered = set()
         for row in reply.keyboard:

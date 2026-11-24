@@ -41,11 +41,14 @@ def test_a_screen_that_already_reaches_the_floor_is_left_exactly_alone() -> None
 
 
 def test_the_deficit_is_spread_across_the_row_rather_than_dropped_on_one_button() -> None:
-    """Otherwise a three-button bar gains one stretched cell and two normal ones."""
+    """Otherwise the navigation bar gains one stretched cell."""
     widened = uniform_keyboard(((Button("Back", "c1_back"),), _bar()))
 
-    widths = [len(button.text) for button in widened[-1]]
-    assert max(widths) - min(widths) <= 3
+    padding = [
+        len(after.text) - len(before.text)
+        for before, after in zip(_bar(), widened[-1], strict=True)
+    ]
+    assert max(padding) - min(padding) <= 1
 
 
 def test_padding_never_touches_a_callback_token() -> None:

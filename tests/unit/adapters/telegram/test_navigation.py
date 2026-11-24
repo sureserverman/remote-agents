@@ -508,7 +508,7 @@ async def test_the_sessions_counts_lead_the_list_that_owns_them() -> None:
         [SessionState.RUNNING, SessionState.RUNNING, SessionState.PRESERVED]
     )
 
-    rendered = await boundary._sessions_reply()
+    rendered = await boundary.sessions._sessions_reply()
 
     # The emoji legend is the count: two active, one preserved, and no bucket in between.
     assert "<b>Sessions</b> · 3  🟢 2 · ⚪ 1" in rendered.text
@@ -522,7 +522,7 @@ async def test_the_sessions_counts_are_still_rendered_when_nothing_is_running() 
     header is the total alone."""
     boundary = _sessions_counts_boundary([])
 
-    rendered = await boundary._sessions_reply()
+    rendered = await boundary.sessions._sessions_reply()
 
     assert rendered.text.startswith("<b>Sessions</b> · 0\n")
     assert "Nothing is running." in rendered.text
@@ -547,7 +547,7 @@ async def test_the_sessions_counts_reconcile_with_the_rows_they_sit_above() -> N
         ]
     )
 
-    rendered = await boundary._sessions_reply()
+    rendered = await boundary.sessions._sessions_reply()
 
     assert "<b>Sessions</b> · 4  🟡 2 · 🔴 2" in rendered.text
     assert "🟢" not in rendered.text.split("\n")[0], "an empty bucket is not in the legend"
@@ -563,7 +563,7 @@ async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> Non
     boundary = _sessions_counts_boundary([SessionState.RUNNING] * 12)
     boundary.session_page_size = 5
 
-    second_page = await boundary._sessions_reply(2)
+    second_page = await boundary.sessions._sessions_reply(2)
 
     # Counts are of the whole list, not of the page — the page shows 5 of them.
     assert "<b>Sessions 2/3</b> · 12  🟢 12" in second_page.text
@@ -590,7 +590,7 @@ def test_add_project_on_launch_sits_beside_search_where_the_project_is_missing()
     this screen — not a dashboard in front of it."""
     boundary = _picker_boundary(creator=_Creator())
 
-    rendered = boundary._projects_reply(boundary.catalogue, view_id="all")
+    rendered = boundary.launch_resume._projects_reply(boundary.catalogue, view_id="all")
 
     rows = [[button.text for button in row] for row in rendered.keyboard]
     assert ["Search", "Add Project"] in rows
@@ -599,7 +599,7 @@ def test_add_project_on_launch_sits_beside_search_where_the_project_is_missing()
 def test_add_project_on_launch_is_absent_when_no_creator_is_wired() -> None:
     boundary = _picker_boundary(creator=None)
 
-    rendered = boundary._projects_reply(boundary.catalogue, view_id="all")
+    rendered = boundary.launch_resume._projects_reply(boundary.catalogue, view_id="all")
 
     labels = {label for row in rendered.keyboard for label in [b.text for b in row]}
     assert "Add Project" not in labels
@@ -610,7 +610,9 @@ def test_add_project_on_launch_never_appears_in_the_resume_picker() -> None:
     cannot resume a conversation in a project that does not exist yet."""
     boundary = _picker_boundary(creator=_Creator())
 
-    rendered = boundary._projects_reply(boundary.catalogue, view_id="all", flow="resume")
+    rendered = boundary.launch_resume._projects_reply(
+        boundary.catalogue, view_id="all", flow="resume"
+    )
 
     labels = {label for row in rendered.keyboard for label in [b.text for b in row]}
     assert "Add Project" not in labels
@@ -711,15 +713,19 @@ async def _outcome_screens() -> dict[str, object]:
         return token
 
     return {
-        "empty sessions": await empty._sessions_reply(),
+        "empty sessions": await empty.sessions._sessions_reply(),
         "launch failed": (
-            await failed._launch_reply(launch_id, claimed(failed, "launch.profile", launch_id), 1)
+            await failed.launch_resume._launch_reply(
+                launch_id, claimed(failed, "launch.profile", launch_id), 1
+            )
         )["reply_markup"],
         "session created": (
-            await created._launch_reply(launch_id, claimed(created, "launch.profile", launch_id), 1)
+            await created.launch_resume._launch_reply(
+                launch_id, claimed(created, "launch.profile", launch_id), 1
+            )
         )["reply_markup"],
         "project created": (
-            await project._project_reply(
+            await project.launch_resume._project_reply(
                 "infra|thing", claimed(project, "project.confirm", "infra|thing"), 1
             )
         )["reply_markup"],
@@ -851,7 +857,7 @@ async def test_a_resume_refused_for_a_codex_remote_control_change_says_so() -> N
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+    text = str((await boundary.launch_resume._resume_reply("c-0123456789abcdef", token, 1))["text"])
 
     assert "Codex Remote Control is changing" in text
     assert "Nothing was started" in text
@@ -1071,7 +1077,7 @@ async def test_resume_without_review_answers_every_state_it_can_return(
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    result = await boundary._resume_reply("c-0123456789abcdef", token, 1)
+    result = await boundary.launch_resume._resume_reply("c-0123456789abcdef", token, 1)
 
     assert expected in str(result["text"])
     assert "Session resumed" not in str(result["text"])
@@ -1096,7 +1102,7 @@ async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> 
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+    text = str((await boundary.launch_resume._resume_reply("c-0123456789abcdef", token, 1))["text"])
 
     assert "not something this tool can do" not in text
     assert "once that session has ended" in text
@@ -1130,7 +1136,7 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    result = await boundary._resume_reply("c-0123456789abcdef", token, 1)
+    result = await boundary.launch_resume._resume_reply("c-0123456789abcdef", token, 1)
 
     assert "Not resumed" in str(result["text"])
     assert "Session resumed" not in str(result["text"])
@@ -1164,7 +1170,7 @@ async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+    text = str((await boundary.launch_resume._resume_reply("c-0123456789abcdef", token, 1))["text"])
 
     assert "Resume did not become ready" in text
     assert "Not resumed" not in text, "a session this press created is not 'attached elsewhere'"
@@ -1307,7 +1313,7 @@ async def test_the_force_confirmation_survives_a_notification_arriving_while_it_
     # while its docstring claimed to pin this call site. It would have stayed green through a
     # "defence in depth" edit restoring `resolve(..., message_id=...)` at service.py:1621,
     # which is the one change it exists to catch.
-    rendered = await boundary._force_confirm_reply(token, anchor)
+    rendered = await boundary.sessions._force_confirm_reply(token, anchor)
 
     assert "no longer available" not in rendered.text, (
         "the force confirmation refused a force stop that is still perfectly legal, because a "
@@ -1356,7 +1362,7 @@ async def test_a_launch_refused_for_a_removed_worktree_says_so() -> None:
     token = boundary._callback("launch.profile", launch_id, mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    text = str((await boundary._launch_reply(launch_id, token, 1))["text"])
+    text = str((await boundary.launch_resume._launch_reply(launch_id, token, 1))["text"])
 
     assert WORKTREE_REMOVED_SENTENCE in text
     assert "pane may still exist" not in text
@@ -1368,7 +1374,7 @@ async def test_a_resume_refused_for_a_removed_worktree_says_so() -> None:
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
 
-    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+    text = str((await boundary.launch_resume._resume_reply("c-0123456789abcdef", token, 1))["text"])
 
     assert WORKTREE_REMOVED_SENTENCE in text
     assert "after local attention" not in text
@@ -1396,9 +1402,9 @@ async def test_an_unavailable_folder_names_the_refusal_without_a_pane_warning(op
     )
     boundary.callbacks.bind_pending(CHAT, 1)
     reply = (
-        await boundary._launch_reply(entity, token, 1)
+        await boundary.launch_resume._launch_reply(entity, token, 1)
         if operation == "launch"
-        else await boundary._resume_reply(entity, token, 1)
+        else await boundary.launch_resume._resume_reply(entity, token, 1)
     )
     text = str(reply["text"])
     assert FOLDER_UNAVAILABLE_SENTENCE in text
