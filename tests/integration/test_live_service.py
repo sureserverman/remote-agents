@@ -198,10 +198,10 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
-    # The first press replaced this message's keyboard, which pruned the token it came from
-    # -- so the second press of the same button is a race, answered and redrawn.
+    # A delayed repeat acknowledges the old keyboard and keeps the current Projects page.
     assert callback.answers == [None, "That screen has moved on."]
-    assert callback.edits[1]["text"].startswith("<b>Sessions</b>")
+    assert len(callback.edits) == 1
+    assert not callback.sends
 
 
 @pytest.mark.asyncio
@@ -1292,12 +1292,7 @@ async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_resu
 
 @pytest.mark.asyncio
 async def test_a_press_this_screen_cannot_account_for_is_a_race_not_an_error() -> None:
-    """Nothing expires any more, so the modal alert that said so is gone with it.
-
-    A token only fails to resolve when the keyboard that drew it has already been replaced
-    on this message — a thumb racing a redraw. That earns a toast and a redraw, not a modal
-    telling the owner their view died.
-    """
+    """With no recorded menu, an unknown press gets a toast and a newly sent Sessions root."""
     boundary, _ = _stop_boundary()
     callback = _Callback("c1_never_issued")
 
@@ -1305,7 +1300,10 @@ async def test_a_press_this_screen_cannot_account_for_is_a_race_not_an_error() -
 
     assert callback.answers == ["That screen has moved on."]
     assert callback.alerts == [False]
-    assert "Sessions" in str(callback.edits[0]["text"])
+    assert not callback.edits
+    assert len(callback.sends) == 1
+    assert "Sessions" in callback.sends[0]["text"]
+    assert boundary.view.anchor() != callback.message.message_id
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):

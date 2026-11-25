@@ -472,18 +472,8 @@ async def test_the_live_view_never_re_sends_the_pairing_message_by_itself() -> N
 
 async def test_a_remembered_screen_is_still_re_sent_so_the_guard_is_not_vacuous() -> None:
     """The mechanism still works for the screens it exists for -- menus, not secrets."""
-    from remote_agents.adapters.telegram.live_view import LiveView
+    from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
     from remote_agents.adapters.telegram.service import build_private_bot
-
-    class _Anchors:
-        def anchor(self, _chat: int) -> int:
-            return 100
-
-        def record_anchor(self, _chat: int, _message_id: int) -> None:
-            return None
-
-        def clear_anchor(self, _chat: int) -> None:
-            return None
 
     class _Bot:
         def __init__(self) -> None:
@@ -506,7 +496,9 @@ async def test_a_remembered_screen_is_still_re_sent_so_the_guard_is_not_vacuous(
     _, backend = _surface_backend()
     boundary = build_private_bot(_OWNER, _CHAT, backend=backend)
     ordinary = await boundary.settings._host_remote_control_reply()
-    view = LiveView(chat_id=_CHAT, anchors=_Anchors(), callbacks=boundary.callbacks)
+    anchors = ChatViewStore()
+    anchors.record_anchor(_CHAT, 100)
+    view = LiveView(chat_id=_CHAT, anchors=anchors, callbacks=boundary.callbacks)
     bot = _Bot()
 
     from remote_agents.adapters.telegram.service import _reply_arguments

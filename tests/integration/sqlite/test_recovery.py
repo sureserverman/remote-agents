@@ -6,6 +6,7 @@ import os
 import sqlite3
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
@@ -329,7 +330,10 @@ def test_a_domain_store_at_the_ui_version_is_never_restored_over_the_ui_store(
     ui, _backup = _ui_store_with_a_backup(tmp_path)
     ui.write_bytes(b"not a SQLite database")
     old_domain = tmp_path / "old-domain.sqlite3"
-    open_database(old_domain, migrations=MIGRATIONS[:2]).close()  # version 2, like the UI head
+    ui_version = database_module.UI_MIGRATIONS[-1][0]
+    migrations = tuple(item for item in MIGRATIONS if item[0] <= ui_version)
+    with closing(open_database(old_domain, migrations=migrations)) as connection:
+        assert current_version(connection) == ui_version
 
     with pytest.raises(ValueError, match="not a backup of the surface store"):
         restore_database(ui, old_domain)
