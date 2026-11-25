@@ -1304,3 +1304,53 @@ async def test_an_unreadable_recovery_value_leaves_the_other_controls_usable():
     assert _row_label(screen, RESUME_TITLE)
     assert not any(label.startswith(RESTART_RESUME_TITLE) for label in _labels(screen))
     assert "‹ Back to Settings" in _labels(screen)
+
+
+async def test_each_settings_page_reads_only_its_own_controls_through_the_chat():
+    from unittest.mock import AsyncMock
+
+    from remote_agents.application.permission_presets import PERMISSION_TITLE
+    from remote_agents.domain.profiles import PermissionPreset
+
+    groups = {
+        "Remote Control": ("claude_remote_control_default", "host_remote_control"),
+        "Usage limits": ("claude_limits_source", "cursor_limits_source", "early_reset_notice"),
+        "Recovery": ("resume_after_limit", "resume_interrupted", "auto_rollover"),
+        PERMISSION_TITLE: ("permission_presets",),
+    }
+    values = {
+        "claude_remote_control_default": RemoteControlDefault.OFF,
+        "claude_limits_source": "off",
+        "cursor_limits_source": "off",
+        "early_reset_notice": "1h",
+        "resume_after_limit": True,
+        "resume_interrupted": False,
+        "auto_rollover": False,
+        "permission_presets": PermissionPreset.ASK,
+    }
+    ports = {name: AsyncMock() for name in values}
+    for name, value in values.items():
+        ports[name].read.return_value = value
+    host = FakeHostRemoteControl(HostConnection.DISABLED)
+    host.status = AsyncMock(wraps=host.status)
+    readers = {name: port.read for name, port in ports.items()}
+    readers["host_remote_control"] = host.status
+    bot = build_private_bot(
+        OWNER, CHAT, backend=replace(backend_for(host_remote_control=host), **ports)
+    )
+    chat = FakeChat()
+
+    for title, owned in groups.items():
+        await bot.settings_command(chat.message_update("/settings"), None)
+        (anchor,) = chat.bot_messages
+        rows = anchor.reply_markup.inline_keyboard
+        assert [unpadded(row[0].text) for row in rows[:-1]] == list(groups)
+        assert all(reader.await_count == 0 for reader in readers.values())
+        button = next(row[0] for row in rows if unpadded(row[0].text) == title)
+        await bot.callback(chat.press(button.callback_data), None)
+        assert f"<b>{title}</b>" in anchor.text
+        assert {name: reader.await_count for name, reader in readers.items()} == {
+            name: int(name in owned) for name in readers
+        }
+        for reader in readers.values():
+            reader.reset_mock()
