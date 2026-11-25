@@ -178,7 +178,7 @@ qualification remains an independent final gate.
 ## WF-CONT-006 — Change a running session's permissions
 
 - **Entry:** Telegram session screen → `🛡 Permissions` →
-  `PrivateBotBoundary._live_permissions_question` / `_live_permissions_reply`; terminal session
+  `SessionScreens._live_permissions_question` / `_live_permissions_reply`; terminal session
   detail → `Permissions` row → `SessionDetailScreen.show_permissions` → `PermissionsScreen`.
   Both call `Backend.change_session_permissions` → `SessionPermissions.change`.
 - **Preconditions:** A RUNNING session of a provider that declares permission presets, with a

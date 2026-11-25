@@ -157,7 +157,7 @@ async def test_help_names_the_settings_screen_where_a_row_is_wired() -> None:
     spoken, quiet = (message.text for message in chat.bot_messages[:2])
 
     assert "Settings" in spoken, spoken
-    assert "Settings" not in quiet, "a host with neither row advertises no screen for them"
+    assert "/settings" in quiet and "No editable settings" in quiet
 
 
 async def test_both_rows_read_the_value_they_currently_have() -> None:

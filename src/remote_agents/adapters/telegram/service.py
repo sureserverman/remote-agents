@@ -158,19 +158,10 @@ _OWNER_COMMANDS = (
     BotCommand("launch", "Launch a curated agent"),
     BotCommand("resume", "Resume a saved conversation"),
     BotCommand("sessions", "View managed sessions"),
-    BotCommand("settings", "Remote Control for this machine"),
+    BotCommand("settings", "Configure this machine and future sessions"),
     BotCommand("help", "Show available actions"),
 )
-"""The menu every host publishes, whatever it wired.
-
-`/settings` is here rather than beside `_HOST_REMOTE_COMMAND` below, and the asymmetry is
-deliberate. That one is offered only where a provider declared the host capability, because a
-host with no `codex` has no relay to enrol with and an entry whose only possible answer is
-"no" is worse than no entry. This screen carries a row per provider, a row for where Claude's
-limits are read from, and states the absence of any of them in words, so there is no host on
-which it is a dead end -- and a menu that listed a settings screen only sometimes would be a
-worse answer to "where do I change this" than one that always does.
-"""
+"""Settings is always a destination. Its root explains which controls this host provides."""
 _HOST_REMOTE_COMMAND = BotCommand("remote", HOST_REMOTE_CONTROL_TITLE)
 """The one command this bot lists conditionally, named by `application` rather than here.
 
@@ -1178,25 +1169,24 @@ class PrivateBotBoundary:
         lines = [
             "<b>Remote agents</b>",
             "",
-            "<b>Launch</b> starts a curated agent in a project.",
+            "<b>Launch</b> (/launch) starts a curated agent in a project.",
         ]
         if self.backend.conversations is not None:
-            lines.append("<b>Resume</b> continues a saved conversation in a new session.")
+            lines.append("<b>Resume</b> (/resume) continues a saved conversation in a new session.")
         lines.append(
-            "<b>Sessions</b> lists what is running. Open one to read its output, copy an "
-            "attach command, rename it, or stop it."
+            "<b>Sessions</b> (/sessions) lists what is running. Open one to read its output, "
+            "copy an attach command, rename it, or stop it."
         )
         if self.backend.projects is not None:
             lines.append("<b>Add Project</b> registers a new project to launch into.")
         if self.backend.host_remote_control is not None:
             lines.append(
-                f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)}</b> reports whether this machine is "
-                "enrolled with the relay, and turns that setting on or off for the whole "
-                "machine rather than for one session."
+                f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)}</b> (/remote) shows enrollment status "
+                "and turns the relay connection on or off for the whole machine."
             )
         sections = [title for _, title, available in available_sections(self.backend) if available]
-        if sections:
-            lines.append("<b>Settings</b> (/settings): " + ", ".join(sections) + ".")
+        choices = ", ".join(sections) if sections else "No editable settings on this machine"
+        lines.append(f"<b>Settings</b> (/settings): {choices}.")
         lines += [
             "",
             f"<b>{ACTION_LABELS[GRACEFUL]}</b> asks the agent to exit on its own terms and "
