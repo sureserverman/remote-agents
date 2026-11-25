@@ -1376,6 +1376,7 @@ class PrivateBotBoundary:
             # The pending screen carries no buttons, so failing after it is drawn would
             # strand the owner on a dead message. Put them back on something they can act on.
             _LOG.exception("callback action failed while its pending notice was on screen")
+            self._flow = "sessions"
             await self._render(
                 query,
                 _reply_arguments(

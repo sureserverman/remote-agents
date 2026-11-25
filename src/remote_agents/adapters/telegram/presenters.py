@@ -166,9 +166,9 @@ def uniform_keyboard(
     `service._message` that row is the fixed navigation bar (DEC-032) — present on all of them,
     never the row carrying an agent's own words, and already the widest thing on the screens
     that are too narrow. Padding a row the owner reads for content would put invisible
-    characters inside a session's name; padding the bar puts them inside three fixed words.
+    characters inside a session's name; padding the bar puts them inside fixed navigation labels.
 
-    The deficit is spread across that row's buttons rather than dropped on one, so a two- or
+    The deficit is spread across that row's buttons rather than dropped on one, so the
     navigation bar stays visually even instead of gaining one stretched cell.
 
     Only callbacks are preserved verbatim — the token is the thing a press is looked up by, and

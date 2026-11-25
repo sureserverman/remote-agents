@@ -979,6 +979,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
     labels = [
         unpadded(button.text) for row in screen.reply_markup.inline_keyboard for button in row
     ]
+    assert "• Sessions" in labels
     assert "Back" not in labels
     assert len(chat.bot_messages) == 1, chat.transcript()
 

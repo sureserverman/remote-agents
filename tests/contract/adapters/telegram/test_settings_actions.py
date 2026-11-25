@@ -1285,3 +1285,22 @@ def test_each_capability_has_one_root_destination_without_reading_it(capability,
     bot = _bot(None, None)
     bot.backend = replace(bot.backend, **{capability: object()})
     assert _rows(bot.settings.root())[:-1] == [[entry]]
+
+
+async def test_an_unreadable_recovery_value_leaves_the_other_controls_usable():
+    from remote_agents.application.restart_resume_setting import RESTART_RESUME_TITLE
+    from remote_agents.application.resume_setting import RESUME_TITLE
+
+    class Unreadable(FakeResumeSetting):
+        async def read(self) -> bool:
+            raise OSError("private diagnostic from file reader")
+
+    bot = _bot_with_resume(FakeResumeSetting())
+    bot.backend = replace(bot.backend, resume_interrupted=Unreadable())
+    screen = await bot.settings.recovery()
+
+    assert f"{RESTART_RESUME_TITLE} could not be read." in screen.text
+    assert "private diagnostic" not in screen.text
+    assert _row_label(screen, RESUME_TITLE)
+    assert not any(label.startswith(RESTART_RESUME_TITLE) for label in _labels(screen))
+    assert "‹ Back to Settings" in _labels(screen)

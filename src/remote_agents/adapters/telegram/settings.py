@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from html import escape
+from operator import not_
+from typing import Protocol
 
 from remote_agents.adapters.telegram.callbacks import permission_entity, split_permission_entity
 from remote_agents.adapters.telegram.labels import _LIMITS_EMOJI, _REMOTE_EMOJI
@@ -199,6 +202,27 @@ def available_sections(backend: Backend) -> tuple[tuple[str, str, bool], ...]:
     )
 
 
+class _ChoicePort[T](Protocol):
+    async def read(self) -> T: ...
+    async def write(self, value: T) -> None: ...
+
+
+async def _read_value[T](
+    title: str, read: Callable[[], Awaitable[T]] | None, lines: list[str], observed: T | None = None
+) -> T | None:
+    """Keep the other controls usable when one provider cannot supply its reading."""
+    if read is None:
+        lines.extend(("", f"{escape(title)} is unavailable."))
+        return None
+    if observed is not None:
+        return observed
+    try:
+        return await read()
+    except Exception:
+        lines.extend(("", f"{escape(title)} could not be read."))
+        return None
+
+
 class SettingsScreens(ScreenActions):
     @staticmethod
     def _host_reading(status: HostRemoteControlStatus) -> str:
@@ -365,10 +389,13 @@ class SettingsScreens(ScreenActions):
             "Codex controls enrollment for the whole machine."
         )
         default = self.backend.claude_remote_control_default
-        if default is None:
-            lines += ["", f"{escape(REMOTE_CONTROL_DEFAULT_TITLE)} is unavailable."]
-        else:
-            current = await default.read() if claude_default is None else claude_default
+        current = await _read_value(
+            REMOTE_CONTROL_DEFAULT_TITLE,
+            default.read if default is not None else None,
+            lines,
+            claude_default,
+        )
+        if current is not None:
             rows.append(
                 (
                     Button(
@@ -379,10 +406,10 @@ class SettingsScreens(ScreenActions):
                 )
             )
         control = self.backend.host_remote_control
-        if control is None:
-            lines += ["", f"{escape(HOST_REMOTE_CONTROL_TITLE)} is unavailable."]
-        else:
-            status = await control.status()
+        status = await _read_value(
+            HOST_REMOTE_CONTROL_TITLE, control.status if control is not None else None, lines
+        )
+        if status is not None:
             rows.append(
                 (
                     Button(
@@ -403,10 +430,10 @@ class SettingsScreens(ScreenActions):
         lines = ["<b>Usage limits</b>"]
         rows: list[tuple[Button, ...]] = []
         source = self.backend.claude_limits_source
-        if source is None:
-            lines += ["", f"{escape(LIMITS_SOURCE_TITLE)} is unavailable."]
-        else:
-            chosen = await source.read() if limits_source is None else limits_source
+        chosen = await _read_value(
+            LIMITS_SOURCE_TITLE, source.read if source is not None else None, lines, limits_source
+        )
+        if chosen is not None:
             rows.append(
                 (
                     Button(
@@ -417,10 +444,13 @@ class SettingsScreens(ScreenActions):
                 )
             )
         cursor = self.backend.cursor_limits_source
-        if cursor is None:
-            lines += ["", f"{escape(CURSOR_LIMITS_SOURCE_TITLE)} is unavailable."]
-        else:
-            chosen_cursor = await cursor.read() if cursor_limits is None else cursor_limits
+        chosen_cursor = await _read_value(
+            CURSOR_LIMITS_SOURCE_TITLE,
+            cursor.read if cursor is not None else None,
+            lines,
+            cursor_limits,
+        )
+        if chosen_cursor is not None:
             intended = next_cursor_limits_source(chosen_cursor)
             rows.append(
                 (
@@ -434,10 +464,13 @@ class SettingsScreens(ScreenActions):
                 )
             )
         early_choice = self.backend.early_reset_notice
-        if early_choice is None:
-            lines += ["", f"{escape(EARLY_RESET_TITLE)} is unavailable."]
-        else:
-            chosen_early = await early_choice.read() if early_reset is None else early_reset
+        chosen_early = await _read_value(
+            EARLY_RESET_TITLE,
+            early_choice.read if early_choice is not None else None,
+            lines,
+            early_reset,
+        )
+        if chosen_early is not None:
             rows.append(
                 (
                     Button(
@@ -458,10 +491,10 @@ class SettingsScreens(ScreenActions):
         lines = ["<b>Recovery</b>"]
         rows: list[tuple[Button, ...]] = []
         switch = self.backend.resume_after_limit
-        if switch is None:
-            lines += ["", f"{escape(RESUME_TITLE)} is unavailable."]
-        else:
-            chosen_resume = await switch.read() if resume is None else resume
+        chosen_resume = await _read_value(
+            RESUME_TITLE, switch.read if switch is not None else None, lines, resume
+        )
+        if chosen_resume is not None:
             rows.append(
                 (
                     Button(
@@ -471,12 +504,13 @@ class SettingsScreens(ScreenActions):
                 )
             )
         restart_switch = self.backend.resume_interrupted
-        if restart_switch is None:
-            lines += ["", f"{escape(RESTART_RESUME_TITLE)} is unavailable."]
-        else:
-            chosen_restart = (
-                await restart_switch.read() if resume_interrupted is None else resume_interrupted
-            )
+        chosen_restart = await _read_value(
+            RESTART_RESUME_TITLE,
+            restart_switch.read if restart_switch is not None else None,
+            lines,
+            resume_interrupted,
+        )
+        if chosen_restart is not None:
             rows.append(
                 (
                     Button(
@@ -487,10 +521,13 @@ class SettingsScreens(ScreenActions):
                 )
             )
         rollover_switch = self.backend.auto_rollover
-        if rollover_switch is None:
-            lines += ["", f"{escape(ROLLOVER_TITLE)} is unavailable."]
-        else:
-            chosen_rollover = await rollover_switch.read() if rollover is None else rollover
+        chosen_rollover = await _read_value(
+            ROLLOVER_TITLE,
+            rollover_switch.read if rollover_switch is not None else None,
+            lines,
+            rollover,
+        )
+        if chosen_rollover is not None:
             rows.append(
                 (
                     Button(
@@ -584,47 +621,38 @@ class SettingsScreens(ScreenActions):
             )
         return _reply_arguments(self.root(f"{PERMISSION_TITLE}: {permission_label(selected)}"))
 
-    async def _settings_limits_source_reply(self, token: str, message_id: int) -> dict[str, object]:
-        """Advance where Claude's limits come from by one press, then draw what the file says.
-
-        `_settings_claude_reply`'s shape exactly, and deliberately so: the two rows write to
-        different files owned by different programs, but what the owner can observe is one
-        behaviour -- read, advance from *this* read rather than from the value the button was
-        drawn with (a token outlives its screen, DEC-011), write, read again.
-
-        The last read is not redundant. This value has a second writer by design -- the
-        terminal's Settings screen edits the same `config.toml` -- so the only honest row after
-        a press is one that asked the file again (DEC-005's accepted multi-writer world).
-
-        Neither verb raises, which is the port's contract, so there is no failure branch. A
-        write that could not land is a forgotten choice, and the read-back reports it: the
-        refusal is detected by comparing what the file now says against what the press asked
-        for, because `write_limits_key` declines several shapes an owner can hand-edit and
-        cannot raise to say which.
-        """
-        source = self.backend.claude_limits_source
-        if source is None:
-            return _reply_arguments(self._message(f"{escape(LIMITS_SOURCE_TITLE)} is unavailable."))
+    async def _advance[T](
+        self,
+        token: str,
+        message_id: int,
+        choice: _ChoicePort[T] | None,
+        title: str,
+        labels: Mapping[T, str],
+        advance: Callable[[T], T],
+        draw: Callable[[T], Awaitable[RenderedMessage]],
+    ) -> dict[str, object]:
+        if choice is None:
+            return _reply_arguments(self.root(f"{title} is unavailable."))
         if not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            message_id=message_id,
+            token, owner_id=self.owner_user_id, chat_id=self.owner_chat_id, message_id=message_id
         ):
             return _reply_arguments(self._message("That action has already run."))
-        intended = next_limits_source(await source.read())
-        await source.write(intended)
-        landed = await source.read()
-        screen = await self.limits(limits_source=landed)
-        if landed == intended:
-            return _reply_arguments(screen)
-        return _reply_arguments(
-            replace(
-                screen,
-                text=f"{escape(LIMITS_SOURCE_TITLE)} could not be changed; it is still "
-                f"<code>{escape(LIMITS_SOURCE_LABELS.get(landed, landed))}</code>.",
+        # The terminal may have written since the button was drawn. Read before advancing
+        # and after writing so that the row shows what the two frontends now share.
+        try:
+            intended = advance(await choice.read())
+            await choice.write(intended)
+            landed = await choice.read()
+        except Exception:
+            return _reply_arguments(self.root(f"{title} could not be changed or verified."))
+        screen = await draw(landed)
+        if landed != intended:
+            notice = (
+                f"{escape(title)} could not be changed; it is still "
+                f"<code>{escape(labels.get(landed, str(landed)))}</code>."
             )
-        )
+            screen = replace(screen, text=f"{notice}\n\n{screen.text}")
+        return _reply_arguments(screen)
 
     def _settings_cursor_limits_confirm(self) -> RenderedMessage:
         """Ask before Cursor limits are turned on. A question, so nothing is read or written.
@@ -688,186 +716,6 @@ class SettingsScreens(ScreenActions):
             )
         )
 
-    async def _settings_resume_reply(self, token: str, message_id: int) -> dict[str, object]:
-        """Flip the resume switch by one press, then draw what the file says.
-
-        `_settings_limits_source_reply`'s shape: flip from a fresh read rather than from the
-        drawn value (the terminal writes the same file), and detect a refused write by the
-        read-back, since the port cannot raise to say it declined.
-        """
-        switch = self.backend.resume_after_limit
-        if switch is None:
-            return _reply_arguments(self._message(f"{escape(RESUME_TITLE)} is unavailable."))
-        if not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            message_id=message_id,
-        ):
-            return _reply_arguments(self._message("That action has already run."))
-        intended = not await switch.read()
-        await switch.write(intended)
-        landed = await switch.read()
-        screen = await self.recovery(resume=landed)
-        if landed == intended:
-            return _reply_arguments(screen)
-        return _reply_arguments(
-            replace(
-                screen,
-                text=f"{escape(RESUME_TITLE)} could not be changed; it is still "
-                f"<code>{escape(RESUME_LABELS[landed])}</code>.",
-            )
-        )
-
-    async def _settings_rollover_reply(self, token: str, message_id: int) -> dict[str, object]:
-        """Flip the auto-rollover switch by one press, then draw what the file says.
-
-        `_settings_resume_reply`'s shape: flip from a fresh read, write, and detect a refused
-        write by the read-back.
-        """
-        switch = self.backend.auto_rollover
-        if switch is None:
-            return _reply_arguments(self._message(f"{escape(ROLLOVER_TITLE)} is unavailable."))
-        if not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            message_id=message_id,
-        ):
-            return _reply_arguments(self._message("That action has already run."))
-        intended = not await switch.read()
-        await switch.write(intended)
-        landed = await switch.read()
-        screen = await self.recovery(rollover=landed)
-        if landed == intended:
-            return _reply_arguments(screen)
-        return _reply_arguments(
-            replace(
-                screen,
-                text=f"{escape(ROLLOVER_TITLE)} could not be changed; it is still "
-                f"<code>{escape(ROLLOVER_LABELS[landed])}</code>.",
-            )
-        )
-
-    async def _settings_early_reset_reply(self, token: str, message_id: int) -> dict[str, object]:
-        """Advance the early-reset notice choice by one press, then draw what the file says.
-
-        `_settings_limits_source_reply`'s shape: advance from a fresh read, write, and detect a
-        refused write by the read-back.
-        """
-        choice = self.backend.early_reset_notice
-        if choice is None:
-            return _reply_arguments(self._message(f"{escape(EARLY_RESET_TITLE)} is unavailable."))
-        if not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            message_id=message_id,
-        ):
-            return _reply_arguments(self._message("That action has already run."))
-        intended = next_early_reset_notice(await choice.read())
-        await choice.write(intended)
-        landed = await choice.read()
-        screen = await self.limits(early_reset=landed)
-        if landed == intended:
-            return _reply_arguments(screen)
-        return _reply_arguments(
-            replace(
-                screen,
-                text=f"{escape(EARLY_RESET_TITLE)} could not be changed; it is still "
-                f"<code>{escape(EARLY_RESET_LABELS.get(landed, landed))}</code>.",
-            )
-        )
-
-    async def _settings_restart_resume_reply(
-        self, token: str, message_id: int
-    ) -> dict[str, object]:
-        """Flip the restart-resume switch by one press, then draw what the file says.
-
-        `_settings_rollover_reply`'s shape: flip from a fresh read, write, and detect a refused
-        write by the read-back.
-        """
-        switch = self.backend.resume_interrupted
-        if switch is None:
-            return _reply_arguments(
-                self._message(f"{escape(RESTART_RESUME_TITLE)} is unavailable.")
-            )
-        if not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            message_id=message_id,
-        ):
-            return _reply_arguments(self._message("That action has already run."))
-        intended = not await switch.read()
-        await switch.write(intended)
-        landed = await switch.read()
-        screen = await self.recovery(resume_interrupted=landed)
-        if landed == intended:
-            return _reply_arguments(screen)
-        return _reply_arguments(
-            replace(
-                screen,
-                text=f"{escape(RESTART_RESUME_TITLE)} could not be changed; it is still "
-                f"<code>{escape(RESTART_RESUME_LABELS[landed])}</code>.",
-            )
-        )
-
-    async def _settings_claude_reply(self, token: str, message_id: int) -> dict[str, object]:
-        """Advance Claude's stored default by one press, then draw what the file now says.
-
-        **Read, advance, write, read again**, and the last step is not redundant. This value has
-        a second writer by design -- the terminal's Settings screen edits the same file -- so
-        the only honest row after a press is one that asked the provider again rather than one
-        rendering the state it had just computed (DEC-005's accepted multi-writer world).
-
-        The advance is taken from the value read *here* rather than from the one the button was
-        drawn with, for the same reason: a token outlives the screen that minted it (DEC-011),
-        so a press that advanced from a stale reading would write a state the owner had already
-        moved away from.
-
-        `claim_mutation` is what stops a redelivered callback from advancing the cycle twice,
-        and it is claimed after the capability check for the reason `_launch_reply` gives:
-        spending the one-shot on a press that could never have worked answers the retry with
-        "already run".
-
-        Neither `read` nor `write` raises -- that is the port's contract, because a settings
-        file the owner edited by hand is not a reason a screen will not draw -- so there is no
-        failure branch here. A write that could not land is a forgotten choice, and the re-read
-        below is what reports it honestly.
-        """
-        default = self.backend.claude_remote_control_default
-        if default is None:
-            return _reply_arguments(
-                self._message(f"{escape(REMOTE_CONTROL_DEFAULT_TITLE)} is unavailable.")
-            )
-        if not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            message_id=message_id,
-        ):
-            return _reply_arguments(self._message("That action has already run."))
-        intended = next_remote_control_default(await default.read())
-        await default.write(intended)
-        # The screen re-reads, so the row below is already what the file says. What it cannot
-        # say on its own is whether that is what the press *asked for*: `write` cannot raise by
-        # contract -- a settings file whose formatting cannot be reproduced is refused with one
-        # log line -- so a refused press would otherwise redraw an unchanged row and report
-        # nothing at all, which reads as a button that does not work. The terminal's Settings
-        # screen detects it the same way, by comparing the read-back against the intention.
-        landed = await default.read()
-        screen = await self.remote(landed)
-        if landed is intended:
-            return _reply_arguments(screen)
-        return _reply_arguments(
-            replace(
-                screen,
-                text=f"{escape(REMOTE_CONTROL_DEFAULT_TITLE)} could not be changed; it is still "
-                f"<code>{escape(REMOTE_CONTROL_DEFAULT_LABELS[landed])}</code>.",
-            )
-        )
-
     async def reply_for(
         self, action: str, entity_id: str, token: str, message_id: int
     ) -> dict[str, object]:
@@ -884,17 +732,65 @@ class SettingsScreens(ScreenActions):
         if action == "host.remote.confirm":
             return await self._host_remote_control_act_reply(entity_id, token, message_id)
         if action == "settings.claude":
-            return await self._settings_claude_reply(token, message_id)
+            return await self._advance(
+                token,
+                message_id,
+                self.backend.claude_remote_control_default,
+                REMOTE_CONTROL_DEFAULT_TITLE,
+                REMOTE_CONTROL_DEFAULT_LABELS,
+                next_remote_control_default,
+                self.remote,
+            )
         if action == "settings.limits_source":
-            return await self._settings_limits_source_reply(token, message_id)
+            return await self._advance(
+                token,
+                message_id,
+                self.backend.claude_limits_source,
+                LIMITS_SOURCE_TITLE,
+                LIMITS_SOURCE_LABELS,
+                next_limits_source,
+                lambda value: self.limits(limits_source=value),
+            )
         if action == "settings.resume_after_limit":
-            return await self._settings_resume_reply(token, message_id)
+            return await self._advance(
+                token,
+                message_id,
+                self.backend.resume_after_limit,
+                RESUME_TITLE,
+                RESUME_LABELS,
+                not_,
+                lambda value: self.recovery(resume=value),
+            )
         if action == "settings.early_reset":
-            return await self._settings_early_reset_reply(token, message_id)
+            return await self._advance(
+                token,
+                message_id,
+                self.backend.early_reset_notice,
+                EARLY_RESET_TITLE,
+                EARLY_RESET_LABELS,
+                next_early_reset_notice,
+                lambda value: self.limits(early_reset=value),
+            )
         if action == "settings.auto_rollover":
-            return await self._settings_rollover_reply(token, message_id)
+            return await self._advance(
+                token,
+                message_id,
+                self.backend.auto_rollover,
+                ROLLOVER_TITLE,
+                ROLLOVER_LABELS,
+                not_,
+                lambda value: self.recovery(rollover=value),
+            )
         if action == "settings.resume_interrupted":
-            return await self._settings_restart_resume_reply(token, message_id)
+            return await self._advance(
+                token,
+                message_id,
+                self.backend.resume_interrupted,
+                RESTART_RESUME_TITLE,
+                RESTART_RESUME_LABELS,
+                not_,
+                lambda value: self.recovery(resume_interrupted=value),
+            )
         if action == "settings.cursor_limits.ask":
             return _reply_arguments(self._settings_cursor_limits_confirm())
         if action == "settings.cursor_limits.set":
