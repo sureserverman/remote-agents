@@ -518,24 +518,11 @@ class PrivateBotBoundary:
     _pairing_message: int | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     _flow: str | None = None
-    """Which of the bar's three flows the screen being drawn belongs to, or None for neither.
+    """Active footer destination, or None on a neutral screen such as Help.
 
-    Read only by `_message`, to mark the tab the owner is standing in. Telegram will not
-    style a pressed button, so without a marker three identical rows on a dozen screens stop
-    saying anything about where you are.
-
-    Process-local render state, like `_sessions_page` and for the same reason: it describes
-    the screen currently drawn, and a restart has no screen to describe. A press that
-    outlives one falls back to an unmarked bar, which is cosmetic and self-correcting on
-    the next render.
-
-    One write outside a render would be a race, and the reason there cannot be one is not
-    local to this class: `run_private_bot` builds the application with
-    `concurrent_updates(False)`, so updates are handled one at a time. That is already
-    load-bearing for token binding — the comment there says so — and this field now rests
-    on it too. A change made for throughput would give two interleaved presses one shared
-    marker, which is the cheap half of what it would break. Both arguments were comments
-    only until `test_the_bot_handles_updates_sequentially` pinned the literal.
+    Commands and resolved callbacks select the destination before rendering. PTB handles
+    updates sequentially, so each interaction draws its own marker and binds its own tokens.
+    The live-view screen tag separately determines whether a background redraw is allowed.
     """
     _catalogue_gap_read_at: float | None = None
     """When this process last re-read the catalogue because a session named an unknown project.
