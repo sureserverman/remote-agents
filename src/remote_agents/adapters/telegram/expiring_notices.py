@@ -6,9 +6,7 @@ used to forget them on the spot -- so every one stayed in the chat until the own
 by hand. Each sent message is now remembered with its deadline (`ports.expiring_notices`), and
 the notifier's own pass sweeps the ones that are due.
 
-**Telegram lets a bot delete its own message for 48 hours**, so every lifetime here is shorter.
-A delete Telegram refuses is not retried: it will not start working later. A delete that never
-reached Telegram is, on the next sweep.
+The transport handles deletion refusals and retries once an obsolete message is identified.
 """
 
 from __future__ import annotations
@@ -52,6 +50,7 @@ class ExpiringMessages:
     ) -> None:
         self._view = view
         self._kind = kind
+        self._unsaved: dict[int, ExpiringNotice] = {}
         self._store = store if store is not None else InMemoryExpiringNoticeStore()
         #: The chat-wide "not yet" the senders share: a delete is a request too, and one sent
         #: into a flood hold extends the ban for every sender.
@@ -66,22 +65,20 @@ class ExpiringMessages:
         likeliest -- cannot cost the new message its own removal. A replaced message that could
         not be deleted stays remembered and goes on a later sweep. Never raises.
         """
+        notice = ExpiringNotice(self._chat_id(), message_id, self._kind, subject, expires_at)
+        self._unsaved[message_id] = notice
         try:
+            await self._store.remember(notice)
+            self._unsaved.pop(message_id, None)
             earlier = [
-                notice
-                for notice in await self._store.standing(self._kind)
-                if notice.subject == subject and notice.chat_id == self._chat_id()
+                previous
+                for previous in await self._store.standing(self._kind)
+                if previous.subject == subject
+                and previous.chat_id == notice.chat_id
+                and previous.message_id < message_id
             ]
-            await self._store.remember(
-                ExpiringNotice(self._chat_id(), message_id, self._kind, subject, expires_at)
-            )
         except Exception:
-            _LOG.warning(
-                "a %s message (%d) could not be remembered; it will not delete itself",
-                self._kind,
-                message_id,
-                exc_info=True,
-            )
+            _LOG.warning("deferring bookkeeping for %s message %d", self._kind, message_id)
             return
         for notice in earlier:
             if self._flood.held():
@@ -112,6 +109,9 @@ class ExpiringMessages:
         if self._flood.held():
             return
         try:
+            for notice in tuple(self._unsaved.values()):
+                await self._store.remember(notice)
+                self._unsaved.pop(notice.message_id, None)
             standing = await self._store.standing(self._kind)
         except Exception:
             _LOG.debug("the %s messages could not be read", self._kind, exc_info=True)

@@ -449,3 +449,21 @@ async def test_failed_rollover_warning_survives_while_its_successor_needs_attent
     assert not await settled("r1")
     successor = replace(successor, state=SessionState.ENDED)
     assert await settled("r1")
+
+
+async def test_a_sent_warning_retries_a_failed_ownership_write_after_its_subject_finishes():
+    class Offline(InMemoryExpiringNoticeStore):
+        available = False
+
+        async def remember(self, notice):
+            if not self.available:
+                raise OSError("offline")
+            await super().remember(notice)
+
+    view, store = _View(), Offline()
+    messages = ExpiringMessages(view=view, kind="binding", store=store)
+    await messages.sent(object(), 7, subject="A", expires_at=START)
+    store.available = True
+    await messages.sweep(object(), START)
+    assert view.deleted == [7]
+    assert await store.standing("binding") == ()
