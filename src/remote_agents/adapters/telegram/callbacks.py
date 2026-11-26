@@ -149,6 +149,13 @@ class CallbackStateStore:
         self._claimed.add(token)
         return True
 
+    def actions_for_message(self, chat_id: int, message_id: int) -> set[tuple[str, str]]:
+        return {
+            (state.action, state.entity_id)
+            for state in self._states.values()
+            if state.chat_id == chat_id and state.message_id == message_id
+        }
+
     def prune_for_message(self, chat_id: int, message_id: int) -> int:
         """Discard the tokens of a message that no longer exists, and report how many."""
         doomed = [

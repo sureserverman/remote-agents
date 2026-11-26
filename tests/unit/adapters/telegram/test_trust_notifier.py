@@ -43,6 +43,9 @@ class _Sessions:
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
 
+    async def refresh_readiness(self):
+        pass
+
     async def list_sessions(self):
         return (self.record,)
 
@@ -911,3 +914,122 @@ async def test_a_stop_during_the_trust_question_send_retires_it_in_the_same_pass
     await notifier.pass_once()
     assert view.discarded == [101]
     assert await store.standing_for(_SESSION) is None
+
+
+@pytest.mark.parametrize(
+    "carrier", ["question", "receipt", "newer_menu", "unknown", "race", "flood"]
+)
+async def test_legacy_trust_anchor_is_recovered_only_when_its_keyboard_still_owns_the_message(
+    tmp_path, carrier, monkeypatch
+):
+    from contextlib import closing
+
+    from backends import backend_for
+    from fake_telegram import FakeChat
+
+    from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+    from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+    from remote_agents.adapters.sqlite.database import open_ui_database
+    from remote_agents.adapters.sqlite.trust_notifications import SQLiteTrustNotificationStore
+    from remote_agents.adapters.telegram.service import build_private_bot
+
+    chat, sessions = FakeChat(), _Sessions(_record(state=SessionState.ENDED))
+    message = await chat.bot.send_message(chat_id=11, text=carrier)
+    msg_id = message.message_id
+    path = tmp_path / "ui.sqlite3"
+    with closing(open_ui_database(path)) as db:
+        store = SQLiteTrustNotificationStore(db)
+        await store.remember(_SESSION, chat_id=11, message_id=msg_id)
+        SQLiteChatViewStore(db).record_anchor(11, msg_id)
+        callbacks = SQLiteCallbackStateStore(db)
+        if carrier == "receipt":
+            await store.settle(_SESSION)
+        action = {
+            "question": "session.trust",
+            "receipt": "session.detail",
+            "newer_menu": "settings",
+            "race": "session.trust",
+            "flood": "session.decline",
+        }
+        token = None
+        if carrier in action:
+            token = callbacks.create(action[carrier], str(_SESSION), 7, 11, msg_id)
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+            await chat.bot.edit_message_reply_markup(
+                chat_id=11,
+                message_id=msg_id,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(carrier, callback_data=token)]]
+                ),
+            )
+    with closing(open_ui_database(path)) as db:
+        store = SQLiteTrustNotificationStore(db)
+        callbacks = SQLiteCallbackStateStore(db)
+        boundary = build_private_bot(
+            7,
+            11,
+            backend=backend_for(sessions=sessions),
+            callbacks=callbacks,
+            anchors=SQLiteChatViewStore(db),
+            trust_store=store,
+        )
+        notifier = boundary.trust_notifier
+        notifier.attach(chat.bot)
+        if carrier == "flood":
+            from telegram.error import RetryAfter
+
+            from remote_agents.adapters.telegram import flood
+
+            now = 100.0
+            monkeypatch.setattr(flood, "monotonic", lambda: now)
+            chat.bot.edit_error = RetryAfter(30)
+            await notifier.pass_once()
+            assert boundary.flood.held()
+            chat.bot.edit_error = None
+            await notifier.pass_once()
+            assert await store.standing_for(_SESSION) is not None
+            assert chat.messages[msg_id].text == carrier
+            now += 31
+        if carrier == "race":
+            from remote_agents.adapters.telegram.sessions import SessionScreens
+
+            build_sessions = SessionScreens._sessions_reply
+
+            async def open_settings_during_recovery(screen, *args, **kwargs):
+                arguments = await build_sessions(screen, *args, **kwargs)
+                await boundary.settings_command(chat.message_update("/settings"), None)
+                return arguments
+
+            monkeypatch.setattr(SessionScreens, "_sessions_reply", open_settings_during_recovery)
+            await notifier.pass_once()
+            assert await store.standing_for(_SESSION) is not None
+            assert "Settings" in chat.messages[msg_id].text
+            await notifier.pass_once()
+            assert await store.standing_for(_SESSION) is None
+            assert "Settings" in chat.messages[msg_id].text
+            return
+        if carrier in {"receipt", "question"}:
+            chat.bot.edit_error = TelegramError("no connection")
+            await notifier.pass_once()
+            assert await store.standing_for(_SESSION) is not None
+            assert chat.messages[msg_id].text == carrier
+            chat.bot.edit_error = None
+        await notifier.pass_once()
+        assert boundary.view.anchor() == msg_id
+        if carrier == "unknown":
+            assert await store.standing_for(_SESSION) is not None
+            assert chat.messages[msg_id].text == carrier
+            return
+        assert await store.standing_for(_SESSION) is None
+        resolved = callbacks.resolve(token, owner_id=7, chat_id=11, message_id=msg_id)
+        if carrier == "newer_menu":
+            assert resolved and chat.messages[msg_id].text == carrier
+        else:
+            assert resolved is None
+            assert "Sessions" in chat.messages[msg_id].text
+            for row in chat.messages[msg_id].reply_markup.inline_keyboard:
+                for button in row:
+                    assert callbacks.resolve(
+                        button.callback_data, owner_id=7, chat_id=11, message_id=msg_id
+                    )

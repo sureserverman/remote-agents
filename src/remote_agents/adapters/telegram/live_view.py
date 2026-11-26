@@ -189,6 +189,7 @@ class LiveView:
         remember: bool = True,
         screen: str | None = None,
         expected_revision: int | None = None,
+        expected_anchor: int | None = None,
     ) -> int | None:
         """Draw `arguments` as the chat's live view, and answer which message that is.
 
@@ -211,6 +212,8 @@ class LiveView:
         re-sent cannot express that through a flag that also means "keep your buttons".
         """
         async with self._publication:
+            if expected_anchor is not None and self.anchor() != expected_anchor:
+                return None
             if expected_revision is not None and self._revision != expected_revision:
                 return None
             message_id = await self._publish(bot, arguments, retire=retire)

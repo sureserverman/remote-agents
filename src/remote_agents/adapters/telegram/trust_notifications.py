@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from html import escape
 
 from telegram.constants import ParseMode
@@ -173,8 +173,10 @@ class TrustNotifier:
         callbacks: object,
         owner_user_id: int,
         trust_dialogs: Mapping[str, object] | None = None,
+        redraw_sessions: Callable[[object, int, int], Awaitable[bool]] | None = None,
     ) -> None:
         self._lock = asyncio.Lock()
+        self._redraw_sessions = redraw_sessions
         self._sessions = sessions
         self._store = store
         self._view = view
@@ -273,8 +275,29 @@ class TrustNotifier:
                     await self._retire(standing)
                     break
 
+    async def _release_anchor(self, standing: StandingTrustQuestion) -> bool:
+        """Recover a trust-only legacy anchor without overwriting a later menu at the same ID."""
+        revision = self._view.revision
+        actions = self._callbacks.actions_for_message(standing.chat_id, standing.message_id)
+        if not actions:
+            # A keyboardless secret or a pending action can occupy this anchor. Wait until
+            # a menu publication makes ownership known, or the anchor moves.
+            return False
+        if any(
+            entity != str(standing.session_id)
+            or action not in {"session.trust", "session.decline", "session.detail"}
+            for action, entity in actions
+        ):
+            return True
+        if self._redraw_sessions is None:
+            return False
+        return await self._redraw_sessions(self._bot, standing.message_id, revision)
+
     async def _retire(self, standing: StandingTrustQuestion) -> None:
-        if standing.message_id != self._view.anchor():
+        if standing.message_id == self._view.anchor():
+            if not await self._release_anchor(standing):
+                return
+        else:
             self._callbacks.prune_for_message(standing.chat_id, standing.message_id)
             if await self._view.retire_notice(self._bot, standing.message_id) is False:
                 return
@@ -526,7 +549,8 @@ class TrustNotifier:
         the next pass try the whole thing again every five seconds.
         """
         if standing.message_id == self._view.anchor():
-            await self._store.forget(standing)
+            if await self._release_anchor(standing):
+                await self._store.forget(standing)
             return
         self._callbacks.prune_for_message(standing.chat_id, standing.message_id)
         if await self._view.discard(self._bot, standing.message_id):

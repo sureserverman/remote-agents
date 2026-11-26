@@ -187,6 +187,15 @@ class SQLiteCallbackStateStore:
             )
         return cursor.rowcount == 1
 
+    def actions_for_message(self, chat_id: int, message_id: int) -> set[tuple[str, str]]:
+        return set(
+            self._connection.execute(
+                "SELECT DISTINCT action, entity_id FROM callback_states "
+                "WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            )
+        )
+
     def prune_for_message(self, chat_id: int, message_id: int) -> int:
         """Discard the tokens of a message that no longer exists, and report how many.
 

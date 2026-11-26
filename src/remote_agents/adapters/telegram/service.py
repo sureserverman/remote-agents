@@ -9,6 +9,7 @@ import signal
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from html import escape
 from time import monotonic
 
@@ -261,10 +262,8 @@ class _TextEntry:
     input_message_id: int = 0
 
 
-#: Actions whose token lives on a message sent *apart* from the live view, and which must
-#: therefore never be adopted as it. Every one of them is a button on a notification: adopting
-#: one makes the next render draw a screen over the message, and the notifier's own later
-#: amendment then paints its text back over that screen.
+#: Older standing trust questions share action names with the menu. Resolve their carrier
+#: against the durable trust question before adopting an otherwise unknown screen.
 _TRUST_MESSAGE_ACTIONS = frozenset({"session.trust", "session.decline", "session.detail"})
 
 _PENDING_NOTICES = {
@@ -1230,9 +1229,14 @@ class PrivateBotBoundary:
         # Older amended questions carry an ordinary session.detail token. The stored chat
         # and message identify both generations without granting a stale menu an exemption.
         apart = state is not None and state.action == _NOTIFIED_DETAIL
-        if state is not None and state.action in _TRUST_MESSAGE_ACTIONS and self.trust_notifier:
+        if (
+            state is not None
+            and state.action in _TRUST_MESSAGE_ACTIONS
+            and self.trust_notifier is not None
+            and message_id != self.view.anchor()
+        ):
             question = await self.trust_notifier.question_for_message(state.entity_id, message_id)
-            if question is not None and message_id != self.view.anchor():
+            if question is not None:
                 apart = True
                 if question.settled != (state.action == "session.detail"):
                     state = None
@@ -1530,6 +1534,29 @@ class PrivateBotBoundary:
     def attach_bot(self, bot: Bot) -> None:
         """Hand it the application's Telegram handle, which arrives long after construction."""
         self._bot = bot
+
+    async def _redraw_trust_anchor(self, bot: Bot, message_id: int, revision: int) -> bool:
+        if self._handling_press or self.flood.held():
+            return False
+        # Render the Sessions tab without changing an overlapping user action's navigation.
+        sessions = replace(self.sessions, _message=partial(self._message, flow="sessions"))
+        arguments = _reply_arguments(await sessions._sessions_reply(mark=False))
+        if self._handling_press:
+            return False
+        try:
+            drawn = await self.view.render(
+                bot,
+                arguments,
+                screen=self._SESSIONS_SCREEN,
+                expected_anchor=message_id,
+                expected_revision=revision,
+            )
+        except RetryAfter as error:
+            self._hold_off(self._ban_seconds(error))
+            return False
+        if drawn is not None:
+            self._flow = "sessions"
+        return drawn is not None
 
     async def redraw_sessions_if_open(self, bot: Bot | None = None) -> bool:
         """Redraw the sessions page in place, if that is what the owner is looking at.
@@ -2177,6 +2204,7 @@ class PrivateBotBoundary:
         *,
         back: str | None = None,
         back_label: str = "Back",
+        flow: str | None = None,
     ) -> RenderedMessage:
         """Append the contextual Back row, when supplied, then the global navigation."""
         rows = list(keyboard)
@@ -2184,7 +2212,7 @@ class PrivateBotBoundary:
             rows.append((Button(back_label, back),))
         rows.append(
             navigation_row(
-                self._flow,
+                flow if flow is not None else self._flow,
                 can_resume=self.backend.conversations is not None,
                 callback=self._callback,
             )
@@ -2348,6 +2376,7 @@ def build_private_bot(
                 callbacks=bot.callbacks,
                 owner_user_id=owner_user_id,
                 trust_dialogs=bot.trust_dialogs,
+                redraw_sessions=bot._redraw_trust_anchor,
             ),
         )
     return bot
