@@ -649,10 +649,27 @@ def _settings_context() -> TuiContext:
     )
 
 
+def _sessions_pane_context() -> TuiContext:
+    cursor = _record()
+    shown = replace(
+        cursor,
+        session_id=SessionId.parse("00000000-0000-0000-0000-000000000002"),
+        display=replace(cursor.display, sequence=2, custom_label="release"),
+    )
+
+    async def displayed() -> SessionId:
+        return shown.session_id
+
+    return replace(
+        _context(launcher=_Launcher(records=(cursor, shown))), console_displayed_session=displayed
+    )
+
+
 #: The positions whose capture needs a host `_context` does not build, by name. One today, and
 #: a mapping rather than a branch in the test so that the exception is declared beside the
 #: reason for it instead of hidden in the driver.
 _POSITION_CONTEXTS: dict[str, Callable[[], TuiContext]] = {
+    "SESSIONS_PANE": _sessions_pane_context,
     "SETTINGS": _settings_context,
     "PERMISSIONS": _settings_context,
 }

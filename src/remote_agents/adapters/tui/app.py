@@ -315,6 +315,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
        band; the row's own colours stay, which is what lets a preserved row read muted under
        the cursor too. */
     ChoiceScreen OptionList > .option-list--option-highlighted { background: $selection; }
+    SessionsPaneScreen #choices > .option-list--option-highlighted,
+    SessionsPaneScreen #choices:focus > .option-list--option-highlighted {
+        text-style: none; background: $selection;
+    }
     /* The filter as a flat bar: no box, a rule beneath, the surface's own ground. Two rows
        high because the rule is the second of them. */
     ChoiceScreen #filter {

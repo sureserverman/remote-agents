@@ -1163,6 +1163,9 @@ class SessionListingScreen(_SessionActionKeys, ChoiceScreen):
     #: the cursor with room (BL-122). The bot draws the line under every row instead.
     shows_agent_said = False
 
+    # Only the console Sessions pane tracks what tmux is showing on the left.
+    _displayed_session: str | None = None
+
     def _show_agent_said(self) -> None:
         """The highlighted session's `agent said:` line in the list's subtitle, or nothing.
 
@@ -1256,14 +1259,29 @@ class SessionListingScreen(_SessionActionKeys, ChoiceScreen):
         keys = [str(record.session_id) for record in records]
         marked = self._marked_row
         active = keys.index(marked) if marked in keys else None
-        parts = [self.tui.row_parts(record) for record in records]
         held = {option.id for option in choices.options}
-        contents = session_contents(parts, width, active, marks_active=True)
+        contents = self._session_contents(records, keys, width, active)
         for key, content in zip(keys, contents, strict=True):
             if key in held:
                 choices.replace_option_prompt(
                     key, content + f"  {self._waiting_reasons[key]}" if self.waiting else content
                 )
+
+    def _session_contents(
+        self,
+        records: tuple[SessionRecord, ...],
+        keys: list[str],
+        width: int | None,
+        cursor: int | None,
+    ) -> list[Content]:
+        displayed = keys.index(self._displayed_session) if self._displayed_session in keys else None
+        return session_contents(
+            [self.tui.row_parts(record) for record in records],
+            width,
+            cursor,
+            marks_active=True,
+            displayed=displayed,
+        )
 
     def _resting_row(
         self,
@@ -1410,7 +1428,6 @@ class SessionListingScreen(_SessionActionKeys, ChoiceScreen):
         # The counts are the frame's title on a framed pane, so the status says nothing idle.
         counts = "" if self.framed else session_counts_content(records)
         self.set_status(counts, hint=self.listing_hint)
-        parts = [self.tui.row_parts(record) for record in records]
         width = row_width(choices) or None
         # Recorded so `on_resize` can tell a width change from the several same-width resizes a
         # single layout pass emits. Set on every fill rather than only in `on_resize`, because
@@ -1434,7 +1451,7 @@ class SessionListingScreen(_SessionActionKeys, ChoiceScreen):
         # The marker goes on the row this draw is about to rest the cursor on, and the memo
         # records it so the highlight message `show_choices` posts finds nothing to repaint.
         self._marked_row = None if resting is None else keys[resting]
-        contents = session_contents(parts, width, resting, marks_active=True)
+        contents = self._session_contents(records, keys, width, resting)
         if self.waiting:
             contents = [
                 content + f"  {self._waiting_reasons[key]}"
@@ -1651,6 +1668,29 @@ class SessionsPaneScreen(SessionListingScreen):
             await self.tui.go_back()
             return
         await self.tui._open_or_leave(key)
+
+    async def populate(self) -> None:
+        await super().populate()
+        if self.services.console_displayed_session is not None:
+            # Swapping panes can happen in another process without a session-store write.
+            await self._refresh_displayed_session()
+            self.set_interval(1.0, self._refresh_displayed_session)
+
+    async def _refresh_displayed_session(self) -> None:
+        read = self.services.console_displayed_session
+        if read is None or not self.showing:
+            return
+        try:
+            current = await read()
+        except Exception:
+            _LOG.debug("Could not read the displayed session", exc_info=True)
+            current = None
+        key = str(current) if current is not None else None
+        if key == self._displayed_session or not self.showing:
+            return
+        self._displayed_session = key
+        choices = self.query_one("#choices", OptionList)
+        self._replace_prompts(choices, row_width(choices) or None)
 
     def __init__(self) -> None:
         super().__init__()

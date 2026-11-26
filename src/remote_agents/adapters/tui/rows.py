@@ -108,14 +108,8 @@ SHARE_CELLS = 4
 
 NO_GAUGE = "—"
 
-#: The mark on the row the sessions positions' keys act on -- the *active* session, which since
-#: the cursor and the target were split is not always the row under the cursor.
-#:
-#: **A glyph and not only the colour, for the reason every other signal on this surface carries
-#: one** (DEC-010, and the note on `GROUP_STYLE`): under `NO_COLOR` the yellow identity below is
-#: byte-identical to every other row, and what it names is which session an unconfirmed `s` will
-#: end. The column is one cell and is reserved for every row of a listing that marks an active
-#: session, so the rows do not shift by two cells the moment nothing is active.
+#: Cursor marker for session lists. Reserve its column so arrow keys never shift the rows.
+#: The session shown in the console's left pane has its own persistent label.
 ACTIVE_MARKER = "▸"
 
 #: The colour of the active row's marker and identity. `$warning` is the surface's yellow, read
@@ -208,6 +202,7 @@ def session_content(
     age_width: int,
     gauge_width: int,
     active: bool | None = None,
+    displayed: bool = False,
 ) -> Content:
     """One session row: `glyph identity #n  state  age  gauge`, the identity taking the slack.
 
@@ -233,6 +228,8 @@ def session_content(
     else:
         identity_style = None
     identity = Content.assemble((parts.identity, identity_style), (f" #{parts.sequence}", MUTED))
+    if displayed:
+        identity = Content("◀ open ").stylize("bold") + identity.stylize("bold")
     if parts.note:
         identity = identity + Content.assemble((f" · {parts.note}", MUTED))
     cells = [
@@ -263,6 +260,7 @@ def session_contents(
     active: int | None = None,
     *,
     marks_active: bool = False,
+    displayed: int | None = None,
 ) -> list[Content]:
     """Every row of one listing, with the state, age and gauge columns aligned across them.
 
@@ -285,6 +283,7 @@ def session_contents(
             age_width=age_width,
             gauge_width=gauge_width,
             active=(index == active) if marks_active else None,
+            displayed=index == displayed,
         )
         for index, parts in enumerate(rows)
     ]

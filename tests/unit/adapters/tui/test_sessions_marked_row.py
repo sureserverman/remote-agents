@@ -425,3 +425,36 @@ async def test_a_vanished_row_leaves_nothing_marked() -> None:
         assert console.published[-1] is None, (
             "the other panes' chords were left pointed at a session that has ended"
         )
+
+
+async def test_displayed_session_and_cursor_move_independently() -> None:
+    records = (_record(_FIRST, "one"), _record(_SECOND, "two", sequence=2))
+    displayed = _SECOND
+
+    async def read_displayed():
+        return displayed
+
+    app = SessionsPane(_context(records, console_displayed_session=read_displayed))
+    async with app.run_test(size=(90, 24)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+        options = choices.options[:]
+
+        def open_rows():
+            return [i for i, row in enumerate(_rendered(screen)) if "◀ open" in row]
+
+        assert _marked(screen) == [0]
+        assert open_rows() == [1]
+        await pilot.press("down")
+        assert _marked(screen) == open_rows() == [1]
+        displayed = _FIRST
+        await screen._refresh_displayed_session()
+        assert open_rows() == [0]
+        assert _marked(screen) == [1]
+        displayed = None
+        await screen._refresh_displayed_session()
+        assert open_rows() == []
+        assert choices.highlighted == 1
+        assert all(before is after for before, after in zip(options, choices.options, strict=True))

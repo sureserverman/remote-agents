@@ -2092,13 +2092,17 @@ uv run --locked remote-agents
    Clean up is unavailable. Return to the list and press `s`, `f` and `p`. The selection,
    session state and displayed pane should stay put.
 5. With Projects on the left, select the second of two sessions. Confirm the yellow `▸`
-   follows each arrow press. End that session from Telegram and let the list refresh.
+   follows each arrow press. Open a session on the left, then move the cursor to a different
+   row. The background follows the cursor. The bold name and `◀ open` stay with the session
+   on the left. Return to Projects before continuing this stop check. End the selected session from Telegram and let the list refresh.
    Check that the marker clears and that F8 asks for a selection. Press an arrow key
    to select a new row.
 
 6. Let the agent finish a turn, or stop one from Telegram, and confirm a line arrives in the feed
    while the agent is still in front. This is the whole point of the layout: news reaches you
-   without leaving the agent.
+   without leaving the agent. Click a notification or press Enter on it to show and focus
+   its session on the left. Click the small arrow or press Space to read the details in the
+   Feed. A notification for a session that has ended opens its details there.
 7. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
    returns to its own window. It is one of the eleven root keys of *The key row* above, and the
    only one that is not simply delivered to a pane — bringing the surface home is an exchange,
