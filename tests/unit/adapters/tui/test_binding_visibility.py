@@ -872,6 +872,25 @@ async def test_only_the_console_panes_that_navigate_draw_the_app_chrome(
     assert drawn == (chrome, chrome)
 
 
+@pytest.mark.parametrize("width", [60, 100])
+async def test_console_help_distinguishes_the_displayed_and_detail_targets(width: int) -> None:
+    from textual.widgets import HelpPanel
+
+    async def prefix() -> str:
+        return "C-b"
+
+    app = SessionsPane(replace(_context(), console_prefix=prefix))
+    async with app.run_test(size=(width, 30)) as pilot:
+        await pilot.press("f1")
+        panel = app.screen.query_one(HelpPanel)
+        help_text = "\n".join(str(label.content) for label in panel.query(Static))
+
+        assert "F8 / F9 stop the displayed session" in help_text
+        assert "selected row on Projects" in help_text
+        assert "Detail actions apply to the session named in the detail" in help_text
+        assert {"s", "f", "p"}.isdisjoint(app.screen.active_bindings)
+
+
 @pytest.mark.parametrize("width", [60, 80])
 async def test_the_projects_hint_is_drawn_whole_at_the_committed_widths(width: int) -> None:
     """Measured, not assumed: `#hint` is one row with `text-overflow: ellipsis`.

@@ -1926,10 +1926,10 @@ checklist below: several steps press a key and accept what happens.
 |---|---|---|
 | `F1`, `?` | help — the panel that lists every key | htop, mc |
 | `F2`, `,` | settings | htop Setup |
-| `F3` | inspect output | mc View |
-| `F4` | session detail | mc Edit |
+| `F3` | toggle console panes | console layout |
+| `F4` | waiting sessions | console navigation |
 | `F5`, `Ctrl+R` | refresh | browsers, k9s |
-| `F6` | rename | mc RenMov |
+| `F6` | fresh session | session lifecycle |
 | `F7` | add project | mc Mkdir |
 | `F8` | stop and close — issued without asking | mc Delete |
 | `F9` | force stop — asks first | htop Kill |
@@ -1956,12 +1956,8 @@ Four facts that are easy to get wrong when a key appears not to work:
 - **An agent this project does not curate will lose a function key it binds, and nothing
   reports it.** That is a stated, accepted cost of the row rather than a defect, tracked as
   BL-094.
-- **The footer does not draw all eleven.** It is one clipping line — five app entries fit the
-  inspect screen at 80 columns and six do not — so it draws `F1`, `F7` and `F10` beside Escape
-  and the palette. **`F1` opens a panel listing every key**, which is where the rest are, and
-  the console's projects and feed panes name the session keys on their own hint row as
-  `F3 F4 F6 F8 F9`. The sessions pane does not — its border title already lists the same acts
-  as bare letters — and the limits pane draws no hint row at all.
+- The console has one tmux status row for function keys. The Sessions action line shows
+  commands for the highlighted row. F1 explains how the stop keys select a session.
 - **Under console hosting `F10` closes the whole console, and only there.** A console surface
   pane is one of four processes arranged into a tmux session, not an app that owns its terminal,
   so "leave the program" means leave remote-agents: `ra-console` is removed and the owner is
@@ -2091,24 +2087,15 @@ uv run --locked remote-agents
    moves the cursor to it. Press `d` on its row and confirm the detail opens **in the sessions
    pane** — every stop, inspect, rename and Remote Control affordance is here, and the agent
    stays displayed. Escape back to the list and confirm the **action line** under the list names
-   each row key with its word (`a attach i inspect r rename s stop f force c clean up
-   m remote`, `p projects` at its right end), and its **hint row** beneath the status names `d` and `p`. On a
-   running row, confirm `c` is *absent* from the keys panel (Clean up is offered only from
-   PRESERVED) while `s` is present — a key must not be offered where the policy would refuse the
-   action.
-5. **The cursor drill, which is what makes `s` safe to have at all.** Two halves:
+   each local shortcut (`a attach i inspect r rename c clean up m remote l rollover`). The hint
+   names `d` for Details and `F12` for Projects. On a running row, open Help and confirm
+   Clean up is unavailable. Return to the list and press `s`, `f` and `p`. The selection,
+   session state and displayed pane should stay put.
+5. With Projects on the left, select the second of two sessions. Confirm the yellow `▸`
+   follows each arrow press. End that session from Telegram and let the list refresh.
+   Check that the marker clears and that F8 asks for a selection. Press an arrow key
+   to select a new row.
 
-   a. With two or more sessions listed, press the down arrow and confirm the yellow `▸` moves
-      with the cursor, every press. The marker is the cursor drawn so it reads from another
-      pane, not a second selection — a marker that lagged behind would say one session is about
-      to be stopped while `s` stops a different one.
-
-   b. Put the cursor on the second session and end that session from Telegram. Within ten
-      seconds the list re-reads itself; confirm the cursor is left on **no row at all** rather
-      than jumping to the first one, that **no row is marked**, and that pressing `s` at that
-      moment does nothing. Press the down arrow and confirm a row is selected and marked again.
-      A cursor that lands on a neighbour here would put a live agent one unasked keypress from
-      being stopped.
 6. Let the agent finish a turn, or stop one from Telegram, and confirm a line arrives in the feed
    while the agent is still in front. This is the whole point of the layout: news reaches you
    without leaving the agent.
@@ -2133,23 +2120,12 @@ uv run --locked remote-agents
 11. Run `remote-agents doctor --json` and confirm `console.panes_splittable` is `true`. It read
     `console.window_linkable` until the console stopped linking windows; if you have scripts
     reading that field, they need the new name.
-12. **The function-key row, driven from a pane that is not the sessions pane.** Five of the row
-    keys of step 4 are function keys on the whole console: `F3` Inspect output, `F4` the
-    detail, `F6` Rename, `F8` Stop and close, `F9` Force stop. Each acts on the session the
-    **sessions pane** highlights — the row it marks `▸` in yellow, which is why the marker is
-    there at all — not on anything under the cursor of the pane you press it in. Copy attach,
-    Clean up and Claude Remote Control got no function key and stay on the bare `a`, `c` and
-    `m` of step 4. With two or more sessions listed,
-    highlight one in the sessions pane, move to the projects pane (`Ctrl-b ←`; `Ctrl-b o` steps one pane at a time and the console
-   has four), press `/` and
-    type two letters of a project name. Confirm three things at once: the filter still holds
-    exactly what you typed — bare letters type here and do not act — the muted hint row beneath
-    it reads `F3 F4 F6 F8 F9` and is *not* dimmed, because a session is selected, and `F4`
-    opens the detail of the sessions pane's marked row. Escape, and confirm the filter
-    still holds your two letters. Repeat `F3` from the feed pane on the same session. The limits
-    pane answers the same keys and does not name them, because it draws no hint row at all; the
-    sessions pane does not name them either, since its own frame already lists the same acts as
-    bare letters, and neither do the session detail and rename screens, which carry them silently.
+12. Display session A and highlight session B in Sessions. Press `s`, `f` and `p`
+    there and confirm both sessions keep running and A stays displayed. Press `d`
+    to open B’s detail and Escape to return. From another pane, press `F9` and
+    confirm the prompt names A. Cancel and confirm both sessions still run.
+    Press `F12` to bring Projects back, highlight B, then press `F9`. The prompt
+    should now name B. Confirm only when B is a disposable test session.
 
     **Three refusals are deliberate**, and each is a key that visibly does nothing. First, press
     `r` on a sessions-pane row, which takes you to the rename box, and there press `F8`:
@@ -2507,11 +2483,11 @@ uv run --locked remote-agents tui
 2. Select a row for its detail: the session's identity, its state, and one line explaining what
    that state means. The record is re-read from the store every time detail opens, because the
    store has a second writer and the session may have been stopped elsewhere while the list was
-   on screen. Each of the detail's actions also has a key on the highlighted row — `a` attach,
-   `i` inspect, `r` rename, `s` stop and close, `c` clean up, `f` force, `m` Remote Control —
-   which names the action and hands it to that same detail chain rather than performing a
-   second version of it. The confirmations below are therefore identical either way, and a key
-   is offered only where the policy offers the action.
+   on screen. Use `a` for Copy attach, `i` for Inspect, `r` for Rename, `c` for Clean up,
+   `m` for Remote Control and `l` for Rollover where offered. Standalone Sessions
+   also offers `s` to stop and close and `f` to force stop. In the console, use the
+   highlighted row’s detail for a stop on that row. F8 and F9 stop the displayed
+   agent, falling back to the visible selection when Projects is displayed.
 3. Copy attach prints the command that reaches the pane, or states that there is none because the
    pane is not live or the pane found for that session belongs to a different project or agent.
    Inspect output renders the session's captured output, sanitized and bounded, in a scrollable

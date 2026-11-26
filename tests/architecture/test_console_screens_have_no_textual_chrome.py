@@ -73,6 +73,7 @@ from remote_agents.adapters.tui.screens.schedule import (
     ScheduleScreen,
     SchedulesScreen,
 )
+from remote_agents.adapters.tui.screens.sessions import SessionListingScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -216,7 +217,7 @@ _ARRANGED: dict[type[Screen], Callable[[], Screen] | None] = {
 }
 
 #: Bases, not positions: nothing navigates to one, so there is nothing to mount.
-_BASES = {ChoiceScreen, GatheredSelectionScreen}
+_BASES = {ChoiceScreen, GatheredSelectionScreen, SessionListingScreen}
 
 _FUNCTION_KEYS = {entry.key for entry in FUNCTION_KEYS}
 

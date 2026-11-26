@@ -2099,6 +2099,17 @@ async def test_stop_keys_act_only_on_the_displayed_or_visible_target(
             left if slot == "surface" else ui.panes[slot],
         )
         prior = {sid: await store.events(SessionId.parse(sid)) for sid in panes}
+        if slot == "sessions" and agent and key == "F8":
+            # A is displayed and B is highlighted. The old row shortcuts could stop B
+            # or return Projects here. A retained key establishes that input was processed.
+            for letter in ("s", "f", "p", "d"):
+                await ui.press(letter)
+            assert await ui.draws("sessions", "Rename")
+            await ui.press("Escape")
+            assert await ui.draws("sessions", "F12 projects")
+            assert await view.displayed_session() == SessionId.parse(first)
+            for sid in panes:
+                assert await store.events(SessionId.parse(sid)) == prior[sid]
         await ui.press(key)
         if folded and not agent:
             assert await ui.draws("surface", "Select a visible Sessions row")

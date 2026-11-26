@@ -79,7 +79,7 @@ def _sessions_position_bodies(tree: ast.Module) -> list[ast.ClassDef]:
     flag the wizard and the detail screen, whose row-0 defaults are correct. The predicate is
     the position, not the file.
     """
-    named = {"SessionsScreen", "SessionsPaneScreen", "DashboardScreen"}
+    named = {"SessionListingScreen", "SessionsScreen", "SessionsPaneScreen", "DashboardScreen"}
     return [
         node
         for node in ast.walk(tree)

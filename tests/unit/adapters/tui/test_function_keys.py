@@ -29,16 +29,13 @@ from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.keys import (
     FUNCTION_KEYS,
-    SESSION_KEYS,
-    SESSION_STOP_KEYS,
+    SESSION_STOP_ACTIONS,
     FunctionKey,
     function_key_bindings,
 )
 from remote_agents.adapters.tui.panes import FeedPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
 from remote_agents.adapters.tui.screens.sessions import (
-    _DETAIL_KEY,
-    ROW_KEY_LETTERS,
     RenameScreen,
     SessionDetailScreen,
 )
@@ -201,25 +198,16 @@ def test_every_table_entry_names_an_action_the_app_has() -> None:
     assert not missing, f"these keys name actions the app does not have: {missing}"
 
 
-def test_the_session_shaped_keys_name_a_row_key_the_sessions_pane_binds() -> None:
-    """F3/F4/F6/F8/F9 inherit the bare letters' bounds by naming those letters.
-
-    Reserved names, so the parametrised action is `session_key('<name>')` and nothing else:
-    the five names are the vocabulary `action_session_key` accepts, and each resolves to a
-    letter `_offers_session_key` already rules on. F8 and F9 must land on the stop letters, since
-    that is what gets them refused on a commitment screen (DEC-052/DEC-062 as carried forward).
-    """
-    by_name = {session_key.name: session_key for session_key in SESSION_KEYS}
-    assert set(by_name) == {"graceful", "force"}
-    for session_key in SESSION_KEYS:
-        assert session_key.row_key in {*ROW_KEY_LETTERS.split(), _DETAIL_KEY}, (
-            f"{session_key.name} names the row key {session_key.row_key!r}, which no row binds"
-        )
-    assert {by_name["graceful"].row_key, by_name["force"].row_key} == SESSION_STOP_KEYS
-    bound = {entry.action for entry in FUNCTION_KEYS if _action_name(entry.action) == "session_key"}
-    assert bound == {f"session_key('{name}')" for name in by_name}, (
-        f"the F-keys and the session-key vocabulary disagree: {bound}"
-    )
+async def test_duplicate_letters_do_nothing_on_the_console_sessions_pane() -> None:
+    chosen = _record()
+    listing = _Listing((chosen,))
+    app = SessionsPane(_context(listing))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert {"s", "f", "p"}.isdisjoint(app.screen.active_bindings)
+        await pilot.press("s", "f", "p")
+        assert position(app) == "SESSIONS_PANE"
+        assert listing.issued == []
 
 
 def test_the_terminal_delivers_each_key_under_the_name_the_table_binds() -> None:
@@ -423,10 +411,7 @@ async def test_the_stop_keys_are_refused_on_the_rename_box_and_the_others_are_no
         await pilot.pause()
         assert position(app) == "RENAME"
 
-        offered = {
-            session_key.name: app.check_action("session_key", (session_key.name,))
-            for session_key in SESSION_KEYS
-        }
+        offered = {name: app.check_action("session_key", (name,)) for name in SESSION_STOP_ACTIONS}
 
         await pilot.press("f8")
         await pilot.pause()
@@ -473,10 +458,7 @@ async def test_no_session_key_fires_behind_a_modal() -> None:
         app.push_screen(ForceConfirmModal("Force stop this session?"))
         await pilot.pause()
 
-        refused = {
-            session_key.name: app.check_action("session_key", (session_key.name,))
-            for session_key in SESSION_KEYS
-        }
+        refused = {name: app.check_action("session_key", (name,)) for name in SESSION_STOP_ACTIONS}
         assert app.check_action("projects_home", ()) is False
         reads = console.reads
 

@@ -28,9 +28,8 @@ from textual.worker import WorkerCancelled, WorkerFailed
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.keys import (
     CONSOLE_FOOTER_LABELS,
-    SESSION_STOP_KEYS,
+    SESSION_STOP_ACTIONS,
     function_key_bindings,
-    session_key,
 )
 from remote_agents.adapters.tui.model import (
     _BACK,
@@ -69,7 +68,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 from remote_agents.adapters.tui.screens.dashboard import SETTINGS_KEY
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands, NavigationPalette
-from remote_agents.adapters.tui.screens.sessions import perform_row_action
+from remote_agents.adapters.tui.screens.sessions import SessionListingScreen, perform_row_action
 from remote_agents.adapters.tui.screens.settings import SettingsScreen
 from remote_agents.adapters.tui.theme import (
     RELAY_THEMES,
@@ -448,8 +447,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # The F-key row: one table in `keys.py`, bound here so every position is asked about
         # it and `check_action` decides where each key applies. Priority for the reason the
         # retired Alt layer was -- the key has to act from inside an `Input` -- and shown where
-        # the table says, because
-        # these are the keys the footer exists to teach. The five session-shaped ones route
+        # the table says. The stop keys route
         # through `action_session_key`, which awaits no modal on this pump: its stops post to
         # the screen rather than awaiting one here (DEC-025, DEC-068).
         *function_key_bindings(),
@@ -773,12 +771,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 and not (getattr(screen, "entry_is_a_commitment", False))
             )
         if action == "session_key":
-            # The key is gated on the row letter it stands for: refused behind a modal,
-            # refused on a commitment screen when it is a stop (DEC-052, DEC-062), offered
-            # where that bare letter is already legal. An unknown name is an absent key rather
-            # than a dead one.
-            named = session_key(str(parameters[0])) if parameters else None
-            return False if named is None else self._offers_session_key(screen, named.row_key)
+            return bool(parameters) and self._offers_session_key(screen, str(parameters[0]))
         if action in _BARE_KEY_ACTIONS and isinstance(self.focused, Input):
             # A bare printable key is a character wherever an `Input` holds the keyboard --
             # the filter, the rename box, the project name -- and the key everywhere else.
@@ -798,49 +791,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def _offers_session_key(self, screen: Screen[object], key: str) -> bool:
         """Whether a session-shaped F-key applies to the position on screen — the synchronous half.
 
-        Asked about the **row letter** the key stands for (`i d r s f`), not about the F-key
-        itself, because every rule below is a rule about that letter: it is the bare key the
-        sessions pane binds, and the whole claim of this layer is that F8 does what `s` does.
-
-        Two refusals, and neither can be deferred to the action: `check_action` is what
-        `App.run_action` consults before dispatching a priority binding, and a key that is
-        offered and inert is the complaint a dead-end key already is (the reason `p` is gated
-        to the sessions pane rather than bound everywhere and ignored).
-
-        **Nothing fires while a modal is asking.** A modal is one question awaiting an answer, and
-        the confirm modals carry a question string and no session id — deliberately, so the
-        gate's registry sweep can construct each with no arguments. So they cannot answer
-        `subject_session` the way a detail can, and the rule is about the modal rather than
-        about its subject: nothing fires behind one, whichever it is.
-
-        **Off a console, nothing to act on.** `console_holds_slot` is wired only under console
-        hosting, so its absence is the declared absence of the whole layer (DEC-046) — except
-        on a position that carries the row keys (`PositionKind.ROWS`), which needs no console
-        at all: F8 there acts on the same row `s` does, and `remote-agents tui` in a bare shell
-        is a real position with a real list.
-
-        **A cursor is not what makes the layer legal — the bare keys are.** `carries_row_keys`
-        rather than `owns_session_cursor`, and the two differ on exactly one position:
-        `DashboardScreen` owns a sessions cursor and deliberately binds none of
-        `a i r s f c m`. DEC-062's position names `SessionsScreen` and `SessionsPaneScreen`
-        only, and makes an unconfirmed `s`/`c` legal there against `_draw_listing`'s
-        rest-on-nothing; the dashboard is a third position that argument does not reach, its
-        sessions region is not the focused widget, and the import-time invariant in
-        `screens/sessions.py` guards the *keys* rather than the positions they are offered on.
-        So a cursor-owning screen that does not carry the keys is refused outright rather than
-        falling through to the console test below — the F-key must not smuggle in a stop the
-        bare letter is not allowed to make there.
-
-        **A screen about a session it cannot name is refused here too**, rather than offered and
-        left to warn: `InspectScreen` declares `about_one_session` and answers `subject_session`
-        with `None` unconditionally, so its F-key could only ever say "this screen names no
-        session". That is knowable synchronously, and an absent key beats a dead one.
-
-        What this cannot answer is the strict gate itself. Whether *this* pane is one of the
-        console's own is a tmux read, and `check_action` is synchronous — so that half lives in
-        `_resolve_session`, and a refused process gets a word rather than a hidden key.
+        The console target can differ from the highlighted row. Eligibility depends on
+        the stop action, the focused position and whether the user is editing a draft.
         """
-        if key in SESSION_STOP_KEYS and getattr(screen, "entry_is_a_commitment", False):
+        if key not in SESSION_STOP_ACTIONS:
+            return False
+        if getattr(screen, "entry_is_a_commitment", False):
             # **A screen whose typed text is a commitment does not carry the keys that end a
             # session.** `entry_is_a_commitment` already means "typed work a global key would
             # discard silently", and these bindings are `priority=True`, so the `Input` never
@@ -1415,7 +1371,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             if (
                 agent_focused is not None
                 and await agent_focused()
-                and not isinstance(screen, SessionsScreen)
+                and not isinstance(screen, SessionListingScreen)
             ):
                 await self.load_sessions()
                 message = "Refreshed the console session list."
@@ -1891,8 +1847,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         question is asked on that screen's pump and F8 issues with no question at all
         (DEC-018). DEC-027: with nothing to act on the key warns on itself and goes nowhere.
         """
-        named = session_key(name)
-        if named is None or self.busy:
+        if name not in SESSION_STOP_ACTIONS or self.busy:
             # An unknown name is unreachable through the derived bindings, and returns rather
             # than raises because `session_key` is a public action name: `run_action` reaches
             # here from the command palette or a test, and a `KeyError` out of an action exits
@@ -1932,7 +1887,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # without re-checking here this would be the one path that can navigate while a
             # command is in flight.
             return
-        await perform_row_action(named.action, session_value, screen=screen)
+        await perform_row_action(name, session_value, screen=screen)
 
     async def dismiss_force_overlay(self) -> None:
         previous, self._force_origin = self._force_origin, None
@@ -1963,7 +1918,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     Static(
                         f"Alt+Left  Previous session   Alt+Right  Next session\n"
                         f"{prefix}, then F2  Native provider F2\n"
-                        "Sessions: i  Inspect   d  Details   r  Rename",
+                        "Sessions: i  Inspect   d  Details   r  Rename\n"
+                        "F8 / F9 stop the displayed session, or the selected row on Projects.\n"
+                        "Detail actions apply to the session named in the detail.",
                         markup=False,
                     ),
                     before=0,
@@ -2032,7 +1989,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def show_sessions(self) -> None:
         screen = self.screen
-        if isinstance(screen, SessionsScreen):
+        if isinstance(screen, SessionListingScreen):
             # `keep_cursor=True`: pressed here, `ctrl+s` means "re-read this list", not
             # "navigate to it" — the screen is already the one it names. Re-reading and
             # re-choosing are different acts, and this list's row is the handle on two

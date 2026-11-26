@@ -324,12 +324,8 @@ async def test_the_hint_names_what_enter_actually_does_here() -> None:
         assert "enter open" in hint
         assert "d detail" in hint
         assert "enter detail" not in hint, "this is the other position's sentence"
-        # The way back out of the console, which is the pane's alone and is `show=False`, so
-        # this line is the only place it is discoverable. F12 is named beside it because the
-        # root key is the one that works from *inside* a displayed agent, where none of this
-        # screen's own bindings can be pressed.
-        assert "p projects" in hint
-        assert "F12" in hint
+        assert "p projects" not in hint
+        assert "F12 projects" in hint
 
 
 async def test_an_empty_pane_does_not_offer_an_escape_it_does_not_have() -> None:
@@ -748,30 +744,14 @@ async def test_the_status_word_for_a_key_is_never_the_lifecycle_action_id() -> N
     assert words[GRACEFUL] != GRACEFUL, "the status line names the mechanism, not the effect"
 
 
-async def test_both_sessions_positions_offer_the_same_action_keys() -> None:
-    """`SessionsScreen` and `SessionsPaneScreen` each declare `BINDINGS` from the same list,
-    and both carry the same 10-second auto-refresh -- so both are the surface this task's
-    Critical was about, and an edit touching one alone must not go unnoticed.
-
-    Asserted as an equality between the two key sets rather than as two separate lists, so the
-    sharing itself is the pinned invariant.
-    """
+def test_standalone_and_console_have_distinct_effective_stop_bindings() -> None:
     from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 
-    action_keys = {key for key, _a, _l, _w in _module_action_keys()} | {"m"}
-    full = {str(b.key) for b in SessionsScreen.BINDINGS}
-    pane = {str(b.key) for b in SessionsPaneScreen.BINDINGS}
-    assert action_keys <= full, sorted(action_keys - full)
-    assert action_keys <= pane, sorted(action_keys - pane)
-    # The pane adds `d` and `p`; every row key is shared.
-    #
-    # `p` is the pane's alone on purpose. Hosting is decided by the tmux socket name, so a
-    # plain `remote-agents tui` started from any shell on the console's server is classified
-    # CONSOLE and has `console_show_projects` wired -- and a `p` on the full sessions position
-    # would then rearrange the owner's real console from a process that is not one of its
-    # managed panes. This asserts the separation rather than leaving it to the comment.
-    assert pane - full == {"d", "p"}, sorted(pane - full)
-    assert "p" not in full, "the full sessions position must not offer the console key"
+    full = set(SessionsScreen._merged_bindings.key_to_bindings)
+    pane = set(SessionsPaneScreen._merged_bindings.key_to_bindings)
+    assert full - pane == {"s", "f"}
+    assert pane - full == {"d"}
+    assert "p" not in full | pane
 
 
 def _module_action_keys():
@@ -788,7 +768,7 @@ async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
     -- it is. Reading the declared list would then silently stop checking the inherited keys
     and still pass, so this reads what the mounted screen actually offers.
     """
-    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+    from remote_agents.adapters.tui.screens.sessions import PANE_ACTION_KEYS
     from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 
     # One record per state, because the stop keys are gated on the policy for the row under
@@ -802,7 +782,7 @@ async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
             offered = set(app.screen.active_bindings)
 
         allowed = available_actions(state, None)
-        for key, action, _label, _word in SESSION_ACTION_KEYS:
+        for key, action, _label, _word in PANE_ACTION_KEYS:
             if action in ACTION_LABELS and action not in allowed:
                 assert key not in offered, (
                     f"{key!r} names {action!r}, which {state.value} does not offer"
@@ -814,7 +794,7 @@ async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
         assert ("m" in offered) is (state is SessionState.RUNNING)
         assert "d" in offered, "the detail key was lost"
     assert {"escape", "ctrl+r", "ctrl+q", "q", "colon", "question_mark"}.isdisjoint(
-        {key for key, _a, _l, _w in SESSION_ACTION_KEYS} | {"m"}
+        {key for key, _a, _l, _w in PANE_ACTION_KEYS} | {"m"}
     )
 
 
@@ -900,87 +880,6 @@ async def test_the_sessions_status_is_at_most_two_rows_and_a_hint() -> None:
     assert (short[0], long[0]) == (1, 2), (short, long)
     assert long[1] - short[1] == 1, f"the list moved {long[1] - short[1]} rows for one wrapped row"
     assert hint == 1, f"the hint row is {hint} rows high, not 1"
-
-
-# One key returns the projects surface to the console's left slot -------------------------------
-
-
-async def test_p_calls_the_wired_capability_exactly_once() -> None:
-    """DEC-040: the console exchanges its left pane with the agent, and this puts it back.
-
-    An exchange writes no record and touches no lifecycle, which is why this key needs none of
-    the machinery every other key on this pane routes through.
-    """
-    calls: list[int] = []
-
-    async def show_projects() -> None:
-        calls.append(1)
-
-    app = SessionsPane(_context((_record(),), console_show_projects=show_projects))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-
-    assert calls == [1], calls
-
-
-async def test_p_is_absent_on_a_host_that_wired_no_console() -> None:
-    """A bare terminal has no console to put a surface back into, so the key is not offered
-    and its action declines. A dead-end entry is worse than an absent one -- the owner cannot
-    tell a key that does nothing from a surface that forgot to draw it."""
-    app = SessionsPane(_context((_record(),)))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        screen = app.screen
-        assert screen.check_action("show_projects_pane", ()) is False
-        await pilot.press("p")
-        await pilot.pause()
-        assert app.is_running
-
-
-async def test_a_failing_capability_is_reported_and_is_not_a_lifecycle_failure() -> None:
-    """The console degrading is not the session going wrong. A raise here must reach the owner
-    as what it is -- the surface could not be rearranged -- and must not take the app down or
-    read as anything having happened to the agent."""
-    from tui_feedback import announcements
-
-    async def show_projects() -> None:
-        raise RuntimeError("the console has no left slot")
-
-    app = SessionsPane(_context((_record(),), console_show_projects=show_projects))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("p")
-        await pilot.pause()
-        said = " ".join(announcements(app))
-        assert app.is_running, "a failing console capability took the surface down"
-
-    assert "console" in said.lower(), said
-    assert "session" not in said.lower(), f"a console failure was reported as a session one: {said}"
-
-
-async def test_the_full_sessions_position_does_not_offer_the_console_key() -> None:
-    """Driven, not just read off the class: a `SessionsScreen` with `console_show_projects`
-    wired -- the exact combination a `remote-agents tui` on the console's own tmux server
-    produces -- must still not carry `p`."""
-    calls: list[int] = []
-
-    async def show_projects() -> None:  # pragma: no cover - must never be reached
-        calls.append(1)
-
-    app = RemoteAgentsTui(_context((_record(),), console_show_projects=show_projects))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await app.show_sessions()
-        await pilot.pause()
-        assert position(app) == "SESSIONS"
-        offered = set(app.screen.active_bindings)
-        assert "p" not in offered, sorted(offered)
-        await pilot.press("p")
-        await pilot.pause()
-
-    assert calls == [], "the full sessions position rearranged the console"
 
 
 def test_the_unconfirmed_keys_are_tied_to_the_mitigation_that_makes_them_safe() -> None:
@@ -1861,63 +1760,36 @@ async def test_the_full_sessions_position_publishes_no_selected_flag() -> None:
 # --- the named action line under the list (sub-plan 3 Task 1.4, R11) -------------------------
 
 
-def _action_line(app) -> tuple[str, str]:
-    """The action line's left text and its right-aligned end, as drawn."""
+def _action_line(app) -> str:
     from textual.widgets import Static
 
-    left = app.screen.query_one("#actions-keys", Static)
-    right = app.screen.query_one("#actions-projects", Static)
-    return str(left.render()), str(right.render()) if right.display else ""
+    return str(app.screen.query_one("#actions", Static).render())
 
 
-async def test_the_action_line_names_every_row_key_with_its_word() -> None:
+@pytest.mark.parametrize("width", (60, 80, 120))
+async def test_the_action_line_names_every_remaining_row_key(width) -> None:
     app = SessionsPane(_context((_record(),)))
-    async with app.run_test(size=(120, 30)) as pilot:
+    async with app.run_test(size=(width, 30)) as pilot:
         await pilot.pause()
-        await pilot.pause()
-        left, right = _action_line(app)
-    assert left == "a attach i inspect r rename s stop f force c clean up m remote l rollover"
-    assert right == "p projects"
+        assert _action_line(app) == "a attach i inspect r rename c clean up m remote l rollover"
 
 
 async def test_the_action_line_says_no_session_is_selected_with_no_row() -> None:
     app = SessionsPane(_context(()))
-    async with app.run_test(size=(120, 30)) as pilot:
+    async with app.run_test() as pilot:
         await pilot.pause()
-        await pilot.pause()
-        left, right = _action_line(app)
-    assert left == "No session is selected · j k to choose one · p projects"
-    assert right == ""
+        assert _action_line(app) == "No session is selected · j k to choose one"
 
 
-async def test_the_action_line_off_the_pane_offers_no_projects_key() -> None:
+async def test_the_standalone_action_line_still_teaches_its_stop_shortcuts() -> None:
     from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 
     app = RemoteAgentsTui(_context((_record(),)))
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
+    async with app.run_test() as pilot:
         await app.push_screen(SessionsScreen())
         await pilot.pause()
-        await pilot.pause()
-        left, right = _action_line(app)
-    assert left.startswith("a attach i inspect")
-    assert right == ""
-
-
-async def test_the_action_line_is_built_from_the_table(monkeypatch) -> None:
-    from remote_agents.adapters.tui.screens import sessions
-
-    table = tuple(
-        (key, action, label, "look" if key == "i" else word)
-        for key, action, label, word in sessions.SESSION_ACTION_KEYS
-    )
-    monkeypatch.setattr(sessions, "SESSION_ACTION_KEYS", table)
-    app = SessionsPane(_context((_record(),)))
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        await pilot.pause()
-        left, _right = _action_line(app)
-    assert "i look" in left and "i inspect" not in left
+        assert "s stop f force" in _action_line(app)
+        assert "p projects" not in _action_line(app)
 
 
 async def test_the_action_line_colours_the_letter_and_the_word_apart() -> None:
@@ -1927,7 +1799,7 @@ async def test_the_action_line_colours_the_letter_and_the_word_apart() -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         await pilot.pause()
-        content = app.screen.query_one("#actions-keys", Static).visual
+        content = app.screen.query_one("#actions", Static).visual
         styles = {content.plain[span.start : span.end]: str(span.style) for span in content.spans}
     assert styles.get("a") == "$warning", styles
     assert styles.get(" attach") == "$text-muted", styles

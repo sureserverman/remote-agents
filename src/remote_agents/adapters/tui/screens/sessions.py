@@ -23,12 +23,12 @@ from types import MappingProxyType
 
 from textual import events
 from textual.binding import Binding
-from textual.containers import Horizontal
 from textual.content import Content
 from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, OptionList, Static, TextArea
 
+from remote_agents.adapters.tui.keys import SESSION_STOP_ACTIONS
 from remote_agents.adapters.tui.model import _BACK, label_or_error
 from remote_agents.adapters.tui.rows import session_contents, session_counts_content
 from remote_agents.adapters.tui.screens.base import (
@@ -293,12 +293,7 @@ _REMOTE_CONTROL_KEY = "m"
 #: Its word on the action line, beside the table's words (the detail's fact line says `remote`).
 _REMOTE_CONTROL_WORD = "remote"
 
-#: The row keys a sessions position binds, space-separated, built from the table rather than
-#: written beside it: `a i r s f c m`. The pane title advertised them until the console
-#: facelift (R11) moved each letter, with its word, to the action line under the list.
-ROW_KEY_LETTERS = " ".join(
-    [*(key for key, _action, _label, _word in SESSION_ACTION_KEYS), _REMOTE_CONTROL_KEY]
-)
+PANE_ACTION_KEYS = tuple(row for row in SESSION_ACTION_KEYS if row[1] not in SESSION_STOP_ACTIONS)
 
 
 def sessions_title(records: Sequence[SessionRecord]) -> Content:
@@ -313,23 +308,15 @@ def sessions_title(records: Sequence[SessionRecord]) -> Content:
     return Content.assemble("Sessions", (f" {len(records)} · ", "$text-muted"), counts)
 
 
-#: The bindings themselves, built once from the table above.
-#:
-#: **Declared here and attached to the screen classes, not to the mixin below**, and that is a
-#: fact about Textual rather than a preference: `BINDINGS` are merged across the MRO for
-#: `DOMNode` subclasses only, so a plain mixin's list is silently skipped. The first version of
-#: this task put them on the mixin, and the screen reported exactly `['d']` -- no error, no
-#: warning, every new key simply inert. Measured, then moved.
-SESSION_ACTION_BINDINGS = [
-    # Hidden from the footer for the same reason `d` is: the bar is shared with every
-    # inherited binding, and seven more entries would clip the ones the owner did not ask
-    # for. Task 4.3 is what keeps the hidden ones honest.
-    *(
-        Binding(key, f"row_action('{action}')", label, show=False)
-        for key, action, label, _word in SESSION_ACTION_KEYS
-    ),
-    Binding(_REMOTE_CONTROL_KEY, "row_remote_control", "Claude Remote Control", show=False),
-]
+def _row_bindings(rows: Sequence[tuple[str, str, str, str]]) -> list[Binding]:
+    return [
+        *(
+            Binding(key, f"row_action('{action}')", label, show=False)
+            for key, action, label, _word in rows
+        ),
+        Binding(_REMOTE_CONTROL_KEY, "row_remote_control", "Claude Remote Control", show=False),
+    ]
+
 
 # The invariant that replaced DEC-052's ban, enforced where it cannot be skipped -- the same
 # `raise`-at-import pattern, now guarding the mitigation instead of the prohibition.
@@ -351,23 +338,6 @@ if _bindable & UNCONFIRMED_MUTATING_ACTIONS and not _CLEARS_VANISHED_CURSOR:
         "Restore that flag with the row-0 fallback, or drop these keys."
     )
 del _bindable
-
-#: The console key, kept off `SESSION_ACTION_BINDINGS` deliberately -- see
-#: `SessionsPaneScreen.BINDINGS`, which is the only position that offers it.
-#:
-#: `F12` is named beside it in the status line rather than here: the root key is tmux's and
-#: reaches the console from *inside a displayed agent*, which is the one place this screen's
-#: own bindings cannot be pressed at all.
-_SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=False)
-
-
-#: The key `d` carries on the sessions pane: open this row's detail, with no action attached.
-#:
-#: Not in `SESSION_ACTION_KEYS` because it performs nothing on the session — that table's
-#: fourth field is the word a *lifecycle* action is called by, and "look at it" is not one.
-#: Named here because the F-key table in `keys.py` carries it for F4, and a literal spelled in
-#: two places is the drift `test_the_function_keys_are_one_table.py` exists to catch.
-_DETAIL_KEY = "d"
 
 
 async def perform_row_action(action: str, session_value: str, *, screen: ChoiceScreen) -> None:
@@ -583,12 +553,6 @@ class _SessionActionKeys:
             # surface was the caller that did not: `m` on a codex row reached `show_detail`,
             # which is a navigation the owner did not ask for wearing a refusal's clothes.
             return self._remote_control_offered(highlighted)
-        if action == "show_projects_pane":
-            # Absent, not inert, on a host that wired no console. The owner cannot tell a key
-            # that quietly does nothing from a surface that forgot to draw it, and this one is
-            # about *where things are on screen* -- the failure would look like the console
-            # being broken rather than the key being unavailable.
-            return self.services.console_show_projects is not None
         return super().check_action(action, parameters)
 
     async def action_row_action(self, action: str) -> None:
@@ -628,27 +592,6 @@ class _SessionActionKeys:
             return
         await perform_row_action(action, session_value, screen=self)
 
-    async def action_show_projects_pane(self) -> None:
-        """Put the projects surface back in the console's left slot.
-
-        DEC-040's exchange, run backwards. It writes no record and touches no lifecycle, so it
-        needs none of the re-read-and-re-check machinery every other key here routes through --
-        and the root-key budget is untouched, because this is a screen binding inside our own
-        process rather than a tmux root key. `CONSOLE_BINDINGS` is not edited.
-
-        A failure is reported as what it is. The console degrading is not the session going
-        wrong, and saying so in lifecycle terms would send the owner looking at an agent that
-        is perfectly fine.
-        """
-        show_projects = self.services.console_show_projects
-        if show_projects is None:
-            return
-        try:
-            await show_projects()
-        except Exception as error:
-            _LOG.exception("the console could not show the projects surface")
-            self.announce(f"The console could not show the projects surface: {error}")
-
     async def action_row_remote_control(self) -> None:
         """Remote Control, which is the one key that cannot name its action in advance.
 
@@ -665,7 +608,7 @@ class _SessionActionKeys:
         await perform_row_remote_control(session_value, screen=self)
 
 
-class SessionsScreen(_SessionActionKeys, ChoiceScreen):
+class SessionListingScreen(_SessionActionKeys, ChoiceScreen):
     """Every managed session, including ones this process never launched.
 
     The one position in this surface whose answer goes stale with nobody touching it: the
@@ -690,14 +633,8 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     is the one showing. Read by `RemoteAgentsTui._refresh_context_windows_tick`; screens without
     it cost no provider read at all."""
 
-    #: This position binds the bare row keys, so the session keys are legal here (see the flag's
-    #: declaration on `ChoiceScreen`). Declared on the screen rather than on `_SessionActionKeys`
-    #: for the reason `SESSION_ACTION_BINDINGS` is attached to screens: the mixin is where the
-    #: *actions* live and the screen is where the *bindings* do, and this flag is about the
-    #: bindings. `SessionsPaneScreen` subclasses this one and inherits both.
     carries_row_keys = True
-
-    BINDINGS = list(SESSION_ACTION_BINDINGS)
+    action_keys = SESSION_ACTION_KEYS
 
     empty_state = "No managed sessions on this host."
 
@@ -706,16 +643,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     crumb = "Sessions"
 
     DEFAULT_CSS = """
-    SessionsScreen #choices {
+    SessionListingScreen #choices {
         border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
     }
-    SessionsScreen #actions { height: 1; padding: 0 1; }
-    SessionsScreen #actions-keys { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
-    SessionsScreen #actions-projects { width: auto; margin-left: 2; color: $text-dim; }
+    SessionListingScreen #actions {
+        height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis;
+    }
     """
-
-    #: Whether `p` returns the console's projects pane from here. Only the pane binds it.
-    offers_projects_key = False
 
     #: What this position tells the owner a row does, and where an empty list sends them.
     #: Class attributes rather than literals at the call site because the console's sessions
@@ -1141,8 +1075,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     def _publish_selection(self, session_value: str | None) -> None:
         """Publish which session this position has selected. Nothing, on this position.
 
-        **`SessionsScreen` deliberately does not publish, and the reason is the same one that
-        gates `p` to the pane** (`SessionsPaneScreen.BINDINGS`). Hosting is decided by the tmux
+        The standalone screen does not publish. Hosting is decided by the tmux
         socket name, so a plain `remote-agents tui` started from any shell on the console's
         server is classified CONSOLE and gets `console_publish_selection` wired — and a cursor
         moving in that unrelated process would redirect the session keys of the owner's *real*
@@ -1165,52 +1098,34 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         if self.query("#actions"):
             return
-        line = Horizontal(
-            Static("", id="actions-keys", markup=False),
-            Static("", id="actions-projects", markup=False),
-            id="actions",
-        )
+        line = Static("", id="actions", markup=False)
         await self.query_one("#body").mount(line, after=self.query_one("#choices"))
         self._draw_action_line(selected=self.highlighted_session() is not None)
 
     def _draw_action_line(self, *, selected: bool) -> None:
         """`a attach i inspect … m remote`, or `No session is selected · j k to choose one`.
 
-        Built from `SESSION_ACTION_KEYS` at draw time, never spelled: the letter `$warning`, the
-        word `$text-muted` (DEC-010: the letter and the word, not a colour). `p projects` is
-        right-aligned and `$text-dim`, on the pane only.
+        The pane and standalone list each teach the actions they bind.
         """
-        found = self.query("#actions")
-        if not found or not self.showing:
+        if not self.query("#actions") or not self.showing:
             return
-        keys = self.query_one("#actions-keys", Static)
-        projects = self.query_one("#actions-projects", Static)
+        keys = self.query_one("#actions", Static)
         if not selected:
-            sentence = "No session is selected · j k to choose one"
-            if self.offers_projects_key:
-                sentence += " · p projects"
-            keys.update(Content.styled(sentence, "$text-dim"))
-            projects.display = False
+            keys.update(Content.styled("No session is selected · j k to choose one", "$text-dim"))
             return
         entries = [
-            (key, word) for key, action, _label, word in SESSION_ACTION_KEYS if action != ROLLOVER
+            (key, word) for key, action, _label, word in self.action_keys if action != ROLLOVER
         ]
         entries.append((_REMOTE_CONTROL_KEY, _REMOTE_CONTROL_WORD))
-        # Rollover last: in the console's 80-cell column the line no longer fits beside
-        # `p projects` and ellipsizes, and the newest key is the one to lose, not `m remote`.
         entries.extend(
-            (key, word) for key, action, _label, word in SESSION_ACTION_KEYS if action == ROLLOVER
+            (key, word) for key, action, _label, word in self.action_keys if action == ROLLOVER
         )
         pieces: list[Content] = []
         for index, (key, word) in enumerate(entries):
             if index:
-                # One cell between entries, as the handoff's prose says: two (its example)
-                # ran the line into `p projects` in the 80-cell right column (measured live).
                 pieces.append(Content(" "))
             pieces.append(Content.assemble((key, "$warning"), (f" {word}", "$text-muted")))
         keys.update(Content.assemble(*pieces))
-        projects.update("p projects")
-        projects.display = self.offers_projects_key
 
     def _draw_listing(
         self,
@@ -1674,7 +1589,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             self.set_status("" if self.framed else session_counts_content(drawn))
 
 
-class SessionsPaneScreen(SessionsScreen):
+class SessionsScreen(SessionListingScreen):
+    """The standalone list retains row-targeted Stop and Force shortcuts."""
+
+    BINDINGS = _row_bindings(SESSION_ACTION_KEYS)
+
+
+class SessionsPaneScreen(SessionListingScreen):
     """The console's right-top pane: the same list, where Enter opens instead of describing.
 
     The one pane that stays on screen while an agent occupies the left slot, so it is the
@@ -1691,13 +1612,8 @@ class SessionsPaneScreen(SessionsScreen):
     The resting cursor stays on a non-mutating row (DEC-007) and this pane satisfies that by
     what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040).
 
-    **Every mutating action used to be behind `d`, and three of them no longer are.** `s`, `c`
-    and `f` act on this list directly — that is ask 6, and `action_row_action` above carries
-    the full account. What still holds is the sentence that matters for this pane's own safety
-    argument: *Enter* mutates nothing here. What changed is that a bare `s` or `c` now ends a
-    session without the detail in between, which is safe only because `_resting_row` rests a
-    vanished cursor on nothing and `after_command` keeps the cursor on the row the owner acted
-    on. Both are inherited from `SessionsScreen` rather than restated here.
+    Clean up acts on the highlighted preserved row. Global F8 and F9 resolve their
+    target through the console, which may be displaying a different session on the left.
     """
 
     #: Its own name, not `SESSIONS`. It shares the sessions screen's body and inherits its
@@ -1710,39 +1626,18 @@ class SessionsPaneScreen(SessionsScreen):
     #: position — so there is no project list to escape to and escape at rest is inert.
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
-    listing_hint = "enter open · d detail · p projects · F12 from inside an agent"
+    listing_hint = "enter open · d detail · F12 projects"
     frames_body_on_console = True
     shows_agent_said = True
-    offers_projects_key = True
+    action_keys = PANE_ACTION_KEYS
     empty_status = (
-        "No managed sessions on this host. Launching one starts it here. "
-        "p returns the projects pane (or F12 from inside an agent)."
+        "No managed sessions on this host. Launching one starts it here. F12 returns to Projects."
     )
     read_failure_route = "Ctrl+R re-reads this screen."
 
     BINDINGS = [
-        # Hidden from the footer for the reason the dashboard's copy is: the bar is shared
-        # with every inherited binding, and the key only means something while a row is
-        # highlighted. The status line says so where it is true.
         Binding("d", "session_detail", "Session detail", show=False),
-        # Repeated rather than inherited, because Textual merges `BINDINGS` across the MRO and
-        # a subclass that declares its own does *not* lose its parent's -- but this file has
-        # been bitten once already by assuming how that merge works, so the set this position
-        # offers is written where a reader can see it whole.
-        *SESSION_ACTION_BINDINGS,
-        # `p` is offered **here and not on `SessionsScreen`**, and the difference is not
-        # cosmetic. Hosting is decided by the tmux socket name -- `bootstrap.local_context`
-        # says so in terms: "hosting is decided by the socket name, which is true of every
-        # pane on this server". So a plain `remote-agents tui` started from any shell on the
-        # console's server is classified CONSOLE and gets `console_show_projects` wired, and a
-        # `p` on the full sessions position would then rearrange the owner's real console from
-        # a process that is not one of its three managed panes at all.
-        #
-        # This pane *is* one of them. Found by the Stage 4 Tier-2 pass, which noted that the
-        # other four console capabilities are either never invoked from `SessionsScreen` or
-        # (`open_in_console`) invoked only from this subclass -- so `p` would have been the
-        # first to break that pattern.
-        _SHOW_PROJECTS_BINDING,
+        *_row_bindings(PANE_ACTION_KEYS),
     ]
 
     async def choose(self, key: str) -> None:

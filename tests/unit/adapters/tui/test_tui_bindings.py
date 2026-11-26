@@ -17,7 +17,7 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.keys import SESSION_KEYS, SESSION_STOP_KEYS
+from remote_agents.adapters.tui.keys import SESSION_STOP_ACTIONS
 from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
 from remote_agents.adapters.tui.screens.project import NameScreen
@@ -1525,9 +1525,7 @@ async def test_a_wizard_step_over_a_pane_keeps_the_navigating_keys_and_refuses_t
         entry = app.screen.query_one("#filter", Input)
         assert entry.value == "my-new-project"
 
-        offered = {
-            entry.name: app.check_action("session_key", (entry.name,)) for entry in SESSION_KEYS
-        }
+        offered = {name: app.check_action("session_key", (name,)) for name in SESSION_STOP_ACTIONS}
 
         await pilot.press("f4")
         await pilot.pause()
@@ -1536,12 +1534,7 @@ async def test_a_wizard_step_over_a_pane_keeps_the_navigating_keys_and_refuses_t
         returned = position(app)
         kept = app.screen.query_one("#filter", Input).value
 
-    navigating = {entry.name for entry in SESSION_KEYS if entry.row_key not in SESSION_STOP_KEYS}
-    stops = {entry.name for entry in SESSION_KEYS if entry.row_key in SESSION_STOP_KEYS}
-    assert {name for name, yes in offered.items() if yes} == navigating, (
-        f"the wrong session keys are offered while a name is being typed: {offered}"
-    )
-    assert not any(offered[name] for name in stops), "a stop key is live on a text entry"
+    assert all(answer is False for answer in offered.values()), offered
     assert opened == "NAME", f"F4 from a wizard step reached {opened}"
     assert returned == "NAME", f"escape landed on {returned}, not the half-typed name"
     assert kept == "my-new-project", "the excursion discarded the name the owner was typing"
@@ -1577,19 +1570,13 @@ async def test_no_stop_key_survives_on_any_screen_that_commits_typed_text() -> N
 
         for screen in committing:
             assert screen.entry_is_a_commitment, f"{type(screen).__name__} is not the shape tested"
-            for key in SESSION_STOP_KEYS:
+            for key in SESSION_STOP_ACTIONS:
                 assert app._offers_session_key(screen, key) is False, (
                     f"{type(screen).__name__} carries the unconfirmed stop key {key!r} while "
                     "the owner is typing into it"
                 )
-            for key in {e.row_key for e in SESSION_KEYS} - SESSION_STOP_KEYS:
-                assert app._offers_session_key(screen, key) is True, (
-                    f"{type(screen).__name__} refused the navigating key {key!r}, which costs "
-                    "the owner nothing and is the half of the layer that still works here"
-                )
-
         # The positive control: the same keys on a position that commits no typed text.
-        for key in SESSION_STOP_KEYS:
+        for key in SESSION_STOP_ACTIONS:
             assert app._offers_session_key(SessionsScreen(), key) is True, (
                 f"the stop key {key!r} is refused on the sessions position, so the loop above "
                 "proves nothing — everything is being refused"

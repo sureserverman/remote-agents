@@ -434,7 +434,6 @@ def local_context(config, connection, paths: ProductionPaths):
     open_in_console = None
     console_sync = None
     console_flash = None
-    console_show_projects = None
     console_show_settings = None
     console_close = None
     console_publish_selection = None
@@ -488,7 +487,6 @@ def local_context(config, connection, paths: ProductionPaths):
         open_in_console = _console_opener(composer)
         console_sync = composer.sync
         console_flash = composer.flash
-        console_show_projects = composer.show_projects
         console_show_settings = composer.show_settings
         # Not `composer.close` -- deliberately, and the difference is the point. The surface
         # must *launch* the teardown, never run it: this process is one of the panes the
@@ -589,7 +587,6 @@ def local_context(config, connection, paths: ProductionPaths):
         open_in_console=open_in_console,
         console_sync=console_sync,
         console_flash=console_flash,
-        console_show_projects=console_show_projects,
         console_show_settings=console_show_settings,
         console_close=console_close,
         console_publish_selection=console_publish_selection,

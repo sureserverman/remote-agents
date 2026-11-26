@@ -97,17 +97,6 @@ class TuiContext:
     # One line on the tmux status bar when the feed gains news — wired only under console
     # hosting, where a status line exists to flash on; a glance-level nudge, never a modal.
     console_flash: Callable[[str], Awaitable[None]] | None = None
-    # Bring the projects surface back to the console's left slot, wherever the exchange with
-    # an agent left it. Beside `console_flash` and for the same reason: it is console hosting's
-    # alone, absent in a bare terminal, and it arrives as a *wired field* rather than something
-    # the surface probes for (DEC-046). A host that wired no console leaves it None, and the
-    # key that would use it is not offered at all — a dead-end entry is worse than an absent
-    # one.
-    #
-    # An exchange, so it writes no record and touches no lifecycle (DEC-040), and it is a
-    # screen binding inside our own process rather than a tmux root key, so `CONSOLE_BINDINGS`
-    # is untouched and the root-key budget (DEC-093, eleven) is unaffected.
-    console_show_projects: Callable[[], Awaitable[None]] | None = None
     # Settings opened in the projects pane, from a right-hand pane's own Settings key. The F2
     # root binding goes there by itself; this is the same act for `,` and the palette.
     console_show_settings: Callable[[], Awaitable[None]] | None = None

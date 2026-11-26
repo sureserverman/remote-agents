@@ -507,13 +507,8 @@ tmux it prints the attach command instead.
 Opening a session **exchanges** it into the left pane: the agent's own pane moves there and
 the projects surface goes to live in that agent's window until it is swapped back, so the
 sessions list and the feed stay on screen beside the agent you are working in. The whole
-detail is one `d` away on the sessions pane, which stays visible the whole time, and each of
-its actions also has a key of its own on the row — see *Keys on the sessions list* below.
-
-`p` on the sessions pane swaps the projects surface back into the left slot, which is the
-same exchange run backwards. It is a key inside our own process, so it works only while you
-are focused on that pane; `F12` below does the same thing from anywhere, including from
-inside a displayed agent.
+detail is one `d` away on the sessions pane. Press `F12` from any console pane to return
+Projects to the left slot.
 
 **Closing the console is a verb of its own — `remote-agents console close`**, which is what
 `F10` runs from inside a pane. It sends a displayed agent back to its own window first, then
@@ -775,46 +770,22 @@ inherited binding, and these act on the host rather than on whatever row the cur
 
 #### Keys on the sessions list
 
-Every action the detail offers also has a single key, on both the full sessions screen and the
-console's sessions pane: `a` Copy attach, `i` Inspect output, `r` Rename, `s` Stop and close,
-`c` Clean up, `f` Force stop, `m` Claude Remote Control. `d` opens the detail itself, and on the
-console pane `p` returns the projects surface. They are bare letters because these two positions
-have no filter to type into.
+Use `a` Copy attach, `i` Inspect, `r` Rename, `c` Clean up, `m` Claude Remote Control and
+`l` Rollover on the row marked `▸`. In the console, `d` opens that row’s detail.
+`F8` stops the session displayed on the left. `F9` asks before force-stopping that session.
+With Projects on the left, those keys target the visibly selected Sessions row. Use the
+highlighted row’s detail to stop it while another session is displayed.
 
-**They act on the row your cursor is on**, and that row is marked `▸` in yellow so you can see
-which it is. The marker is not a second selection — it is the cursor, drawn so that it reads
-from somewhere else. When Projects is displayed, the same visible row is the target for F8 and F9.
+The standalone Sessions list also offers `s` Stop and close and `f` Force stop on the
+highlighted row.
 
 A session that has just **started** takes the cursor, so the agent you launched is the one in
 front of you and the one your keys are pointed at, with no hunt down the list. A session that
 **leaves the list** — it ended, from here or from Telegram — leaves the cursor and the marker on
 nothing at all, which is the next paragraph.
 
-A key is a faster way to reach what a row already offers, and **where it acts depends on what
-the key is for.** `a`, `i` and `r` open the session's detail and it performs them. `s`, `c` and
-`f` end a session, and they act on the list you pressed them on — no detail is opened, the other
-rows stay, and the outcome is said over the list. The confirmations are unchanged either way:
-Force stop and both Remote Control directions still ask, and Stop and close and Clean up still
-do not — on this surface and in Telegram alike. A key is offered only where the
-policy offers the action, so `s` is absent on a preserved row and `c` on a running one, rather
-than being present and inert.
-
-Because two of those keys end a session without asking, **a background refresh that drops the
-row you were on leaves the cursor on nothing at all** rather than falling back to the first
-row. This list re-reads itself every ten seconds and restores your place by session rather
-than by position; when the session you were on has gone there is no honest place to put the
-cursor, and moving it silently onto a neighbour would put a live agent one keypress from an
-unasked stop. One arrow press picks a row again. Both positions answer this way — the full
-sessions screen and the console's sessions pane — and so does the dashboard's own sessions
-region, which binds no stop keys and takes the same answer anyway so that the one code path
-publishing the console-wide selection cannot disagree with itself about where the cursor is.
-
-A stop that *raised* clears it for the same reason, and it is the sharper case: the session it
-failed on is still running, so a repeated keypress would re-issue a stop you never asked for
-twice.
-
-A vanished row therefore leaves **no selection**, no cursor, and no marker. Until you pick a row
-again the function keys described above have nothing to act on, from any pane, and say so.
+Clean up is available on preserved rows. If the highlighted session leaves the list,
+the cursor clears. Press an arrow key to select another row.
 
 Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose
 project or agent does not match, is explained rather than left out, so a dead pane cannot be

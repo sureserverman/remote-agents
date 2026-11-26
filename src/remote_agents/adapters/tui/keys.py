@@ -24,54 +24,11 @@ from typing import NamedTuple
 
 from textual.binding import Binding
 
-from remote_agents.application.session_actions import ACTION_LABELS, FORCE, GRACEFUL
+from remote_agents.application.session_actions import FORCE, GRACEFUL
 from remote_agents.ports.console import StatusBarKey
 
-
-class SessionKey(NamedTuple):
-    """One session-shaped F-key, by the name `action_session_key` accepts.
-
-    `row_key` is the letter the sessions pane binds for the same act, and it is the whole of
-    how the key inherits the bare letter's bounds: `RemoteAgentsTui.check_action` asks
-    `_offers_session_key` about `row_key`, so F8 on the rename box is refused for exactly the
-    reason the bare `s` is not offered there (DEC-052, DEC-062).
-
-    `action` is what `perform_row_action` is handed -- the row-action string for inspect and
-    rename, the policy constant for the two stops -- and `None` for the detail, which opens a
-    session with no action to perform.
-    """
-
-    name: str
-    row_key: str
-    action: str
-
-
-#: Session row commands still assigned to function keys.
-SESSION_KEYS: tuple[SessionKey, ...] = (
-    SessionKey("graceful", "s", GRACEFUL),
-    SessionKey("force", "f", FORCE),
-)
-
-
-#: The row letters whose F-key ends a session: F8 (graceful, unconfirmed by DEC-018) and F9
-#: (force, behind a modal). Derived from the policy's own label table rather than spelled, so a
-#: third lifecycle action given an F-key tomorrow is refused on a text-entry screen the day it
-#: appears rather than the day someone remembers.
-#:
-#: This is what `RemoteAgentsTui._offers_session_key` refuses on a commitment screen, and it is
-#: the set the retired Alt layer carried as its own stop set -- narrower by one, because clean up
-#: never got an F-key.
-SESSION_STOP_KEYS = frozenset(
-    entry.row_key for entry in SESSION_KEYS if entry.action in ACTION_LABELS
-)
-
-
-def session_key(name: str) -> SessionKey | None:
-    """The session key called *name*, or `None` for a name the vocabulary does not have."""
-    for candidate in SESSION_KEYS:
-        if candidate.name == name:
-            return candidate
-    return None
+# Console stops resolve the displayed session or the published selection.
+SESSION_STOP_ACTIONS = frozenset({GRACEFUL, FORCE})
 
 
 class FunctionKey(NamedTuple):
@@ -92,8 +49,7 @@ class FunctionKey(NamedTuple):
     So the footer carries the acts with no other advertisement on screen, and F1's help panel
     is the complete list -- `BindingsTable` renders `active_bindings` without filtering on
     `show`, so every key here is in it, which is what the key is borrowed from htop *for*. The
-    five session-shaped keys are left out because the pane's own hint row names them, and F2,
-    F5 and F12 because `,`, `ctrl+r` and the palette already do.
+    console's tmux status row supplies its function-key legend.
 
     `short` is the one word the console's compact status bar draws (DEC-105), where `label`
     would not fit: `1help 2setup 3view …`. Three are the borrowed sources' own words
@@ -185,24 +141,20 @@ def status_bar_keys() -> tuple[StatusBarKey, ...]:
     The bar only exists under console hosting, so the console's own labels apply
     (`CONSOLE_FOOTER_LABELS`: F10 reads `close console`, DEC-096). Which keys dim is derived
     here from what each one runs rather than listed for the bar: a session key needs a
-    selection, and a stop key -- `SESSION_STOP_KEYS`, the set `_offers_session_key` refuses on
+    selection, and a stop key -- `SESSION_STOP_ACTIONS`, the set `_offers_session_key` refuses on
     a commitment screen -- is refused while typing.
     """
+    stop_commands = {f"session_key('{action}')" for action in SESSION_STOP_ACTIONS}
     keys = []
     for entry in BAR_KEYS:
-        named = (
-            session_key(entry.action.removeprefix("session_key('").removesuffix("')"))
-            if entry.action.startswith("session_key(")
-            else None
-        )
+        stop = entry.action in stop_commands
         keys.append(
             StatusBarKey(
                 number=int(entry.key[1:]),
                 label=CONSOLE_FOOTER_LABELS.get(entry.key, entry.label),
                 short=entry.short,
-                needs_selection=named is not None,
-                refused_while_typing=entry.action in _REFUSED_WHILE_TYPING
-                or (named is not None and named.row_key in SESSION_STOP_KEYS),
+                needs_selection=stop,
+                refused_while_typing=entry.action in _REFUSED_WHILE_TYPING or stop,
                 bound=entry is not TERMINAL_KEY,
             )
         )

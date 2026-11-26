@@ -154,24 +154,10 @@ names the provider to avoid, so they are deliberately different keys.
 
 Free on both screens that carry the line, which is not the same as being free everywhere:
 `DashboardScreen` binds `d` and inherits `slash`, `o` and `ctrl+t` from the projects picker;
-`LimitsPaneScreen` binds nothing of its own. Neither inherits `SESSION_ACTION_BINDINGS`, whose
-letters (`a i r s f c m`) the sessions positions nonetheless *advertise* on their action line
--- so those letters are avoided here even though nothing would collide today, because a
-key the frame names for one subject must not quietly mean another.
+`LimitsPaneScreen` binds nothing of its own. The Sessions pane has its own row bindings.
+Its `m` opens Remote Control for the selected session.
 
-**Nor the session keys that carry those same acts**, and that follows from the sentence above
-rather than being a separate decision: the session-key layer is offered where `carries_row_keys`
-is set, which is where the bare letter is already legal. `DashboardScreen` sets
-`owns_session_cursor` and not that flag, so F8 and F9 -- the two stops DEC-018 forbids
-confirming -- are refused here exactly as `s` and `f` are. Gating the layer on the *cursor*
-instead would have handed them to this pane, whose sessions region is not even the focused
-widget; that was a Critical at review, and
-`tests/architecture/test_the_function_keys_are_one_table.py` now fails if the flag and the
-bindings ever disagree.
-
-**Not a root binding, so `CONSOLE_BINDINGS` is untouched.** This is a screen binding inside
-our own process, exactly as `p` on the sessions pane is, and the root-key budget (DEC-093) is
-unaffected -- see `action_show_projects_pane`, which records the same distinction.
+This is a screen binding inside this process. It consumes no tmux root key (DEC-093).
 """
 
 #: The Settings position, opened from the resting position because both of its rows are facts

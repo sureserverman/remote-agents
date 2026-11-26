@@ -181,18 +181,11 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "console_sync",
         "console_flash",
         "console_recovery",
-        # Added by Stage 4's Task 4.4, and listed here because this test is where growing the
-        # set is supposed to become a decision rather than a diff nobody reads. It is the same
-        # family as `console_flash` on every axis that matters: console hosting's alone, absent
-        # in a bare terminal, wired by the composition root rather than probed for (DEC-046),
-        # and an *exchange* that writes no record and touches no lifecycle (DEC-040). It is not
-        # a new kind of capability, it is the return trip of one already here.
-        "console_show_projects",
         # Settings opened in the projects pane from a right-hand pane (2026-10-01).
         "console_show_settings",
         # Added by this plan's Task 1.5, and listed here because that is what this test is for:
         # growing the set is a decision, not a diff nobody reads. Same family as
-        # `console_show_projects` on the axes that matter -- console hosting's alone, absent in
+        # `console_show_settings` on the axes that matter -- console hosting's alone, absent in
         # a bare terminal, wired by the composition root rather than probed for (DEC-046).
         #
         # **Where it differs, and the difference is the reason it earns its own field rather

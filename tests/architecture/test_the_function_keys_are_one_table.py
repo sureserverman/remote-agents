@@ -26,11 +26,9 @@ from pathlib import Path
 from textual.binding import Binding
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.keys import BAR_KEYS, FUNCTION_KEYS, SESSION_KEYS
+from remote_agents.adapters.tui.keys import BAR_KEYS, FUNCTION_KEYS, SESSION_STOP_ACTIONS
 from remote_agents.adapters.tui.screens.sessions import (
-    _DETAIL_KEY,
-    ROW_KEY_LETTERS,
-    SESSION_ACTION_KEYS,
+    PANE_ACTION_KEYS,
     SessionsPaneScreen,
 )
 
@@ -56,34 +54,11 @@ def test_the_bar_draws_the_bound_table_and_only_f11_besides() -> None:
     assert {entry.key for entry in BAR_KEYS} - bound == {"f11"}
 
 
-def test_every_session_shaped_key_names_a_row_key_the_sessions_pane_binds() -> None:
-    """The whole premise, asserted from the row keys' side.
-
-    `SESSION_KEYS.row_key` is what `check_action` asks the position about, so a row key that
-    no position binds would be an F-key gated on a question nobody answers. Seven letters are
-    pressable on a row (`ROW_KEY_LETTERS` plus `d`); the table carries five of them, and the
-    three it leaves out -- copy attach, clean up and Remote Control -- stay on the bare row
-    keys and the palette by the owner's own key map.
-    """
-    pressable = {*ROW_KEY_LETTERS.split(), _DETAIL_KEY}
-    carried = {entry.row_key for entry in SESSION_KEYS}
-
-    assert carried <= pressable, f"these F-keys name letters no row binds: {carried - pressable}"
-    assert len(carried) == len(SESSION_KEYS), "a row key is carried twice in the session table"
-
-
-def test_the_detail_key_the_f_key_layer_carries_is_really_bound_on_the_pane() -> None:
-    """`d` is the one row key not from `SESSION_ACTION_KEYS`, so its premise is asserted.
-
-    The other four come from that table, which the pane binds by construction. `d` is written
-    into `keys.py` by hand because the screen writes it by hand too -- so if that binding is
-    ever renamed, this fails here instead of F4 quietly acting on a key no position honours.
-    """
-    keys = {binding.key for binding in SessionsPaneScreen.BINDINGS}
-
-    assert _DETAIL_KEY in keys, (
-        "the F-key table carries `d` for F4, but the sessions pane no longer binds it"
-    )
+def test_console_sessions_bind_no_alias_for_the_global_stops_or_projects() -> None:
+    bound = SessionsPaneScreen._merged_bindings.key_to_bindings
+    assert {"s", "f", "p"}.isdisjoint(bound)
+    assert "d" in bound
+    assert SESSION_STOP_ACTIONS.isdisjoint(action for _, action, _, _ in PANE_ACTION_KEYS)
 
 
 def test_every_table_key_has_exactly_one_binding_and_no_alt_binding_survives() -> None:
@@ -144,32 +119,13 @@ def test_every_function_key_is_priority_and_something_teaches_it() -> None:
 def test_each_session_shaped_key_names_the_layer_s_one_action() -> None:
     """One action taking the name, which is what makes the table derivable at all."""
     by_key = {entry.key: entry for entry in FUNCTION_KEYS}
-    named = {f"session_key('{entry.name}')" for entry in SESSION_KEYS}
+    named = {f"session_key('{name}')" for name in SESSION_STOP_ACTIONS}
     running = {entry.action for entry in FUNCTION_KEYS if entry.action.startswith("session_key(")}
 
     assert running == named, f"the session-shaped keys run {running}, not {named}"
     for binding in _function_key_bindings():
         assert binding.action == by_key[binding.key].action, (
             f"{binding.key} runs {binding.action!r}, which is not what the table declares"
-        )
-
-
-def test_the_row_action_keys_that_have_an_f_key_reach_it_through_the_table() -> None:
-    """The derivation's input, asserted from the other end.
-
-    `SESSION_ACTION_KEYS` is the table the row bindings are built from. Not every entry has an
-    F-key -- attach, cleanup and Remote Control deliberately do not -- but every entry that
-    does must name the row letter that table declares, or the F-key and the bare letter are
-    two keys for one act that can drift apart.
-    """
-    row_actions = {key: action for key, action, _label, _word in SESSION_ACTION_KEYS}
-
-    for entry in SESSION_KEYS:
-        if entry.action is None:
-            continue  # the detail key performs nothing on the session
-        assert row_actions.get(entry.row_key) == entry.action, (
-            f"F-key {entry.name!r} names row key {entry.row_key!r} for {entry.action!r}, "
-            f"but that row key runs {row_actions.get(entry.row_key)!r}"
         )
 
 
@@ -269,7 +225,7 @@ def test_the_f_key_layer_is_offered_exactly_where_the_bare_keys_are() -> None:
     from remote_agents.adapters.tui.screens import ALL_SCREENS
     from remote_agents.adapters.tui.screens.base import ChoiceScreen
 
-    wanted = set(ROW_KEY_LETTERS.split())
+    wanted = {key for key, *_ in PANE_ACTION_KEYS} | {"m"}
 
     def bound_keys(screen: type) -> set[str]:
         merged = screen._merged_bindings
