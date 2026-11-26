@@ -2117,6 +2117,14 @@ async def test_stop_keys_act_only_on_the_displayed_or_visible_target(
         else:
             if key == "F9":
                 assert await ui.draws("surface", "Yes, force stop it")
+                if slot == "sessions" and agent:
+                    await ui.press("Escape")
+                    assert await ui.draws("surface", "Yes, force stop it", seconds=0.5) is False
+                    for sid in panes:
+                        assert await store.events(SessionId.parse(sid)) == prior[sid]
+                    await ui.focus("sessions")
+                    await ui.press("F9")
+                    assert await ui.draws("surface", "Yes, force stop it")
                 assert await store.events(SessionId.parse(target)) == prior[target]
                 await ui.press("Down")
                 await ui.press("Enter")
