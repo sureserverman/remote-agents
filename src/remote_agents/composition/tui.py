@@ -438,6 +438,7 @@ def local_context(config, connection, paths: ProductionPaths):
     console_close = None
     console_publish_selection = None
     console_read_selection = None
+    console_pane_focused = None
     console_holds_slot = None
     console_status_bar = None
     console_fit_pane = None
@@ -512,6 +513,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # selection.
         pane_id = os.environ.get("TMUX_PANE")
         if pane_id:
+            console_pane_focused = partial(runtime.gateway.console_pane_focused, pane_id)
             console_holds_slot = partial(runtime.gateway.holds_console_slot, pane_id)
             console_fit_pane = partial(runtime.gateway.fit_pane_height, pane_id)
         # The bar is re-issued on a theme switch with the key table bound in here, so the
@@ -573,6 +575,7 @@ def local_context(config, connection, paths: ProductionPaths):
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         console_hosted=console_hosted,
         console_cycle_session=composer.cycle_session if console_hosted else None,
+        console_pane_focused=console_pane_focused,
         console_agent_focused=runtime.gateway.console_agent_focused if console_hosted else None,
         console_visible_selection=runtime.gateway.visible_selection if console_hosted else None,
         console_prefix=runtime.gateway.console_prefix if console_hosted else None,

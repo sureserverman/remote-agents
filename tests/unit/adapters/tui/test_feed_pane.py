@@ -1918,3 +1918,59 @@ async def test_an_inferred_flash_carries_the_tilde() -> None:
 
     assert flash_words(_inferred(ActivityKind.NEEDS_ANSWER)).startswith("~ ")
     assert not flash_words(_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1)).startswith("~")
+
+
+async def test_console_feed_click_space_and_enter_follow_the_notification() -> None:
+    from unittest.mock import AsyncMock
+
+    older = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=3, detail="older question")
+    newer = replace(older, session_id="fedcba98-7654-3210-fedc-ba9876543210", detail="new question")
+    entries = [older]
+
+    async def feed():
+        return tuple(entries)
+
+    opener, focus = AsyncMock(return_value=None), AsyncMock(return_value=True)
+    reading = AsyncMock(return_value=True)
+    context, _ = _index_context(feed, (_session_record(older.session_id),))
+    app = FeedPane(
+        replace(
+            context,
+            open_in_console=opener,
+            console_focus_session=focus,
+            console_pane_focused=reading,
+        )
+    )
+    async with app.run_test(size=(90, 24)) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        # Resolve the actual disclosure cell on the rendered line, including frame padding.
+        y = pane.content_region.y
+        x = next(
+            x
+            for x in range(pane.region.x, pane.region.right)
+            if app.screen.get_style_at(x, y).meta.get("expand_notification")
+        )
+        arrow = (x - pane.region.x, y - pane.region.y)
+        await pilot.click(pane, offset=arrow)
+        assert pane.option_count == 2
+        opener.assert_not_awaited()
+        await pilot.press("space")
+        assert pane.option_count == 1
+        await pilot.click(pane, offset=(arrow[0] + 5, arrow[1]))
+        opener.assert_awaited_once_with(older.session_id)
+        assert str(focus.await_args.args[0]) == older.session_id
+        entries.insert(0, newer)
+        await app.screen._reload_feed()
+        assert pane.highlighted == 1
+        await pilot.press("enter")
+        assert opener.await_count == 2
+        opener.assert_awaited_with(older.session_id)
+        await pilot.press("up", "enter")
+        # The newest notification belongs to a missing session; it only opens its detail.
+        assert opener.await_count == focus.await_count == 2
+        assert "new question" in str(pane.get_option_at_index(1).prompt)
+        reading.return_value = False
+        entries.insert(0, replace(newer, observed_at=datetime.now(UTC)))
+        await app.screen._reload_feed()
+        assert pane.highlighted == 0 and app.screen.opened_notification is None

@@ -74,6 +74,7 @@ class TuiContext:
     console_cycle_session: (
         Callable[[tuple[SessionRecord, ...], int], Awaitable[str | None]] | None
     ) = None
+    console_pane_focused: Callable[[], Awaitable[bool]] | None = None
     console_agent_focused: Callable[[], Awaitable[bool]] | None = None
     console_visible_selection: Callable[[], Awaitable[SessionId | None]] | None = None
     console_prefix: Callable[[], Awaitable[str]] | None = None

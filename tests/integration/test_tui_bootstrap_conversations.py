@@ -168,6 +168,7 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "console_hosted",
         "console_present_overlay",
         "console_agent_focused",
+        "console_pane_focused",
         "console_visible_selection",
         "console_prefix",
         "console_cycle_session",

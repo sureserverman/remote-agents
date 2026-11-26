@@ -1080,6 +1080,12 @@ class TmuxGateway:
         for arguments in remote_control_words_args(marks, palette):
             await self._runner.run(*self._base_argv(), *arguments)
 
+    async def console_pane_focused(self, pane_id: str) -> bool:
+        current = await self._runner.run(
+            *self._base_argv(), "display-message", "-p", "-t", console_target(), "#{pane_id}"
+        )
+        return current.strip() == pane_id
+
     async def console_agent_focused(self) -> bool:
         result = await self._runner.run(*self._base_argv(), *active_agent_args())
         return bool(result.strip())

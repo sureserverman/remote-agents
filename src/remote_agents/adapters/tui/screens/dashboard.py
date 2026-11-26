@@ -56,12 +56,7 @@ from remote_agents.adapters.tui.screens.base import (
     status_classes,
 )
 from remote_agents.adapters.tui.screens.confirm import HostRemoteControlConfirmModal
-from remote_agents.adapters.tui.screens.feed import (
-    _EMPTY_FEED_ROW,
-    FEED_TITLE,
-    NO_NOTIFICATIONS,
-    FeedRegion,
-)
+from remote_agents.adapters.tui.screens.feed import FeedRegion
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.adapters.tui.screens.sessions import sessions_title
@@ -1166,13 +1161,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                     # `Static` used to carry this sentence as its initial content -- so an
                     # unseeded list would answer both of those with an empty box instead of the
                     # sentence DEC-009 requires this pane to declare.
-                    feed = OptionList(
-                        Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True),
-                        id="feed-pane",
-                        markup=False,
-                    )
-                    feed.border_title = FEED_TITLE
-                    yield feed
+                    yield self.feed_list()
             with VerticalScroll(id="output-pane"):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False

@@ -17,9 +17,12 @@ import logging
 import re
 import textwrap
 
+from textual import events
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.content import Content
+from textual.style import Style
 from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
@@ -34,7 +37,7 @@ from remote_agents.adapters.tui.screens.base import (
 )
 from remote_agents.application.relative_time import age_short
 from remote_agents.application.session_views import session_identity
-from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.models import SessionId, SessionRecord
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
     ActivityConfidence,
@@ -246,6 +249,7 @@ def feed_rows(
     limit: int = _FEED_LIMIT,
     opened: str | None = None,
     width: int | None = None,
+    opens_sessions: bool = False,
 ) -> list[tuple[str, Content, bool]]:
     """One `(key, row, disabled)` per observation, newest first, bounded.
 
@@ -316,26 +320,28 @@ def feed_rows(
         seen[key] = occurrence + 1
         if occurrence:
             key = f"{key}:{occurrence}"
-        rows.append(
-            (
-                key,
-                feed_row_content(
-                    activity.kind,
-                    words,
-                    identity,
-                    sequence,
-                    detail,
-                    activity.observed_at,
-                    age_text,
-                    width=width,
-                    kind_width=FEED_KIND_WIDTH,
-                    age_width=FEED_AGE_WIDTH,
-                    ask_words=ask_words,
-                    inferred=activity.confidence is ActivityConfidence.INFERRED,
-                ),
-                False,
-            )
+        row = feed_row_content(
+            activity.kind,
+            words,
+            identity,
+            sequence,
+            detail,
+            activity.observed_at,
+            age_text,
+            width=max(1, width - 2) if width and opens_sessions else width,
+            kind_width=FEED_KIND_WIDTH,
+            age_width=FEED_AGE_WIDTH,
+            ask_words=ask_words,
+            inferred=activity.confidence is ActivityConfidence.INFERRED,
         )
+        if opens_sessions:
+            disclosure = Content("  ")
+            if activity.detail:
+                disclosure = Content("▾ " if opened == key else "▸ ").stylize(
+                    Style.from_meta({"expand_notification": key})
+                )
+            row = disclosure + row
+        rows.append((key, row, False))
         if opened == key and activity.detail:
             rows.extend(_continuation_rows(key, activity.detail, width))
     return rows
@@ -424,6 +430,44 @@ def _same_prompt(drawn: object, line: Content) -> bool:
     )
 
 
+class SessionFeedList(OptionList):
+    """Enter or click opens the session. Space or the disclosure expands its notification."""
+
+    BINDINGS = [Binding("space", "expand", "Expand notification", show=False)]
+    _pressed_key: str | None = None
+
+    class Expand(OptionList.OptionMessage):
+        pass
+
+    def action_expand(self) -> None:
+        if self.highlighted is not None:
+            option = self.get_option_at_index(self.highlighted)
+            if not option.disabled:
+                self.post_message(self.Expand(self, option, self.highlighted))
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        index = event.style.meta.get("option")
+        self._pressed_key = (
+            self.get_option_at_index(index).id
+            if index is not None and index < self.option_count
+            else None
+        )
+
+    async def _on_click(self, event: events.Click) -> None:
+        event.prevent_default()
+        index = event.style.meta.get("option")
+        if event.button != 1 or index is None or index >= self.option_count:
+            return
+        option = self.get_option_at_index(index)
+        if option.disabled or self._pressed_key != option.id:
+            return
+        self.highlighted = index
+        if event.style.meta.get("expand_notification") == option.id:
+            self.action_expand()
+        else:
+            self.action_select()
+
+
 class FeedRegion:
     """Renders the durable feed into this screen's `#feed-pane`, and flashes only on news.
 
@@ -451,6 +495,24 @@ class FeedRegion:
     #: attributes above are.
     _feed_drawn: tuple[tuple[AgentActivity, ...], dict[str, tuple[str, int]]] | None = None
 
+    def feed_list(self) -> OptionList:
+        interactive = (
+            self.services.open_in_console is not None
+            and self.services.console_focus_session is not None
+        )
+        widget = SessionFeedList if interactive else OptionList
+        pane = widget(
+            Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True),
+            id="feed-pane",
+            markup=False,
+        )
+        pane.border_title = (
+            "Feed[$text-muted] · enter opens · space expands · ~ guessed[/]"
+            if interactive
+            else FEED_TITLE
+        )
+        return pane
+
     def redraw_feed(self) -> None:
         """Lay the last-read rows out again at the pane's current width; nothing is re-read."""
         if self._feed_drawn is None:
@@ -469,6 +531,7 @@ class FeedRegion:
                     names,
                     opened=self.opened_notification,
                     width=measured if measured > 0 else None,
+                    opens_sessions=isinstance(pane, SessionFeedList),
                 ),
             )
         except Exception:
@@ -506,41 +569,40 @@ class FeedRegion:
         return {str(record.session_id): _glance_identity(record) for record in records}
 
     async def choose(self, key: str) -> None:
-        """Route a notification row here; hand every other key to the screen underneath.
-
-        **On the mixin, not on either screen, and that is the whole point.** Both users list
-        `FeedRegion` first in their bases -- `FeedScreen(FeedRegion, ChoiceScreen)` and
-        `DashboardScreen(FeedRegion, ProjectsPaneScreen)` -- so this sits in front of both
-        screens' own `choose` in the MRO and `super()` continues to whichever one that is. One
-        implementation, two surfaces, and nothing in `dashboard.py` that a later change could
-        edit on one side only. Stage 3's expansion lands here for the same reason.
-
-        Without the branch a notification key fell through to the dashboard's project half,
-        which looks it up in the catalogue, does not find it, and announces "That project is no
-        longer available. Refresh and try again." -- a warning about a project, for a row that
-        is not one. Reproduced before the fix.
-
-        Selecting a notification does nothing yet; the row is the record and Enter gains its
-        meaning in Stage 3. It is a deliberate no-op rather than an omission: the routing and
-        what the routing *does* are separable, and the seam is worth landing on its own.
-        """
-        if key.startswith(NOTIFICATION_PREFIX):
-            # A toggle, and at most one open at a time. Assigning here (rather than mutating a
-            # shared container) is what keeps the state per instance -- see the attribute's
-            # own comment.
-            #
-            # The state flips before the redraw, and `_reload_feed` is guarded to leave the
-            # drawn rows alone on failure -- so a read that fails on this exact keypress
-            # leaves the flag flipped and the pane showing the old state. They resynchronise
-            # on the next successful reload, which may be the 10s timer rather than a key, so
-            # from the owner's side the row can appear to open or close a few seconds later
-            # with no input in between. Stated rather than fixed: it is this module's
-            # "stale is not wrong" contract, and the alternative -- flipping only after a
-            # successful draw -- would make a keypress silently do nothing instead.
-            self.opened_notification = None if self.opened_notification == key else key
-            await self._reload_feed()
+        if not key.startswith(NOTIFICATION_PREFIX):
+            await super().choose(key)
             return
-        await super().choose(key)
+        opener = self.services.open_in_console
+        focus = self.services.console_focus_session
+        if opener is None or focus is None:
+            self._toggle_detail(key)
+            return
+        value = key.removeprefix(NOTIFICATION_PREFIX).partition(":")[0]
+        try:
+            session = SessionId.parse(value)
+            if await self.tui.current_record(value) is None:
+                self.opened_notification = key
+                self.redraw_feed()
+                self.announce(
+                    "This session has ended or is no longer available.", severity="warning"
+                )
+                return
+            refused = await opener(value)
+            if refused:
+                self.announce(refused, severity="warning")
+            elif not await focus(session):
+                self.announce("The displayed session changed before it could be focused.")
+        except Exception as error:
+            self.announce(f"Could not open this session: {error}")
+
+    def on_session_feed_list_expand(self, event: SessionFeedList.Expand) -> None:
+        key = event.option_id
+        if key and not self.tui.busy and event.option in event.option_list.options:
+            self._toggle_detail(key)
+
+    def _toggle_detail(self, key: str) -> None:
+        self.opened_notification = None if self.opened_notification == key else key
+        self.redraw_feed()
 
     @staticmethod
     def _draw_feed(pane: OptionList, rows: list[tuple[str, Content, bool]]) -> None:
@@ -551,8 +613,8 @@ class FeedRegion:
         reports -- restoring by index would hand them a different notification each tick,
         which is the same defect `SessionsScreen._draw_listing` restores by key to avoid.
 
-        A key that has gone falls back to row 0, the resting position every other list on this
-        surface uses (DEC-007). The cursor always rests somewhere.
+        In the console, a browsed row that disappears clears the cursor. Enter can open a
+        session, so moving it to another observation requires a deliberate choice.
 
         **Nothing new, nothing touched** (0.46.0). `clear_options()` zeroes the scroll, and this
         ran on a ten-second timer and on every store change, so a pane the owner had scrolled
@@ -571,6 +633,7 @@ class FeedRegion:
                     pane.replace_option_prompt_at_index(index, line)
             return
         held_id = held_option_id(pane)
+        populated = any(not option.disabled for option in drawn)
         scrolled = pane.scroll_y
         # Built before the pane is cleared, so a failure here leaves the drawn rows standing.
         # `clear_options()` first would have emptied the pane and *then* raised, which is a
@@ -581,7 +644,13 @@ class FeedRegion:
         options = [Option(line, id=key, disabled=disabled) for key, line, disabled in rows]
         pane.clear_options()
         pane.add_options(options)
-        restore_highlight_by_id(pane, held_id, keys)
+        restore_highlight_by_id(
+            pane,
+            held_id,
+            keys,
+            when_gone="none" if isinstance(pane, SessionFeedList) else "first",
+            was_populated=populated,
+        )
         pane.scroll_to(y=scrolled, animate=False, immediate=True)
 
     async def _reload_feed(self) -> None:
@@ -614,24 +683,29 @@ class FeedRegion:
             pane.add_option(Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True))
             self._feed_news.arrived(activities)
             return
-        # **A new notification takes the cursor** (0.46.0): the open row collapses, the new row
-        # is highlighted and scrolled into view. The owner asked for this over the old rule,
-        # which kept the cursor on its observation as the new one pushed it down.
+        # Follow new arrivals except while the owner is choosing a session in the Feed.
         news = self._feed_news.is_news(activities)
-        # Decided here, committed only after a successful draw: a draw that fails leaves the
-        # pane as it was, and the open-row state must keep matching it ("stale, not wrong").
-        opened = None if news else self.opened_notification
         try:
             # The pane's own width, for wrapping an expanded detail. Reported as 0 before the
             # first layout, which `_continuation_rows` falls back on -- and an expansion only
             # ever happens on a keypress, by which time the pane has certainly been laid out.
             measured = row_width(pane)
             names = await self._session_names()
+            if news and isinstance(pane, SessionFeedList) and pane.has_focus:
+                # Each console pane runs its own Textual app. Local widget focus alone
+                # cannot tell whether tmux is currently sending keys to this pane.
+                focused = self.services.console_pane_focused
+                try:
+                    news = focused is not None and not await focused()
+                except Exception:
+                    news = False
+            opened = None if news else self.opened_notification
             rows = feed_rows(
                 activities,
                 names,
                 opened=opened,
                 width=measured if measured > 0 else None,
+                opens_sessions=isinstance(pane, SessionFeedList),
             )
             if opened not in {key for key, _line, _disabled in rows}:
                 # Its row has left the window. Leaving the key set would describe a row the
@@ -729,13 +803,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
             # `Static` used to carry this sentence as its initial content -- so an
             # unseeded list would answer both of those with an empty box instead of the
             # sentence DEC-009 requires this pane to declare.
-            feed = OptionList(
-                Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True),
-                id="feed-pane",
-                markup=False,
-            )
-            feed.border_title = FEED_TITLE
-            yield feed
+            yield self.feed_list()
             with VerticalScroll(id="output-pane"):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
