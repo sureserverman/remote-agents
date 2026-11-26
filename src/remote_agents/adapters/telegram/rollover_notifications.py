@@ -40,6 +40,7 @@ from remote_agents.application.rollover import (
     NOT_IDLE_PATIENCE,
     NOTE_PATIENCE,
     REQUEST_PATIENCE,
+    SUCCESSOR_LEFT_OPEN,
     TRUST_PATIENCE,
     RolloverReport,
 )
@@ -123,22 +124,6 @@ _WHY_STOP = {
 #: FAILED codes that end with the predecessor no longer running: "preserved" would be false.
 _PREDECESSOR_NOT_KEPT = frozenset({"predecessor-gone"})
 
-#: FAILED codes that end with the launched successor still open, so the owner may want it gone.
-_SUCCESSOR_LEFT_OPEN = frozenset(
-    {
-        "not-typed",
-        "binding-failed",
-        "permissions-failed",
-        "successor-untrusted",
-        "adoption-timeout",
-        "id-mismatch",
-        "no-ready",
-        "cwd-mismatch",
-        "branch-mismatch",
-        "plan-missing",
-    }
-)
-
 #: STOP_FAILED codes where the stop may have landed: the predecessor's fate is not known.
 _STOP_MAY_HAVE_LANDED = frozenset({"stop-unconfirmed", "unknown_session"})
 
@@ -177,7 +162,7 @@ def rollover_message(report: RolloverReport, *, project_name: str) -> str:
     text = f"Rollover failed: {session} — {why}"
     if code not in _PREDECESSOR_NOT_KEPT:
         text = f"{text}; predecessor preserved"
-    if code in _SUCCESSOR_LEFT_OPEN and rollover.successor_session_id is not None:
+    if code in SUCCESSOR_LEFT_OPEN and rollover.successor_session_id is not None:
         number = "" if report.successor is None else f" #{report.successor.display.sequence}"
         text = f"{text}. Its successor{number} is still open: stop it if it is not needed"
     return text
@@ -252,6 +237,14 @@ class RolloverNotifier:
             if self._flood.held():
                 return
             held = self._pending[0]
+            if self._settled is not None:
+                try:
+                    if await self._settled(held.rollover_id):
+                        self._pending.remove(held)
+                        continue
+                except Exception:
+                    _LOG.warning("holding a rollover notice until its subject can be checked")
+                    return
             try:
                 message_id = await self._view.send_apart(  # type: ignore[attr-defined]
                     self._bot, {"text": held.text, "parse_mode": ParseMode.HTML}

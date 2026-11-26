@@ -70,3 +70,42 @@ async def test_a_permission_notice_is_held_until_the_bot_attaches() -> None:
     notifier.attach(object())
     await notifier.pass_once()
     assert len(view.sent) == 1 and notifier.pending == ()
+
+
+async def test_stopped_session_loses_its_sent_and_queued_warnings_after_restart():
+    from remote_agents.adapters.telegram.expiring_notices import InMemoryExpiringNoticeStore
+
+    visible = {}
+    dead = set()
+
+    class Board:
+        chat_id = 10
+
+        async def send_apart(self, bot, message):
+            message_id = len(visible) + 1
+            visible[message_id] = message["text"]
+            return message_id
+
+        async def retire_notice(self, bot, message_id):
+            del visible[message_id]
+            return True
+
+    async def finished(ids):
+        return tuple(dead.intersection(ids))
+
+    store = InMemoryExpiringNoticeStore()
+
+    def start():
+        notifier = BindingNotifier(view=Board(), project_name=str, finished=finished, notices=store)
+        notifier.attach(object())
+        return notifier
+
+    first, second = _record(), _record()
+    notifier = start()
+    await notifier.notify(first)
+    await notifier.notify_permissions(second, "live warning")
+    dead.add(str(first.session_id))
+    restored = start()
+    await restored.notify_permissions(first, "late warning")
+    assert list(visible) == [2]
+    assert "live warning" in visible[2]

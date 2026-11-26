@@ -748,6 +748,31 @@ UI_MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        4,
+        """
+        CREATE TABLE retired_messages (
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            due REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (chat_id, message_id)
+        );
+        CREATE TRIGGER retire_previous_menu AFTER UPDATE OF message_id ON chat_views
+        WHEN OLD.message_id != NEW.message_id
+        BEGIN
+            INSERT OR IGNORE INTO retired_messages(chat_id, message_id, kind)
+            VALUES (OLD.chat_id, OLD.message_id, 'menu');
+        END;
+        CREATE TRIGGER retire_previous_notice AFTER UPDATE OF message_id ON standing_notifications
+        WHEN OLD.message_id != NEW.message_id
+        BEGIN
+            INSERT OR IGNORE INTO retired_messages(chat_id, message_id, kind)
+            VALUES (OLD.chat_id, OLD.message_id, 'notice');
+        END;
+        """,
+    ),
 )
 
 

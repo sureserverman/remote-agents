@@ -1651,18 +1651,18 @@ below it for a single session. Both halves are visible in the journal as a `Star
 between two observations for the same session; only the first half is fixed here, and the menu
 staying put after a restart until you next press something is unchanged.
 
-**A session that has finished loses its notification.** Every delivery pass asks the records
-which of the notified sessions are still `starting`, `running` or `untrusted`; one you stopped,
-force-stopped or cleaned up has already answered the question its alert was asking, so the
-message is deleted
-and its `Open session` token pruned with it. A stop pressed in the bot collects it immediately;
-a stop made in the local console is collected by the next pass, within `activity_poll_seconds`,
-because that surface is a different process and this one only finds out by reading. If Telegram
-refuses the delete the row stays and the next pass tries again, and if the records cannot be
-read at all nothing is deleted — a failed read is not evidence that a session has ended. **The
-local feed is untouched by any of this**: it reads `agent_activity`, which is the append-only
-record of what agents did, so the observation stays visible in the console after the alert has
-gone from the chat.
+**Stopping a session retires its board alerts.** A stop in Telegram triggers activity cleanup
+immediately. The ordinary polling pass also finds sessions stopped from the console or during
+downtime. It checks the session record before touching a notice. The console Feed retains the
+activity history.
+
+The bot records superseded menu and alert IDs in its UI database and retries temporary
+Telegram failures after a delay. If Telegram refuses deletion, the bot tries to clear the
+old keyboard or mark an alert as obsolete. If Telegram refuses both operations, an old
+message may remain visible. Its obsolete buttons cannot perform the old action. The journal
+records the affected chat and message ID. Telegram provides no general private-chat history
+lookup for a bot. A message whose ID was lost before this upgrade, or in a crash between
+Telegram accepting a send and the bot saving its ID, may need manual removal.
 
 Two things follow from Telegram ordering a chat purely by send time, and both were added after
 the first real run showed what their absence feels like. **Pressing `Open session` deletes that

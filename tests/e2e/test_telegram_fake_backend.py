@@ -3304,3 +3304,31 @@ async def test_obsolete_lines_leave_the_bot_but_every_feed_row_stays(tmp_path) -
     assert "needs answer" in rows
     assert "usage limit" in rows
     assert "finished" in rows
+
+
+@pytest.mark.parametrize("with_session", [False, True])
+async def test_refused_menu_move_leaves_one_keyboard_and_stale_press_keeps_settings(
+    with_session, monkeypatch
+):
+    chat = FakeChat()
+    boundary = _boundary(*([_a_running_session()] if with_session else []))
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    old = chat.messages[boundary.view.anchor()]
+    token = old.reply_markup.inline_keyboard[0][0].callback_data
+    await boundary.settings_command(chat.message_update("/settings"), None)
+    settings = old.text
+    original_delete = chat.bot.delete_message
+
+    async def refuse_old(**kwargs):
+        if kwargs["message_id"] == old.message_id:
+            raise BadRequest("message can't be deleted")
+        await original_delete(**kwargs)
+
+    monkeypatch.setattr(chat.bot, "delete_message", refuse_old)
+    moved = await boundary.view.move_to_bottom(chat.bot)
+    press = chat.press(token, on=old.message_id)
+    await boundary.callback(press, None)
+    assert press.callback_query.answers == ["That screen has moved on."]
+    assert old.reply_markup is None
+    assert [m.message_id for m in chat.bot_messages if m.reply_markup] == [moved]
+    assert chat.messages[moved].text == settings

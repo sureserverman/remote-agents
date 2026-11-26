@@ -81,6 +81,14 @@ class SQLiteCallbackStateStore:
             )
         return cursor.rowcount
 
+    def bind_drawn(self, chat_id: int, message_id: int, tokens: tuple[str, ...]) -> None:
+        with self._connection:
+            self._connection.executemany(
+                "UPDATE callback_states SET message_id=? WHERE token=? "
+                "AND chat_id=? AND message_id=?",
+                ((message_id, token, chat_id, UNBOUND) for token in tokens),
+            )
+
     def resolve(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> CallbackState | None:

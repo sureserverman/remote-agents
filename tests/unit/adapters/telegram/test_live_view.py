@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
@@ -137,10 +138,26 @@ async def test_a_render_retires_the_replaced_keyboard_and_adopts_the_drawn_one()
     bot = _Bot(first_id=100)
     view = _view(callbacks=callbacks, anchors=anchors)
     first = callbacks.create("nav.home", "home", OWNER, CHAT)
-    await view.render(bot, {"text": "Home"})
+    await view.render(
+        bot,
+        {
+            "text": "Home",
+            "reply_markup": InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Go", callback_data=first)]]
+            ),
+        },
+    )
     second = callbacks.create("sessions.open", "sessions", OWNER, CHAT)
 
-    await view.render(bot, {"text": "Sessions"})
+    await view.render(
+        bot,
+        {
+            "text": "Sessions",
+            "reply_markup": InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Go", callback_data=second)]]
+            ),
+        },
+    )
 
     assert callbacks.resolve(first, owner_id=OWNER, chat_id=CHAT, message_id=100) is None
     assert callbacks.resolve(second, owner_id=OWNER, chat_id=CHAT, message_id=100) is not None
@@ -291,7 +308,15 @@ async def test_a_resend_retires_the_dead_message_s_tokens_and_binds_the_new_scre
     bot = _Bot(first_id=500, edit_error=BadRequest("Message can't be edited"))
     view = _view(callbacks=callbacks, anchors=anchors)
 
-    await view.render(bot, {"text": "Sessions"})
+    await view.render(
+        bot,
+        {
+            "text": "Sessions",
+            "reply_markup": InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Go", callback_data=drawn)]]
+            ),
+        },
+    )
 
     assert callbacks.resolve(retired, owner_id=OWNER, chat_id=CHAT, message_id=100) is None
     assert callbacks.resolve(drawn, owner_id=OWNER, chat_id=CHAT, message_id=500) is not None
@@ -479,3 +504,109 @@ async def test_a_screen_that_is_not_remembered_is_not_showing_either() -> None:
     await view.render(bot, {"text": "a pairing code"}, screen="sessions", remember=False)
 
     assert not view.showing("sessions")
+
+
+async def test_a_failed_edit_cannot_be_replayed_as_the_current_menu() -> None:
+    view = _view()
+    bot = _Bot()
+    await view.render(bot, {"text": "Sessions"}, screen="sessions")
+    bot.edit_error = BadRequest("invalid markup")
+    with pytest.raises(BadRequest):
+        await view.render(bot, {"text": "Settings"}, screen="settings")
+    await view.move_to_bottom(bot)
+    assert bot.sent[-1]["text"] == "Sessions"
+    assert view.showing("sessions")
+
+
+async def test_refused_menu_delete_removes_the_old_keyboard() -> None:
+    class Bot(_Bot):
+        async def edit_message_reply_markup(self, **kwargs):
+            self.edits.append(kwargs)
+
+    view = _view()
+    bot = Bot(delete_error=BadRequest("Message can't be deleted"))
+    old = await view.render(bot, {"text": "Sessions"})
+    new = await view.move_to_bottom(bot)
+    assert new != old
+    assert {"chat_id": CHAT, "message_id": old, "reply_markup": None} in bot.edits
+
+
+async def test_background_render_queued_during_navigation_cannot_replace_it():
+    import asyncio
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class PausingBot(_Bot):
+        async def edit_message_text(self, **kwargs):
+            entered.set()
+            await release.wait()
+            await super().edit_message_text(**kwargs)
+
+    bot, view = PausingBot(), _view()
+    await view.render(bot, {"text": "Sessions"})
+    revision = view.revision
+    navigation = asyncio.create_task(view.render(bot, {"text": "Settings"}, screen="settings"))
+    await entered.wait()
+    stale = asyncio.create_task(view.render(bot, {"text": "Sessions"}, expected_revision=revision))
+    release.set()
+    await navigation
+    assert await stale is None
+    assert view.showing("settings")
+    assert [edit["text"] for edit in bot.edits] == ["Settings"]
+
+
+async def test_transport_outage_retries_after_backoff_without_sending(monkeypatch):
+    from remote_agents.adapters.telegram import live_view
+
+    anchors, bot = ChatViewStore(), _Bot(delete_error=OSError("offline"))
+    view = _view(anchors=anchors)
+    monkeypatch.setattr(live_view, "time", lambda: 20)
+    assert await view.retire_notice(bot, 31) is None
+    assert anchors.due_cleanup(CHAT, 49) == ()
+    bot.delete_error = None
+    monkeypatch.setattr(live_view, "time", lambda: 50)
+    assert await view.sweep_cleanup(bot) == {31}
+    assert anchors.due_cleanup(CHAT, 50) == ()
+    assert bot.sent == []
+
+
+async def test_double_refusal_logs_visible_residue_once(caplog):
+    class RefusingBot(_Bot):
+        async def edit_message_reply_markup(self, **kwargs):
+            raise BadRequest("message can't be edited")
+
+    view = _view()
+    bot = RefusingBot(
+        delete_error=BadRequest("message can't be deleted"),
+        edit_error=BadRequest("message can't be edited"),
+    )
+    assert await view.retire_notice(bot, 17) is None
+    assert await view.sweep_cleanup(bot) == set()
+    assert caplog.text.count("obsolete message may still be visible") == 1
+
+
+async def test_cleanup_flood_hold_survives_restart_until_telegram_allows_retry(
+    tmp_path, monkeypatch
+):
+    from telegram.error import RetryAfter
+
+    from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+    from remote_agents.adapters.sqlite.database import open_ui_database
+    from remote_agents.adapters.telegram import live_view
+
+    path = tmp_path / "ui.sqlite3"
+    db = open_ui_database(path)
+    view = _view(anchors=SQLiteChatViewStore(db))
+    monkeypatch.setattr(live_view, "time", lambda: 100)
+    assert await view.retire_notice(_Bot(delete_error=RetryAfter(8)), 17) is None
+    db.close()
+
+    db = open_ui_database(path)
+    view = _view(anchors=SQLiteChatViewStore(db))
+    bot = _Bot()
+    assert await view.sweep_cleanup(bot) == set()
+    monkeypatch.setattr(live_view, "time", lambda: 108)
+    assert await view.sweep_cleanup(bot) == {17}
+    assert bot.deleted == [{"chat_id": CHAT, "message_id": 17}]
+    assert not bot.sent
+    db.close()

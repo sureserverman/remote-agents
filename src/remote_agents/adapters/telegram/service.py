@@ -265,7 +265,7 @@ class _TextEntry:
 #: therefore never be adopted as it. Every one of them is a button on a notification: adopting
 #: one makes the next render draw a screen over the message, and the notifier's own later
 #: amendment then paints its text back over that screen.
-_SENT_APART_ACTIONS = frozenset({_NOTIFIED_DETAIL, "session.trust", "session.decline"})
+_TRUST_MESSAGE_ACTIONS = frozenset({"session.trust", "session.decline", "session.detail"})
 
 _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
@@ -1226,35 +1226,20 @@ class PrivateBotBoundary:
         state = self.callbacks.resolve(
             query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
         )
-        # A callback query in this chat can only have come from an inline keyboard this bot
-        # sent, and `permits` has already established the chat. So the message it was
-        # pressed on is a screen of ours — enough to recover an anchor a composition never
-        # recorded.
-        #
-        # It only ever fills an *absent* anchor and never moves a recorded one. Adopting the
-        # pressed message unconditionally would walk the live view backwards onto an older
-        # screen — which is wrong whatever else is in the chat, so the rule outlives the
-        # transitional reason it was first written for.
-        #
-        # One message of ours is deliberately **not** a screen, and it is the reason this now
-        # resolves first rather than adopting blind. A notification is sent apart from the live
-        # view; adopting it would make the next render edit the session detail *over* the
-        # notification, so the message the runbook promises survives pruning would instead be
-        # consumed by it. The exemption travels in the token's action rather than in a set held
-        # in this process, because the vulnerable state — a chat with no recorded anchor and a
-        # notification already in it — is exactly what a restored database leaves behind, and a
-        # process-local set is empty precisely then.
-        #
-        # **The folder-trust question is sent the same way and needs the same exemption.** Its
-        # three buttons -- Trust, Don't trust, and the Open session its amendment carries --
-        # all sit on a message sent apart from the live view, so adopting any of them makes
-        # the next render draw a screen over the question and `TrustNotifier._settle` later
-        # amend it back over that screen. The vulnerable state is the same one and is now more
-        # characteristic rather than less: an owner who launches only from the local surface
-        # may never have pressed a bot screen at all, so the trust question is the one and
-        # only message in their chat.
-        if state is None or state.action not in _SENT_APART_ACTIONS:
+        # Trust answers appear on the menu as well as on independently sent questions.
+        # Older amended questions carry an ordinary session.detail token. The stored chat
+        # and message identify both generations without granting a stale menu an exemption.
+        apart = state is not None and state.action == _NOTIFIED_DETAIL
+        if state is not None and state.action in _TRUST_MESSAGE_ACTIONS and self.trust_notifier:
+            question = await self.trust_notifier.question_for_message(state.entity_id, message_id)
+            if question is not None and message_id != self.view.anchor():
+                apart = True
+                if question.settled != (state.action == "session.detail"):
+                    state = None
+        if state is not None and not apart:
             self.view.adopt(message_id)
+            if self.view.anchor() != message_id:
+                state = None
         notified = state is not None and state.action == _NOTIFIED_DETAIL
         if notified:
             # Normalized once, here, so no downstream branch has to know the distinction
@@ -1268,6 +1253,9 @@ class PrivateBotBoundary:
             # expiry used to raise. The words say what happened without claiming a deadline
             # that no longer exists.
             await query.answer("That screen has moved on.")
+            anchor = self.view.anchor()
+            if anchor is not None and (anchor != message_id or self.view.revision):
+                return
             self._flow = "sessions"
             await self._render(query, _reply_arguments(await self.sessions._sessions_reply()))
             return
@@ -1327,26 +1315,14 @@ class PrivateBotBoundary:
                 remember=state.action not in _UNREMEMBERED_ACTIONS,
             )
             if notified:
-                # The notification has been acted on, so it is an answered question of ours --
-                # the second category `discard` permits. Leaving it turned the chat into a
-                # pile of alerts the owner had already dealt with, each still offering the
-                # button they had just pressed, and each pushing the menu further up.
-                # Pruned first: the message is going, and a token outliving its message is the
-                # dead-button state this store exists to make impossible.
-                self.callbacks.prune_for_message(chat_id, message_id)
-                await self.view.discard(query.get_bot(), message_id)
-                # The notifier holds this message as the session's standing one and would
-                # otherwise edit what the line above deleted. Told rather than left to find
-                # out, which it can -- an uneditable message is replaced -- but only after
-                # paying for the refused call, and only on the next pass.
-                #
-                # Told *which* message, because the one pressed is not always the one this
-                # session currently owns: a notification sent before the standing record was
-                # durable, or one whose button could not be minted, outlives any record of
-                # itself. See `ActivityNotifier.forget`.
-                self.notifier.forget(state.entity_id, message_id)
+                await self.notifier.dismiss(query.get_bot(), state.entity_id, message_id)
             if state.action in _SESSION_ENDING_ACTIONS:
                 await self.notifier.retire_finished()
+                if self.trust_notifier is not None:
+                    try:
+                        await self.trust_notifier.retire_if_finished(state.entity_id)
+                    except Exception:
+                        _LOG.exception("deferring cleanup of a stopped session’s trust question")
         except Exception:
             if pending is None:
                 raise
@@ -1597,6 +1573,7 @@ class PrivateBotBoundary:
         # (`concurrent_updates(False)`), but this redraw runs on its own task, so a command
         # handler rendering while this one reads would consume the `sessions` mark and tag its
         # own screen with it. Found by the test below it, not by reasoning.
+        revision = self.view.revision
         records = await self._listed_records()
         key = self._page_key(records, self._session_list_state.page)
         stale = monotonic() - self._last_drawn_at >= self._REFRESH_INTERVAL_SECONDS
@@ -1627,9 +1604,14 @@ class PrivateBotBoundary:
         # following store change overwrote what they were reading. One producer, one consumer,
         # including here.
         try:
-            await self.view.render(
-                speaker, _reply_arguments(rendered), screen=self._SESSIONS_SCREEN
+            message_id = await self.view.render(
+                speaker,
+                _reply_arguments(rendered),
+                screen=self._SESSIONS_SCREEN,
+                expected_revision=revision,
             )
+            if message_id is None:
+                return False
             self._last_drawn_key = key
             self._last_drawn_at = monotonic()
         except RetryAfter as error:
@@ -1659,6 +1641,7 @@ class PrivateBotBoundary:
             return False
         if self._handling_press or not self.view.showing(self._SCHEDULES_SCREEN):
             return False
+        revision = self.view.revision
         book = self.backend.schedules
         lines = schedule_lines(await book.list(), self.catalogue, book.zone, book.now())
         if tuple(lines) == self._schedule_state.last_lines:
@@ -1666,7 +1649,14 @@ class PrivateBotBoundary:
         rendered = await self.scheduling._schedules_reply(mark=False, lines=lines)
         if self._handling_press or not self.view.showing(self._SCHEDULES_SCREEN):
             return False
-        await self.view.render(speaker, _reply_arguments(rendered), screen=self._SCHEDULES_SCREEN)
+        message_id = await self.view.render(
+            speaker,
+            _reply_arguments(rendered),
+            screen=self._SCHEDULES_SCREEN,
+            expected_revision=revision,
+        )
+        if message_id is None:
+            return False
         # Only now: a redraw that stood down for a press, or whose edit failed, is still owed.
         self._schedule_state.last_lines = tuple(lines)
         return True
@@ -2262,7 +2252,9 @@ def build_private_bot(
     bot.view = (
         view
         if view is not None
-        else LiveView(chat_id=owner_chat_id, callbacks=bot.callbacks, anchors=bot.anchors)
+        else LiveView(
+            chat_id=owner_chat_id, callbacks=bot.callbacks, anchors=bot.anchors, flood=bot.flood
+        )
     )
     bot.notifier = (
         notifier
@@ -2328,6 +2320,8 @@ def build_private_bot(
             "binding_notifier",
             BindingNotifier(
                 view=bot.view,
+                finished=bot._finished_sessions,
+                notices=notice_store,
                 project_name=bot._project_name,  # noqa: SLF001 -- the cycle this factory closes
                 flood=bot.flood,
             ),

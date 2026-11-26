@@ -508,7 +508,9 @@ def _quote(detail: str) -> str:
     return f"<blockquote expandable>{detail}</blockquote>"
 
 
-def render_activity(group: SessionGroup, *, display: str, open_session: str) -> RenderedMessage:
+def render_activity(
+    group: SessionGroup, *, display: str, open_session: str | None
+) -> RenderedMessage:
     """Render one session's group as the whole message the owner receives about it.
 
     Pure, and deliberately ignorant of Telegram's transport: it is handed the session's
@@ -519,14 +521,17 @@ def render_activity(group: SessionGroup, *, display: str, open_session: str) -> 
     return _notification(activity_text(group, display=display), open_session)
 
 
-def _notification(text: str, open_session: str) -> RenderedMessage:
+def _notification(text: str, open_session: str | None) -> RenderedMessage:
     """A notification's text under its one button: the single barless render this module makes.
 
     Shared by every message a notification can become -- the news itself, and a line retired to
     "Limit lifted" -- so the choke-point sweep counts one call however many shapes it takes.
     """
-    _validate_callback(open_session)
-    return render_message(text, ((Button(OPEN_SESSION_LABEL, open_session),),))
+    keyboard = ()
+    if open_session is not None:
+        _validate_callback(open_session)
+        keyboard = ((Button(OPEN_SESSION_LABEL, open_session),),)
+    return render_message(text, keyboard)
 
 
 def _ask_of(activity: AgentActivity) -> str | None:
@@ -598,8 +603,11 @@ class StandingNotificationStore:
             raise ValueError("a standing notification must name a real Telegram message")
         self._standing[(chat_id, notification.session_id)] = notification
 
-    def forget(self, chat_id: int, session_id: str) -> None:
-        self._standing.pop((chat_id, session_id), None)
+    def forget(self, chat_id: int, session_id: str, message_id: int | None = None) -> None:
+        key = chat_id, session_id
+        held = self._standing.get(key)
+        if held and (message_id is None or held.message_id == message_id):
+            del self._standing[key]
 
 
 _MAXIMUM_SENDS_PER_PASS = 10
@@ -768,7 +776,13 @@ class ActivityNotifier:
                     "the standing message is kept"
                 )
                 return
-        self._standing.forget(self._view.chat_id, session_id)
+        self._standing.forget(self._view.chat_id, session_id, message_id)
+
+    async def dismiss(self, bot, session_id: str, message_id: int) -> None:
+        async with self._lock:
+            self._callbacks.prune_for_message(self._view.chat_id, message_id)
+            if await self._view.retire_notice(bot, message_id) is not False:
+                self.forget(session_id, message_id)
 
     def _recall(self, session_id: str) -> StandingNotification | None:
         """Which message this session owns, whichever process put it there."""
@@ -783,6 +797,10 @@ class ActivityNotifier:
         )
 
     async def retire_finished(self) -> int:
+        async with self._lock:
+            return await self._retire_finished()
+
+    async def _retire_finished(self) -> int:
         """Take out of the chat every notification whose session has stopped being one.
 
         A notification makes one claim -- *an agent was working, and it has stopped, and you
@@ -830,18 +848,19 @@ class ActivityNotifier:
                 # that outlives its message is the dead button the callback store exists to
                 # make impossible.
                 self._callbacks.prune_for_message(self._view.chat_id, notification.message_id)
-                await self._view.discard(self._bot, notification.message_id)
-                # Forgotten whether or not Telegram still had it: `discard` answers True for a
-                # message that was already gone, and both of those mean this session owns no
-                # message any more.
-                self._standing.forget(self._view.chat_id, notification.session_id)
+                removed = await self._view.retire_notice(self._bot, notification.message_id)
+                if removed is False:
+                    continue
+                self._standing.forget(
+                    self._view.chat_id, notification.session_id, notification.message_id
+                )
             except Exception:
                 # Left standing, deliberately. The record is what says the message is ours to
                 # collect, so dropping it here would strand the message in the chat with
                 # nothing able to try again -- and the next pass is thirty seconds away.
                 _LOG.warning("could not remove the notification of a session that has finished")
                 continue
-            retired += 1
+            retired += int(removed is True)
         return retired
 
     async def deliver(self, activities: Iterable[AgentActivity]) -> int:
@@ -896,7 +915,10 @@ class ActivityNotifier:
         # holding an observation in the queue; retiring first means its message leaves the
         # chat and `_display_for` then declines the leftover, rather than the pass amending a
         # message one line above the one that deletes it.
-        await self.retire_finished()
+        await self._view.sweep_cleanup(self._bot)
+        await self._retire_finished()
+        if self._flood.held():
+            return 0
         self._sent_this_pass = False
         # Grouped from the *whole* queue rather than from this pass's arrivals, which is what
         # makes a held group merge with news that came in since: an activity Telegram refused
@@ -979,6 +1001,9 @@ class ActivityNotifier:
                 )
             if abandoned:
                 held = [activity for activity in held if activity.session_id not in abandoned]
+        if sent:
+            # A console stop can commit while Telegram is accepting an alert.
+            await self._retire_finished()
         self._sent_this_pass = sent > 0
         # What is held is the *collapsed* set, not what arrived: two identical observations are
         # one thing said twice, and re-holding both would resurrect a duplicate the next pass
@@ -1125,6 +1150,10 @@ class ActivityNotifier:
         if standing is not None:
             carried = merged(standing.activities, group.activities)
             if carried == standing.activities:
+                if not standing.token:
+                    token = await self._mint(group, standing.message_id, display=display)
+                    if token:
+                        self._remember(group.session_id, standing.message_id, carried, token)
                 # The re-render would say exactly what the message already says -- the burst
                 # case, an agent repeating one sentence. Nothing is sent, and nothing is held
                 # either: the observations are already on the owner's screen, so they are
@@ -1142,8 +1171,7 @@ class ActivityNotifier:
                 # Nothing here the owner has not already been alerted to, so this is the same
                 # news in newer words: written into the message they have rather than sent as
                 # one more. An amendment that answers False is not a failed delivery to retry
-                # -- the message has been deleted, or has passed the 48 hours Telegram lets a
-                # bot edit for -- so the session stops standing and the fresh send below takes
+                # -- Telegram no longer accepts edits to this message. The fresh send takes
                 # it, carrying the whole story rather than only what arrived this pass.
                 # Rendered whole, keyboard included, because `editMessageText` replaces a
                 # message's markup with whatever it is given -- and given none, it takes the
@@ -1151,7 +1179,9 @@ class ActivityNotifier:
                 # notification with no way to open the session it is about, which is most of
                 # what the message is for and would have degraded on the *second* report
                 # rather than the first.
-                amended = render_activity(updated, display=display, open_session=standing.token)
+                amended = render_activity(
+                    updated, display=display, open_session=standing.token or None
+                )
                 if await self._view.amend_apart(
                     self._bot,
                     standing.message_id,
@@ -1161,20 +1191,12 @@ class ActivityNotifier:
                         "reply_markup": _markup(amended.keyboard),
                     },
                 ):
-                    self._remember(group.session_id, standing.message_id, shown, standing.token)
+                    token = standing.token or await self._mint(
+                        updated, standing.message_id, display=display
+                    )
+                    self._remember(group.session_id, standing.message_id, shown, token or "")
                     return True, False, unsaid(group.activities, shown)
-                self._standing.forget(self._view.chat_id, group.session_id)
-                return await self._send_afresh(updated, group, display=display)
-            replacement = await self._replace(standing, updated, display=display)
-            if replacement is not None:
-                message_id, token = replacement
-                self._remember(group.session_id, message_id, shown, token)
-                return True, True, unsaid(group.activities, shown)
-            # The replacement could not be given a working button, which is the one outcome
-            # worth starting over for: `_replace` has already put the message in the chat, so
-            # falling through would leave two. Forgetting instead means the *next* pass sends
-            # a fresh one, and the buttonless message is superseded then rather than now.
-            self._standing.forget(self._view.chat_id, group.session_id)
+            await self._replace(standing, updated, shown, display=display)
             return True, True, unsaid(group.activities, shown)
 
         return await self._send_afresh(group, group, display=display)
@@ -1201,21 +1223,10 @@ class ActivityNotifier:
                 "parse_mode": ParseMode.HTML,
             },
         )
-        # Recorded before the keyboard, because by here the owner has already been told. A
-        # markup failure below must not re-send the message it is trying to decorate.
-        #
-        # Stamped for what was *rendered*, never for the whole group. A kind folded into "and
-        # N earlier" has not been told to anyone, and stamping it would both silence it and
-        # suppress its next report. What it does cover is a kind that was rendered without
-        # being due -- that one has now been said, and is a repeat from here on.
         shown = shown_in_message(outgoing, limit=_MAXIMUM_LINES_PER_MESSAGE)
+        self._remember(group.session_id, message_id, shown, "")
         token = await self._mint(outgoing, message_id, display=display)
-        if token is not None:
-            # Recorded only once the button exists, because a standing message is one this
-            # object will later *replace*, and a replacement carries this token onto the new
-            # message. A message remembered without one would hand its missing button to every
-            # message after it, where a message not remembered is merely superseded by the next
-            # piece of news -- degraded once instead of degraded for good.
+        if token:
             self._remember(group.session_id, message_id, shown, token)
         return True, True, unsaid(group.activities, shown)
 
@@ -1325,12 +1336,12 @@ class ActivityNotifier:
             if display is None:
                 return False
             rendered = render_activity(
-                SessionGroup(session_id, kept), display=display, open_session=standing.token
+                SessionGroup(session_id, kept), display=display, open_session=standing.token or None
             )
             if noted is not None:
                 text = f"{rendered.text}\n{noted}"
                 if _utf16_units(text) <= MAX_TELEGRAM_TEXT_UNITS:
-                    rendered = _notification(text, standing.token)
+                    rendered = _notification(text, standing.token or None)
             if await self._view.amend_apart(
                 self._bot,
                 standing.message_id,
@@ -1343,11 +1354,11 @@ class ActivityNotifier:
                 self._remember(session_id, standing.message_id, kept, standing.token)
             else:
                 self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-                self._standing.forget(self._view.chat_id, session_id)
+                if await self._view.retire_notice(self._bot, standing.message_id) is False:
+                    return False
+                self._standing.forget(self._view.chat_id, session_id, standing.message_id)
             return True
-        if noted is None and await self._view.discard(self._bot, standing.message_id):
-            self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-        else:
+        if noted is not None or not await self._view.discard(self._bot, standing.message_id):
             name = _bounded_escaped(display or "", MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS)
             lifted = _notification(
                 "\n".join(
@@ -1355,7 +1366,7 @@ class ActivityNotifier:
                     for line in (noted or f"{_KIND_EMOJI[kind]} <b>{headline}</b>", name)
                     if line
                 ),
-                standing.token,
+                None,
             )
             if not await self._view.amend_apart(
                 self._bot,
@@ -1366,32 +1377,22 @@ class ActivityNotifier:
                     "reply_markup": _markup(lifted.keyboard),
                 },
             ):
-                self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-        self._standing.forget(self._view.chat_id, session_id)
+                if await self._view.retire_notice(self._bot, standing.message_id) is False:
+                    return False
+        self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
+        self._standing.forget(self._view.chat_id, session_id, standing.message_id)
         return True
 
     async def _replace(
-        self, standing: StandingNotification, group: SessionGroup, *, display: str
-    ) -> tuple[int, str] | None:
-        """Say a session's news in a new message, take the old one out, and answer where it is.
-
-        **Send, rebind, delete** -- `LiveView.move_to_bottom`'s order, and its argument holds
-        here for the same reason: at every point between the steps, some message in the chat
-        carries buttons that work. Sending first also means a refusal leaves the owner holding
-        the message they already had rather than nothing, and a raise is the right answer to
-        one: `deliver` holds the group and the next pass tries again.
-
-        A replacement rather than an amendment because an amendment is silent and stays where
-        it was sent, and this path is only reached for news the owner has not been alerted to
-        (`unheard`). That is where the trade now sits: the session occupies exactly one
-        message either way, and it is re-sent to the bottom of the chat only when there is
-        something in it worth interrupting them for. A repeat never gets here.
-
-        Answers `None` when the new message could not be given a working button. That is not
-        the same as a failed send -- the message is in the chat and says the right thing -- so
-        the caller starts the session over rather than sending a third.
-        """
-        rendered = render_activity(group, display=display, open_session=standing.token)
+        self,
+        standing: StandingNotification,
+        group: SessionGroup,
+        shown: tuple[AgentActivity, ...],
+        *,
+        display: str,
+    ) -> None:
+        """Publish the new message before transferring ownership of the old one."""
+        rendered = render_activity(group, display=display, open_session=standing.token or None)
         message_id = await self._view.send_apart(
             self._bot,
             {
@@ -1400,25 +1401,26 @@ class ActivityNotifier:
                 "reply_markup": _markup(rendered.keyboard),
             },
         )
-        token = standing.token
-        if not self._callbacks.rebind(self._view.chat_id, standing.message_id, message_id):
-            # Nothing moved, so the keyboard just sent resolves for a message that is about to
-            # be deleted -- a dead button. Reachable without the old message having been acted
-            # on: the store is bounded by size and evicts oldest-first, so a long-lived
-            # notification's token can be collected out from under it.
-            token = await self._mint(group, message_id, display=display)
-            if token is None:
-                return None
+        # Persist the accepted message and transfer its predecessor before callback work.
+        self._remember(group.session_id, message_id, shown, "")
         try:
-            await self._view.discard(self._bot, standing.message_id)
+            moved = self._callbacks.rebind(self._view.chat_id, standing.message_id, message_id)
         except Exception:
-            # The owner has the news. A delete that fails leaves the superseded message in the
-            # chat -- untidy, and strictly better than what letting this escape would do:
-            # `deliver` would call the whole group undelivered and re-queue it, so the next
-            # pass would send the same notification again. Two messages either way, and this
-            # way the duplicate is not also announced.
-            _LOG.warning("could not remove the notification a replacement supersedes")
-        return message_id, token
+            _LOG.warning("could not move the Open session callback", exc_info=True)
+            moved = 0
+        if moved and standing.token:
+            self._remember(group.session_id, message_id, shown, standing.token)
+        else:
+            token = await self._mint(group, message_id, display=display)
+            if token:
+                self._remember(group.session_id, message_id, shown, token)
+        try:
+            await self._view.retire_notice(self._bot, standing.message_id)
+        except Exception:
+            # Replacement is already recorded, including cleanup of its predecessor.
+            _LOG.warning(
+                "could not remove the notification a replacement supersedes", exc_info=True
+            )
 
     async def _mint(self, group: SessionGroup, message_id: int, *, display: str) -> str | None:
         """Give a message that already exists its Open session button, or answer that it has none.

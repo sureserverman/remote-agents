@@ -53,6 +53,9 @@ class _View:
         self.sent[message_id] = str(arguments["text"])
         return message_id
 
+    async def retire_notice(self, bot: object, message_id: int) -> bool:
+        return await self.discard(bot, message_id)
+
     async def discard(self, bot: object, message_id: int) -> bool:
         if self._refuse_delete:
             return False
@@ -357,7 +360,7 @@ async def test_the_rule_leaves_a_gone_predecessor_s_notice_to_time() -> None:
 # The shared helper --------------------------------------------------------------------
 
 
-async def test_a_delete_telegram_refuses_is_not_retried_forever() -> None:
+async def test_a_refused_cleanup_transfer_keeps_its_message_for_retry() -> None:
     view = _View(refuse_delete=True)
     store = InMemoryExpiringNoticeStore()
     messages = ExpiringMessages(view=view, kind="limit-reset", store=store)
@@ -365,6 +368,9 @@ async def test_a_delete_telegram_refuses_is_not_retried_forever() -> None:
 
     await messages.sweep(object(), START)
 
+    assert [row.message_id for row in await store.standing("limit-reset")] == [7]
+    view._refuse_delete = False
+    await messages.sweep(object(), START)
     assert await store.standing("limit-reset") == ()
 
 
@@ -425,3 +431,21 @@ async def test_a_message_remembered_in_another_chat_is_forgotten_not_deleted_her
 
     assert view.deleted == []
     assert await store.standing("limit-reset") == ()
+
+
+async def test_failed_rollover_warning_survives_while_its_successor_needs_attention():
+    from dataclasses import replace
+
+    predecessor = _record(SessionState.ENDED)
+    successor = replace(_record(), session_id=SessionId.new())
+    row = replace(_rollover(predecessor), successor_session_id=successor.session_id)
+    rollovers = _Rollovers(row)
+    rollovers.latest[predecessor.session_id] = row
+
+    async def session(session_id):
+        return successor if session_id == successor.session_id else predecessor
+
+    settled = rollover_notice_settled(rollovers, session)
+    assert not await settled("r1")
+    successor = replace(successor, state=SessionState.ENDED)
+    assert await settled("r1")

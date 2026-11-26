@@ -138,6 +138,12 @@ class _View:
         self.written.append(str(arguments["text"]))
         return True
 
+    async def sweep_cleanup(self, bot) -> None:
+        pass
+
+    async def retire_notice(self, bot, message_id: int) -> bool:
+        return await self.discard(bot, message_id)
+
     async def discard(self, _bot, message_id) -> bool:
         self.deleted.append(message_id)
         return True

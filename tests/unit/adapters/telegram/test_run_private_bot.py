@@ -550,6 +550,7 @@ async def test_registered_handlers_reach_all_tabs_and_write_recovery_once(monkey
         await presses.callback(chat.press(token, on=anchor.message_id), None)
         write.assert_awaited_once_with(False)
         assert await ConfigResumeSetting(config).read() is False
-        await presses.callback(chat.press(buttons()["• Sessions"]), None)
+        assert "• Settings" in buttons()  # A replay preserves the current destination.
+        await presses.callback(chat.press(buttons()["Sessions"]), None)
         assert "• Sessions" in buttons()
         assert chat.bot_messages == [anchor]

@@ -222,6 +222,12 @@ class _RecordingView:
         self.written.append(arguments)
         return True
 
+    async def sweep_cleanup(self, bot) -> None:
+        pass
+
+    async def retire_notice(self, bot, message_id: int) -> bool:
+        return await self.discard(bot, message_id)
+
     async def discard(self, _bot: object, message_id: int) -> bool:
         if self.refuse_delete:
             return False
@@ -829,7 +835,7 @@ async def test_a_refused_group_comes_back_whole_and_regroups_with_what_arrives_n
     clock = _Clock()
     notifier, view = _notifier(clock)
 
-    class _Refusing:
+    class _Refusing(_RecordingView):
         chat_id = 11
 
         def __init__(self) -> None:

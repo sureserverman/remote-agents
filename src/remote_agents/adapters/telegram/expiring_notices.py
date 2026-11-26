@@ -116,6 +116,10 @@ class ExpiringMessages:
         except Exception:
             _LOG.debug("the %s messages could not be read", self._kind, exc_info=True)
             return
+        newest = {}
+        for notice in standing:
+            key = (notice.chat_id, notice.subject)
+            newest[key] = max(newest.get(key, 0), notice.message_id)
         for notice in standing:
             try:
                 if notice.chat_id != self._chat_id():
@@ -123,7 +127,10 @@ class ExpiringMessages:
                     # chat, so deleting this id here would remove some other message.
                     await self._store.forget(notice.chat_id, notice.message_id)
                     continue
-                due = notice.expires_at <= now
+                due = (
+                    notice.expires_at <= now
+                    or notice.message_id < newest[notice.chat_id, notice.subject]
+                )
                 if not due and settled is not None:
                     due = await settled(notice.subject)
                 if due:
@@ -140,16 +147,6 @@ class ExpiringMessages:
         return int(getattr(self._view, "chat_id", 0))
 
     async def _delete(self, bot: object, notice: ExpiringNotice) -> None:
-        """Delete one message and forget it; a refusal is forgotten too, with a log line.
-
-        `discard` answers `False` only for a delete Telegram refused, which does not start
-        working later, so the row goes either way. A transport error raises and keeps it.
-        """
-        removed = await self._view.discard(bot, notice.message_id)  # type: ignore[attr-defined]
-        if not removed:
-            _LOG.info(
-                "the %s message %d could not be deleted; it stays in the chat",
-                self._kind,
-                notice.message_id,
-            )
-        await self._store.forget(notice.chat_id, notice.message_id)
+        """Hand an obsolete notice to transport cleanup before releasing its record."""
+        if await self._view.retire_notice(bot, notice.message_id) is not False:  # type: ignore[attr-defined]
+            await self._store.forget(notice.chat_id, notice.message_id)

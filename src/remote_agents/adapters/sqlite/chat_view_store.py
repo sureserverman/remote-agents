@@ -54,3 +54,35 @@ class SQLiteChatViewStore:
                 (chat_id, message_id, datetime.now(UTC).isoformat()),
             )
         return cursor.rowcount == 1
+
+    def enqueue_cleanup(self, chat_id: int, message_id: int, kind: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO retired_messages(chat_id,message_id,kind) VALUES(?,?,?)",
+                (chat_id, message_id, kind),
+            )
+
+    def due_cleanup(self, chat_id: int, now: float) -> tuple[tuple[int, str, int], ...]:
+        return tuple(
+            tuple(row)
+            for row in self._connection.execute(
+                "SELECT message_id,kind,attempts FROM retired_messages "
+                "WHERE chat_id=? AND due<=? ORDER BY due,message_id LIMIT 32",
+                (chat_id, now),
+            )
+        )
+
+    def finish_cleanup(self, chat_id: int, message_id: int) -> None:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM retired_messages WHERE chat_id=? AND message_id=?",
+                (chat_id, message_id),
+            )
+
+    def defer_cleanup(self, chat_id: int, message_id: int, due: float) -> None:
+        with self._connection:
+            self._connection.execute(
+                "UPDATE retired_messages SET attempts=attempts+1, due=? "
+                "WHERE chat_id=? AND message_id=?",
+                (due, chat_id, message_id),
+            )

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from time import time
 
-from telegram.error import BadRequest
+from telegram import InlineKeyboardMarkup
+from telegram.error import BadRequest, RetryAfter, TelegramError
 
+from remote_agents.adapters.telegram.flood import FloodGate
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 
@@ -18,8 +22,7 @@ _UNEDITABLE = (
 )
 """Telegram's ways of saying this particular message can no longer be written to.
 
-`editMessageText` is documented to work for 48 hours, and since Stage 1 a token outlives its
-message's editable life by design — so these are the expected end of a long-lived screen,
+A message may disappear or become uneditable while its callbacks still exist. These refusals are
 answered by moving the view rather than by an error. Every *other* `BadRequest` is a real
 fault and still propagates: an unclosed HTML entity in the text, a keyboard past Telegram's
 button limit. A bot blocked from its chat raises `Forbidden`, which this never catches at all.
@@ -54,6 +57,25 @@ class ChatViewStore:
 
     def __init__(self) -> None:
         self._anchors: dict[int, int] = {}
+        self._retired: dict[tuple[int, int], tuple[str, int, float]] = {}
+
+    def enqueue_cleanup(self, chat_id: int, message_id: int, kind: str) -> None:
+        self._retired.setdefault((chat_id, message_id), (kind, 0, 0))
+
+    def due_cleanup(self, chat_id: int, now: float) -> tuple[tuple[int, str, int], ...]:
+        return tuple(
+            (message, kind, attempts)
+            for (chat, message), (kind, attempts, due) in self._retired.items()
+            if chat == chat_id and due <= now
+        )[:32]
+
+    def finish_cleanup(self, chat_id: int, message_id: int) -> None:
+        self._retired.pop((chat_id, message_id), None)
+
+    def defer_cleanup(self, chat_id: int, message_id: int, due: float) -> None:
+        key = chat_id, message_id
+        kind, attempts, _ = self._retired[key]
+        self._retired[key] = kind, attempts + 1, due
 
     def anchor(self, chat_id: int) -> int | None:
         return self._anchors.get(chat_id)
@@ -61,6 +83,9 @@ class ChatViewStore:
     def record_anchor(self, chat_id: int, message_id: int) -> None:
         if message_id <= 0:
             raise ValueError("a live view must be anchored to a real Telegram message")
+        old = self.anchor(chat_id)
+        if old is not None and old != message_id:
+            self.enqueue_cleanup(chat_id, old, "menu")
         self._anchors[chat_id] = message_id
 
     def adopt_anchor(self, chat_id: int, message_id: int) -> bool:
@@ -91,8 +116,17 @@ class LiveView:
     """
 
     def __init__(
-        self, *, chat_id: int, callbacks: CallbackStatePort, anchors: ChatViewPort
+        self,
+        *,
+        chat_id: int,
+        callbacks: CallbackStatePort,
+        anchors: ChatViewPort,
+        flood: FloodGate | None = None,
     ) -> None:
+        self._publication = asyncio.Lock()
+        self._cleaning = asyncio.Lock()
+        self._revision = 0
+        self._flood = flood if flood is not None else FloodGate()
         self._chat_id = chat_id
         self._callbacks = callbacks
         self._anchors = anchors
@@ -154,7 +188,8 @@ class LiveView:
         retire: bool = True,
         remember: bool = True,
         screen: str | None = None,
-    ) -> int:
+        expected_revision: int | None = None,
+    ) -> int | None:
         """Draw `arguments` as the chat's live view, and answer which message that is.
 
         `retire=False` draws a screen that does **not** take ownership of the message's
@@ -175,23 +210,20 @@ class LiveView:
         Reproduced end to end before this parameter existed. A screen that must never be
         re-sent cannot express that through a flag that also means "keep your buttons".
         """
-        # Remembered before the send, so a screen that is drawn and then fails to move is still
-        # the screen this object believes it is showing.
-        if retire:
-            if remember:
-                self._last_arguments = arguments
-                # Set on every remembered render, including to `None`. Untagged means "some
-                # other screen" rather than "keep the last answer": most replies pass no tag,
-                # and one that survived them would leave a stale `sessions` claim standing for
-                # as long as the owner was anywhere else -- so a store-driven redraw would
-                # edit a message showing something entirely different.
-                self._last_screen = screen
-            else:
-                # Forgotten rather than left stale: keeping the *previous* screen would let
-                # `move_to_bottom` resurrect something the owner has since navigated away
-                # from, and answering None is a state this class already handles.
-                self._last_arguments = None
-                self._last_screen = None
+        async with self._publication:
+            if expected_revision is not None and self._revision != expected_revision:
+                return None
+            message_id = await self._publish(bot, arguments, retire=retire)
+            self._revision += 1
+            self._last_arguments = arguments if remember and retire else None
+            self._last_screen = screen if remember and retire else None
+            return message_id
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    async def _publish(self, bot, arguments: dict[str, object], *, retire: bool) -> int:
         anchor = self._anchors.anchor(self._chat_id)
         if anchor is None:
             return await self._send(bot, arguments, retire=retire)
@@ -209,7 +241,7 @@ class LiveView:
                 raise
             return await self._resend(bot, arguments, retired=anchor, retire=retire)
         if retire:
-            self._retire(anchor)
+            self._retire(anchor, arguments)
         return anchor
 
     async def _resend(
@@ -217,13 +249,11 @@ class LiveView:
     ) -> int:
         """Answer an edit Telegram will not perform by moving the live view to a new message.
 
-        `editMessageText` stops working 48 hours after a message was sent, and since Stage 1
-        a button outlives that by design — so this is a reachable path, not a defensive one.
+        A callback can still exist after Telegram has stopped accepting edits to its message.
         The owner never learns it happened: they pressed a button and a screen appeared.
         """
         _LOG.info("live view message %d can no longer be edited; re-sending it", retired)
         message_id = await self._send(bot, arguments, retire=retire)
-        await self._delete(bot, retired)
         if retire:
             self._drain_owed()
             self._callbacks.prune_for_message(self._chat_id, retired)
@@ -234,6 +264,7 @@ class LiveView:
             # this, including one that is itself a re-send — which is why the drain is a
             # shared step rather than a line inside `_retire`.
             self._owed_prunes.add(retired)
+        await self.sweep_cleanup(bot)
         return message_id
 
     def showing(self, screen: str) -> bool:
@@ -267,6 +298,10 @@ class LiveView:
         keyboard entirely dead. Send, rebind, then delete: at every point between those steps
         some message in the chat carries buttons that work.
         """
+        async with self._publication:
+            return await self._move(bot)
+
+    async def _move(self, bot) -> int | None:
         anchor = self._anchors.anchor(self._chat_id)
         if anchor is None or self._last_arguments is None:
             return None
@@ -274,7 +309,7 @@ class LiveView:
         moved = int(message.message_id)
         self._anchors.record_anchor(self._chat_id, moved)
         self._callbacks.rebind(self._chat_id, anchor, moved)
-        await self._delete(bot, anchor)
+        await self.sweep_cleanup(bot)
         return moved
 
     async def send_apart(self, bot, arguments: dict[str, object]) -> int:
@@ -304,12 +339,8 @@ class LiveView:
         to is allowed to cost them.
 
         Answers whether the message now says this. `False` means Telegram will not write to
-        that message any more -- it has been deleted, or it has passed the 48 hours
-        `editMessageText` is documented for -- which is not a failure to retry but a message
-        the caller must stop treating as standing. An edit that changed nothing is `True`:
-        the message already says it, which is the wanted state and is exactly what the caller
-        asked for. Every other `BadRequest` still propagates, because an unclosed entity or
-        an oversized keyboard is a fault in what we built rather than a fact about the chat.
+        that message any more. An identical edit is successful because the message already
+        shows the requested content. Other errors, such as invalid markup, propagate.
 
         It binds no tokens, for `send_apart`'s reason: the keyboard here was minted against
         this message id already, and `bind_pending` would hand it the live view's instead.
@@ -378,6 +409,83 @@ class LiveView:
         """
         return await self._delete(bot, message_id)
 
+    def queue_retirement(self, message_id: int) -> None:
+        """Transfer cleanup ownership before superseding an accepted session notice."""
+        self._anchors.enqueue_cleanup(self._chat_id, message_id, "notice")
+
+    async def retire_notice(self, bot, message_id: int) -> bool | None:
+        """True confirms cleanup. None transfers ownership without confirming removal."""
+        self.queue_retirement(message_id)
+        cleaned = await self.sweep_cleanup(bot)
+        return True if message_id in cleaned else None
+
+    async def sweep_cleanup(self, bot) -> set[int]:
+        """Retry known, superseded bot messages even on an otherwise idle pass."""
+        cleaned: set[int] = set()
+        async with self._cleaning:
+            for message_id, kind, attempts in self._anchors.due_cleanup(self._chat_id, time()):
+                if self._flood.held():
+                    break
+                if message_id == self.anchor():
+                    continue
+                try:
+                    if kind == "notice":
+                        self._callbacks.prune_for_message(self._chat_id, message_id)
+                    if await self._delete(bot, message_id) or await self._neutralize(
+                        bot, message_id, kind
+                    ):
+                        cleaned.add(message_id)
+                except RetryAfter as error:
+                    wait = error.retry_after
+                    seconds = (
+                        wait.total_seconds() if hasattr(wait, "total_seconds") else float(wait)
+                    )
+                    self._flood.hold_off(seconds)
+                    self._anchors.defer_cleanup(self._chat_id, message_id, time() + seconds)
+                    break
+                except (TelegramError, OSError):
+                    delay = min(3600, 30 * (attempts + 1))
+                    self._anchors.defer_cleanup(self._chat_id, message_id, time() + delay)
+                    _LOG.warning(
+                        "deferring %s cleanup for chat %d message %d",
+                        kind,
+                        self._chat_id,
+                        message_id,
+                    )
+                    continue
+                self._anchors.finish_cleanup(self._chat_id, message_id)
+
+        return cleaned
+
+    async def _neutralize(self, bot, message_id: int, kind: str) -> bool:
+        if kind == "notice":
+            try:
+                await bot.edit_message_text(
+                    chat_id=self._chat_id,
+                    message_id=message_id,
+                    text="This notice is no longer current.",
+                    reply_markup=None,
+                )
+                return True
+            except BadRequest as error:
+                if _UNMODIFIED.casefold() in str(error).casefold():
+                    return True
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=self._chat_id, message_id=message_id, reply_markup=None
+            )
+        except BadRequest as error:
+            if _UNMODIFIED.casefold() not in str(error).casefold():
+                _LOG.warning(
+                    "Telegram refused retirement of %s in chat %d message %d; "
+                    "obsolete message may still be visible",
+                    kind,
+                    self._chat_id,
+                    message_id,
+                )
+                return False
+        return True
+
     async def _delete(self, bot, message_id: int) -> bool:
         try:
             await bot.delete_message(chat_id=self._chat_id, message_id=message_id)
@@ -400,13 +508,24 @@ class LiveView:
         if retire:
             # No prune even here: there was no anchor, so this message replaces nothing and
             # can be carrying no retired keyboard. Only the binding is owed.
-            self._callbacks.bind_pending(self._chat_id, message_id)
+            self._bind_drawn(message_id, arguments)
         return message_id
 
-    def _retire(self, message_id: int) -> None:
+    def _bind_drawn(self, message_id: int, arguments: dict[str, object]) -> None:
+        markup = arguments.get("reply_markup")
+        if isinstance(markup, InlineKeyboardMarkup):
+            tokens = tuple(
+                button.callback_data
+                for row in markup.inline_keyboard
+                for button in row
+                if isinstance(button.callback_data, str)
+            )
+            self._callbacks.bind_drawn(self._chat_id, message_id, tokens)
+
+    def _retire(self, message_id: int, arguments: dict[str, object]) -> None:
         self._drain_owed()
         self._callbacks.prune_for_message(self._chat_id, message_id)
-        self._callbacks.bind_pending(self._chat_id, message_id)
+        self._bind_drawn(message_id, arguments)
 
     def _drain_owed(self) -> None:
         """Discard the tokens of every message an interstitial re-send could not retire.

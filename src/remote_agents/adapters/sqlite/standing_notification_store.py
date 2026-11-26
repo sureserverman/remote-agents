@@ -79,11 +79,12 @@ class SQLiteStandingNotificationStore:
                 ),
             )
 
-    def forget(self, chat_id: int, session_id: str) -> None:
+    def forget(self, chat_id: int, session_id: str, message_id: int | None = None) -> None:
         with self._connection:
             self._connection.execute(
-                "DELETE FROM standing_notifications WHERE chat_id = ? AND session_id = ?",
-                (chat_id, session_id),
+                "DELETE FROM standing_notifications WHERE chat_id = ? AND session_id = ? "
+                "AND (? IS NULL OR message_id = ?)",
+                (chat_id, session_id, message_id, message_id),
             )
 
 

@@ -76,6 +76,12 @@ class _Chat:
         self.amended.append((message_id, arguments))
         return True
 
+    async def sweep_cleanup(self, bot) -> None:
+        pass
+
+    async def retire_notice(self, bot, message_id: int) -> bool:
+        return await self.discard(bot, message_id)
+
     async def discard(self, _bot: object, message_id: int) -> bool:
         self.deleted.append(message_id)
         return True
@@ -335,3 +341,19 @@ async def test_a_restart_reloads_a_pruned_standing_message_as_pruned(tmp_path) -
     assert "Still fine." in latest
     assert "Which file?" not in latest
     assert chat.standing_messages() == 1
+
+
+async def test_boolean_refusal_retains_ownership_until_cleanup_can_run():
+    chat, standing, callbacks = _Chat(), StandingNotificationStore(), CallbackStateStore()
+    await _notifier(chat, standing, callbacks=callbacks).deliver([_activity()])
+    stopped = _notifier(chat, standing, callbacks=callbacks, finished=(SESSION,))
+
+    async def refuse(bot, message_id):
+        return False
+
+    chat.discard = refuse
+    assert await stopped.retire_finished() == 0
+    assert standing.notification(chat.chat_id, SESSION) is not None
+    chat.discard = _Chat.discard.__get__(chat)
+    assert await stopped.retire_finished() == 1
+    assert chat.standing_messages() == 0

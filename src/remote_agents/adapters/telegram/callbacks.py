@@ -93,6 +93,12 @@ class CallbackStateStore:
             self._states[token] = replace(self._states[token], message_id=message_id)
         return len(pending)
 
+    def bind_drawn(self, chat_id: int, message_id: int, tokens: tuple[str, ...]) -> None:
+        for token in tokens:
+            state = self._states.get(token)
+            if state is not None and state.chat_id == chat_id and state.message_id == UNBOUND:
+                self._states[token] = replace(state, message_id=message_id)
+
     def resolve(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> CallbackState | None:

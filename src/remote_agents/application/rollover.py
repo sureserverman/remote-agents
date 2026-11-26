@@ -1569,6 +1569,23 @@ def _request_id(rollover: Rollover) -> str:
     return "h-" + rollover.id[:20]
 
 
+#: FAILED codes that end with the launched successor still open, so the owner may want it gone.
+SUCCESSOR_LEFT_OPEN = frozenset(
+    {
+        "not-typed",
+        "binding-failed",
+        "permissions-failed",
+        "successor-untrusted",
+        "adoption-timeout",
+        "id-mismatch",
+        "no-ready",
+        "cwd-mismatch",
+        "branch-mismatch",
+        "plan-missing",
+    }
+)
+
+
 def rollover_notice_settled(
     rollovers: RolloverStore,
     session: Callable[[SessionId], Awaitable[SessionRecord | None]],
@@ -1591,7 +1608,15 @@ def rollover_notice_settled(
         if rollover.failure_code == PREDECESSOR_GONE:
             return False
         record = await session(rollover.predecessor_session_id)
-        return record is None or not notifiable(record.state)
+        if record is not None and notifiable(record.state):
+            return False
+        if (
+            rollover.failure_code in SUCCESSOR_LEFT_OPEN
+            and rollover.successor_session_id is not None
+        ):
+            successor = await session(rollover.successor_session_id)
+            return successor is None or not notifiable(successor.state)
+        return True
 
     return settled
 

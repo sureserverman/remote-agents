@@ -140,3 +140,30 @@ def test_the_unbound_sentinel_is_refused_as_an_anchor(tmp_path, message_id: int)
 
     with pytest.raises(ValueError):
         store.record_anchor(_CHAT, message_id)
+
+
+def test_upgraded_anchor_transfers_cleanup_to_the_next_process(tmp_path):
+    import sqlite3
+
+    from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+    from remote_agents.adapters.sqlite.migrations import UI_MIGRATIONS, apply_migrations
+
+    database = tmp_path / "ui.sqlite3"
+    old = sqlite3.connect(database)
+    apply_migrations(old, UI_MIGRATIONS[:3])
+    SQLiteChatViewStore(old).record_anchor(_CHAT, 10)
+    token = SQLiteCallbackStateStore(old).create("session.detail", "A", 7, _CHAT, 10)
+    old.close()
+
+    writer = open_ui_database(database)
+    store = SQLiteChatViewStore(writer)
+    assert store.anchor(_CHAT) == 10
+    assert SQLiteCallbackStateStore(writer).resolve(token, owner_id=7, chat_id=_CHAT, message_id=10)
+    store.record_anchor(_CHAT, 11)
+    writer.close()
+
+    restarted = SQLiteChatViewStore(open_ui_database(database))
+    assert restarted.anchor(_CHAT) == 11
+    assert restarted.due_cleanup(_CHAT, 0) == ((10, "menu", 0),)
+    restarted.finish_cleanup(_CHAT, 10)
+    assert restarted.due_cleanup(_CHAT, 0) == ()
