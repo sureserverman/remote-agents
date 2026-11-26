@@ -22,11 +22,8 @@ class SQLiteTrustNotificationStore:
     on any exception rather than leaving a half-finished transaction open on a connection that
     is shared and long-lived, where the next unrelated write would inherit it.
 
-    **No delete path, and the table therefore grows without bound** -- one row per session ever
-    asked. Said out loud rather than left to be discovered, which is the note migration 9 makes
-    about `agent_activity` for the same reason. At this service's scale (a single owner's
-    sessions on one host) that is a row per launch into an untrusted folder, and retention is
-    future work rather than a defect.
+    A terminal session releases its row after its last known message is retired or handed
+    to durable cleanup. An exact message comparison protects a concurrent replacement.
     """
 
     def __init__(self, connection: sqlite3.Connection) -> None:
@@ -64,6 +61,22 @@ class SQLiteTrustNotificationStore:
             " WHERE settled = 0 ORDER BY rowid"
         ).fetchall()
         return tuple(_question(row) for row in rows)
+
+    async def questions(self, chat_id: int) -> tuple[StandingTrustQuestion, ...]:
+        rows = self._connection.execute(
+            "SELECT session_id, chat_id, message_id, settled FROM trust_notifications"
+            " WHERE chat_id = ? ORDER BY rowid",
+            (chat_id,),
+        ).fetchall()
+        return tuple(_question(row) for row in rows)
+
+    async def forget(self, standing: StandingTrustQuestion) -> None:
+        with self._connection:
+            self._connection.execute(
+                "DELETE FROM trust_notifications "
+                "WHERE session_id = ? AND chat_id = ? AND message_id = ?",
+                (str(standing.session_id), standing.chat_id, standing.message_id),
+            )
 
     async def settle(self, session_id: SessionId) -> None:
         with self._connection:

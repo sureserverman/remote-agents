@@ -85,6 +85,19 @@ class _Store:
             if not row["settled"]
         )
 
+    async def questions(self, chat_id):
+        return tuple(
+            [
+                await self.standing_for(SessionId.parse(key))
+                for key, row in self.rows.items()
+                if row["chat_id"] == chat_id
+            ]
+        )
+
+    async def forget(self, standing):
+        if await self.standing_for(standing.session_id) == standing:
+            del self.rows[str(standing.session_id)]
+
     async def settle(self, session_id) -> None:
         self.rows[str(session_id)]["settled"] = True
 
@@ -167,6 +180,15 @@ class _View:
         self.discarded.append(message_id)
         return True
 
+    def queue_retirement(self, message_id):
+        self.discard_attempts.append(message_id)
+
+    def anchor(self):
+        return None
+
+    async def retire_notice(self, bot, message_id):
+        return await self.discard(bot, message_id)
+
     @property
     def settlements(self) -> list[dict]:
         """The amendments that *answer* the question, not the one that attaches its keyboard.
@@ -184,6 +206,9 @@ class _View:
 class _Callbacks:
     def __init__(self) -> None:
         self.minted = 0
+
+    def prune_for_message(self, chat_id, message_id):
+        pass
 
     def create(self, action, entity, owner_id, chat_id, message_id, *, mutation=False):
         del action, entity, owner_id, chat_id, message_id, mutation
@@ -488,19 +513,43 @@ async def test_a_question_already_on_the_owner_s_screen_is_not_sent_as_a_message
     assert view.sent == [], "the owner got a message for a question already on their screen"
 
 
-def test_the_trust_question_s_buttons_are_never_adopted_as_the_live_view() -> None:
-    """A message sent apart from the live view must not become it.
+@pytest.mark.parametrize(
+    "action,settled",
+    [("session.trust", False), ("session.decline", False), ("session.detail", True)],
+)
+async def test_standing_and_menu_trust_buttons_route_by_their_message(action, settled):
+    from unittest.mock import AsyncMock
 
-    Adopting one makes the next render draw a screen *over* the question, and the notifier's
-    own later amendment then paints the settled text back over that screen. The vulnerable
-    state — a chat with no recorded anchor and a notification already in it — is more
-    characteristic here than for the activity notification, not less: an owner who launches
-    only from the local surface may never have pressed a bot screen, so the trust question can
-    be the one and only message in their chat.
-    """
-    from remote_agents.adapters.telegram.service import _SENT_APART_ACTIONS
+    from backends import backend_for
+    from fake_telegram import FakeChat
 
-    assert {"session.trust", "session.decline"} <= _SENT_APART_ACTIONS
+    from remote_agents.adapters.telegram.service import build_private_bot
+
+    sessions, store, chat = _Sessions(_record()), _Store(), FakeChat()
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=sessions), trust_store=store)
+    message = await chat.bot.send_message(chat_id=11, text="standing question")
+    await store.remember(_SESSION, chat_id=11, message_id=message.message_id)
+    if settled:
+        await store.settle(_SESSION)
+    token = boundary.callbacks.create(action, str(_SESSION), 7, 11, message.message_id)
+    reply = AsyncMock(return_value={"text": "new menu"})
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(type(boundary), "_reply_for", reply)
+        await boundary.callback(chat.press(token, on=message.message_id), None)
+        assert chat.messages[message.message_id].text == "standing question"
+        anchor = boundary.view.anchor()
+        assert anchor != message.message_id and chat.messages[anchor].text == "new menu"
+        reply.assert_awaited_once()
+        stale = await chat.bot.send_message(chat_id=11, text="superseded menu")
+        stale_token = boundary.callbacks.create(action, str(_SESSION), 7, 11, stale.message_id)
+        update = chat.press(stale_token, on=stale.message_id)
+        await boundary.callback(update, None)
+        assert update.callback_query.answers == ["That screen has moved on."]
+        assert boundary.view.anchor() == anchor
+        reply.assert_awaited_once()
+        current = boundary.callbacks.create(action, str(_SESSION), 7, 11, anchor)
+        await boundary.callback(chat.press(current, on=anchor), None)
+        assert reply.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -806,3 +855,59 @@ async def test_a_failing_owner_dialog_read_falls_back_to_the_folder_question() -
     await _notifier(_Raising(_record(profile="codex")), _Store(), view).pass_once()
 
     assert any("Trust this project" in label for label in _offered(view)), _offered(view)
+
+
+@pytest.mark.parametrize(
+    "terminal_state",
+    [
+        SessionState.STOP_REQUESTED,
+        SessionState.PRESERVED,
+        SessionState.FAILED,
+        SessionState.ENDED,
+        SessionState.ORPHANED,
+    ],
+)
+async def test_legacy_trust_receipt_retires_on_terminal_state_after_restart(terminal_state):
+    from remote_agents.adapters.telegram.callbacks import CallbackStateStore
+
+    sessions, store, view = _Sessions(_record()), _Store(), _View()
+    callbacks = CallbackStateStore()
+    notifier = _notifier(sessions, store, view, callbacks)
+    await notifier.pass_once()
+    trust = view.amended[0][1]["reply_markup"].inline_keyboard[0][0].callback_data
+    view.refuse_discards = 1
+    sessions.record = replace(sessions.record, state=SessionState.RUNNING)
+    await notifier.pass_once()
+    detail = view.settlements[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    restarted = _notifier(sessions, store, view, callbacks)
+    assert await restarted.question_for_message(str(_SESSION), 101)
+    assert await restarted.question_for_message(str(_SESSION), 102) is None
+    assert callbacks.resolve(trust, owner_id=7, chat_id=11, message_id=101) is None
+    assert callbacks.resolve(detail, owner_id=7, chat_id=11, message_id=101)
+    view.refuse_discards = 1
+    sessions.record = replace(sessions.record, state=terminal_state)
+    await restarted.pass_once()
+    assert callbacks.resolve(detail, owner_id=7, chat_id=11, message_id=101) is None
+    assert await store.standing_for(_SESSION)
+    await restarted.pass_once()
+    assert await store.standing_for(_SESSION) is None
+    assert view.discarded == [101]
+
+
+@pytest.mark.parametrize("failed_first_write", [False, True])
+async def test_a_stop_during_the_trust_question_send_retires_it_in_the_same_pass(
+    failed_first_write,
+):
+    sessions, store = _Sessions(_record()), _Store()
+    store.refuse_writes = int(failed_first_write)
+
+    class StoppingView(_View):
+        async def send_apart(self, bot, arguments):
+            sessions.record = replace(sessions.record, state=SessionState.ENDED)
+            return await super().send_apart(bot, arguments)
+
+    view = StoppingView()
+    notifier = _notifier(sessions, store, view)
+    await notifier.pass_once()
+    assert view.discarded == [101]
+    assert await store.standing_for(_SESSION) is None

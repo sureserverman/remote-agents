@@ -170,3 +170,98 @@ async def test_a_session_asked_again_after_being_answered_is_askable_again(tmp_p
     assert standing.settled is False, "a re-asked session must be askable again"
     assert standing.message_id == 99
     assert [row.session_id for row in await store.unsettled()] == [session]
+
+
+async def test_stopped_questions_survive_cleanup_refusal_and_bot_restart(tmp_path, monkeypatch):
+    from contextlib import closing
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from fake_telegram import FakeChat
+    from telegram.error import BadRequest
+
+    from remote_agents.adapters.agents.registry import profile_trust_dialogs
+    from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+    from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+    from remote_agents.adapters.telegram import live_view
+    from remote_agents.adapters.telegram.trust_notifications import TrustNotifier
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionRecord,
+        SessionState,
+    )
+
+    chat = FakeChat()
+    a, b = (
+        SessionRecord(
+            SessionId.new(),
+            ProjectId("demo"),
+            ProfileId("claude"),
+            SessionDisplayIdentity("demo", "claude", name, i),
+            SessionState.UNTRUSTED,
+            datetime.now(UTC),
+        )
+        for i, name in enumerate(("first", "second"), start=1)
+    )
+
+    class Sessions:
+        records = (a, b)
+
+        async def list_sessions(self):
+            return self.records
+
+    sessions = Sessions()
+    path = tmp_path / "ui.sqlite3"
+    now = 100.0
+    monkeypatch.setattr(live_view, "time", lambda: now)
+
+    def open_board(db):
+        callbacks = SQLiteCallbackStateStore(db)
+        view = live_view.LiveView(chat_id=11, callbacks=callbacks, anchors=SQLiteChatViewStore(db))
+        store = SQLiteTrustNotificationStore(db)
+        notifier = TrustNotifier(
+            sessions=sessions,
+            store=store,
+            view=view,
+            callbacks=callbacks,
+            owner_user_id=7,
+            trust_dialogs=profile_trust_dialogs(),
+        )
+        notifier.attach(chat.bot)
+        return notifier, view, store, callbacks
+
+    with closing(open_ui_database(path)) as db:
+        notifier, _, store, callbacks = open_board(db)
+        await notifier.pass_once()
+        a_id = (await store.standing_for(a.session_id)).message_id
+        b_id = (await store.standing_for(b.session_id)).message_id
+        a_token = chat.messages[a_id].reply_markup.inline_keyboard[0][0].callback_data
+        b_token = chat.messages[b_id].reply_markup.inline_keyboard[0][0].callback_data
+
+        async def unavailable(*, chat_id, message_id):
+            assert (chat_id, message_id) == (11, a_id)
+            raise TimeoutError("network unavailable")
+
+        monkeypatch.setattr(chat.bot, "delete_message", unavailable)
+        sessions.records = (replace(a, state=SessionState.PRESERVED), b)
+        await notifier.retire_if_finished(str(a.session_id))
+        assert await store.standing_for(a.session_id) is None
+        assert callbacks.resolve(a_token, owner_id=7, chat_id=11, message_id=a_id) is None
+
+    with closing(open_ui_database(path)) as db:
+        _, view, store, callbacks = open_board(db)
+        now += 120
+
+        async def too_old(*, chat_id, message_id):
+            assert (chat_id, message_id) == (11, a_id)
+            raise BadRequest("Message can't be deleted")
+
+        monkeypatch.setattr(chat.bot, "delete_message", too_old)
+        assert await view.sweep_cleanup(chat.bot) == {a_id}
+        assert chat.messages[a_id].reply_markup is None
+        assert "trusted" not in chat.messages[a_id].text.lower()
+        assert (await store.standing_for(b.session_id)).message_id == b_id
+        assert callbacks.resolve(b_token, owner_id=7, chat_id=11, message_id=b_id)
+        assert chat.messages[b_id].reply_markup.inline_keyboard[0][0].callback_data == b_token

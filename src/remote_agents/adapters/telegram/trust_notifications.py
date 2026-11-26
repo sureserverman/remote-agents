@@ -18,6 +18,7 @@ so it is what this names it by too.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from html import escape
@@ -33,9 +34,9 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.application.notification_policy import REFUSALS_BEFORE_ABANDONING
-from remote_agents.application.session_actions import state_word
+from remote_agents.application.session_actions import notifiable, state_word
 from remote_agents.application.session_views import listed_in_sessions, owner_dialog
-from remote_agents.domain.models import SessionRecord, SessionState
+from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.domain.trust import answerable
 from remote_agents.ports.trust_notifications import (
     StandingTrustQuestion,
@@ -173,6 +174,7 @@ class TrustNotifier:
         owner_user_id: int,
         trust_dialogs: Mapping[str, object] | None = None,
     ) -> None:
+        self._lock = asyncio.Lock()
         self._sessions = sessions
         self._store = store
         self._view = view
@@ -241,7 +243,49 @@ class TrustNotifier:
         """Hand it the Telegram application, which arrives long after construction."""
         self._bot = bot
 
+    async def question_for_message(
+        self, session_value: str, message_id: int
+    ) -> StandingTrustQuestion | None:
+        """Match a standing trust question or receipt by its durable message and chat."""
+        try:
+            session_id = SessionId.parse(session_value)
+        except ValueError:
+            return None
+        standing = await self._store.standing_for(session_id)
+        if (
+            standing
+            and standing.chat_id == self._view.chat_id
+            and standing.message_id == message_id
+        ):
+            return standing
+        return None
+
+    async def retire_if_finished(self, session_value: str) -> None:
+        """Handle a stop from this bot without waiting for the next reconciliation pass."""
+        if self._bot is None:
+            return
+        async with self._lock:
+            standing = await self._store.standing_for(SessionId.parse(session_value))
+            if standing is None or standing.chat_id != self._view.chat_id:
+                return
+            for record in await self._sessions.list_sessions():
+                if record.session_id == standing.session_id and not notifiable(record.state):
+                    await self._retire(standing)
+                    break
+
+    async def _retire(self, standing: StandingTrustQuestion) -> None:
+        if standing.message_id != self._view.anchor():
+            self._callbacks.prune_for_message(standing.chat_id, standing.message_id)
+            if await self._view.retire_notice(self._bot, standing.message_id) is False:
+                return
+        await self._store.forget(standing)
+        self._incomplete.pop(str(standing.session_id), None)
+
     async def pass_once(self) -> None:
+        async with self._lock:
+            await self._pass_once()
+
+    async def _pass_once(self) -> None:
         """Ask what is unasked, amend what has been answered, and leave the rest alone."""
         if self._bot is None:
             return
@@ -266,6 +310,10 @@ class TrustNotifier:
             elif outcome is _DELIVERED:
                 delivered += 1
         if delivered:
+            # A stop on the console can commit while Telegram is accepting the message.
+            records = {
+                str(record.session_id): record for record in await self._sessions.list_sessions()
+            }
             for key in refused:
                 self._strike(key)
         elif refused:
@@ -282,20 +330,30 @@ class TrustNotifier:
             if record is None or record.state is SessionState.UNTRUSTED:
                 self._settle_raises.pop(key, None)
                 self._settle_abandoned.discard(key)
+        for key, message_id in tuple(self._incomplete.items()):
+            record = records.get(key)
+            if record is not None and record.state is not SessionState.UNTRUSTED:
+                await self._store.remember(
+                    record.session_id, chat_id=self._view.chat_id, message_id=message_id
+                )
+                self._incomplete.pop(key)
         raised: list[str] = []
         settled = 0
-        for standing in await self._store.unsettled():
+        for standing in await self._store.questions(self._view.chat_id):
             key = str(standing.session_id)
             record = records.get(key)
-            if key in self._settle_abandoned:
-                continue
             if record is None or record.state is SessionState.UNTRUSTED:
                 # Still asking, or gone from the listing entirely. Neither is an answer, and
                 # amending on the second would rewrite a message about a session this service
                 # can no longer describe.
                 continue
             try:
-                await self._settle(standing, record)
+                if not notifiable(record.state):
+                    await self._retire(standing)
+                elif not standing.settled and key not in self._settle_abandoned:
+                    await self._settle(standing, record)
+                else:
+                    continue
             except Exception:
                 # Per session, not per pass. One chat refusing an amendment must not defer
                 # every other session's answer by a whole interval.
@@ -345,8 +403,16 @@ class TrustNotifier:
         message_id = self._incomplete.get(key)
         if message_id is None:
             standing = await self._store.standing_for(record.session_id)
-            if standing is not None and not standing.settled:
-                return
+            if standing is not None:
+                if not standing.settled:
+                    return
+                # A previous question can still carry its amended Open session button.
+                if (
+                    standing.chat_id == self._view.chat_id
+                    and standing.message_id != self._view.anchor()
+                ):
+                    self._view.queue_retirement(standing.message_id)
+                    self._callbacks.prune_for_message(standing.chat_id, standing.message_id)
             # A dialog only the owner may answer, up instead of the folder question (BL-146):
             # the message says so and gets no buttons, because nothing here presses on it --
             # a trust answer or a decline would read no folder question and press nothing.
@@ -459,6 +525,10 @@ class TrustNotifier:
         is true whether the message went or was rewritten — and leaving it unsettled would have
         the next pass try the whole thing again every five seconds.
         """
+        if standing.message_id == self._view.anchor():
+            await self._store.forget(standing)
+            return
+        self._callbacks.prune_for_message(standing.chat_id, standing.message_id)
         if await self._view.discard(self._bot, standing.message_id):
             await self._store.settle(record.session_id)
             return
@@ -481,7 +551,7 @@ class TrustNotifier:
                 standing.message_id,
             ),
         )
-        await self._view.amend_apart(
+        amended = await self._view.amend_apart(
             self._bot,
             standing.message_id,
             {
@@ -490,7 +560,10 @@ class TrustNotifier:
                 "reply_markup": _markup(rendered.keyboard),
             },
         )
-        await self._store.settle(record.session_id)
+        if amended:
+            await self._store.settle(record.session_id)
+        else:
+            await self._retire(standing)
 
 
 def _settled_headline(record: SessionRecord) -> str:
