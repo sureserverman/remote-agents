@@ -3314,9 +3314,9 @@ async def test_refused_menu_move_leaves_one_keyboard_and_stale_press_keeps_setti
     boundary = _boundary(*([_a_running_session()] if with_session else []))
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     old = chat.messages[boundary.view.anchor()]
-    token = old.reply_markup.inline_keyboard[0][0].callback_data
     await boundary.settings_command(chat.message_update("/settings"), None)
     settings = old.text
+    token = _button(old, "Sessions")
     original_delete = chat.bot.delete_message
 
     async def refuse_old(**kwargs):
@@ -3332,3 +3332,6 @@ async def test_refused_menu_move_leaves_one_keyboard_and_stale_press_keeps_setti
     assert old.reply_markup is None
     assert [m.message_id for m in chat.bot_messages if m.reply_markup] == [moved]
     assert chat.messages[moved].text == settings
+    await boundary.callback(chat.press(token, on=moved), None)
+    assert chat.messages[moved].text != settings
+    assert boundary.view.anchor() == moved

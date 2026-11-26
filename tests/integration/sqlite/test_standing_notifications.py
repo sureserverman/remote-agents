@@ -87,6 +87,13 @@ def test_recording_again_moves_the_message_rather_than_keeping_two(tmp_path) -> 
 
     store.record(_CHAT, StandingNotification(_SESSION, 1180, (_activity(),), "c1_moved_token"))
 
+    # A delayed press for the replaced ID must leave the newer standing row intact.
+    old_message = _notification().message_id
+    store.forget(_CHAT, _SESSION, old_message)
+    assert connection.execute(
+        "SELECT message_id, kind FROM retired_messages WHERE chat_id = ?", (_CHAT,)
+    ).fetchone()[:] == (old_message, "notice")
+
     held = store.standing(_CHAT)
     assert len(held) == 1
     assert held[0].message_id == 1180
