@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import ExitStack, closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -28,6 +28,7 @@ from remote_agents.adapters.tui.panes import SessionsPane
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.services import SessionService
 from remote_agents.composition.service import (
     ServiceComposition,
@@ -114,7 +115,7 @@ async def _console_stop(route, domain, terminal, target, other):
         await pilot.pause()
 
 
-@pytest.mark.parametrize("route", ["f8", "f9", "telegram"])
+@pytest.mark.parametrize("route", ["f8", "f9", "telegram", "external"])
 async def test_only_the_stopped_sessions_alert_retires_across_restart(tmp_path, route, monkeypatch):
     chat = FakeChat()
     terminal = FakeTerminal()
@@ -170,6 +171,12 @@ async def test_only_the_stopped_sessions_alert_retires_across_restart(tmp_path, 
                 await bot.callback(chat.press(picker), None)
                 assert "Target A" in chat.messages[menu].text
                 await bot.callback(chat.press(_button(chat.messages[menu], "Stop and close")), None)
+            elif route == "external":
+                await terminal.cleanup(a.session_id)
+                survivor = await terminal.inspect(b.session_id)
+                assert survivor is not None
+                reconciler = ReconciliationService(console_sessions, settle_after=timedelta(0))
+                await reconciler.reconcile((survivor,))
             else:
                 await _console_stop(route, console_db, terminal, a, b)
             _spool(spool, a, "Late report after the stop.")
@@ -191,6 +198,8 @@ async def test_only_the_stopped_sessions_alert_retires_across_restart(tmp_path, 
                 if route == "f9"
                 else LifecycleEvent.CLEANUP_CONFIRMED
             )
+            if route == "external":
+                ending = LifecycleEvent.RECONCILED_TERMINAL_MISSING
             assert (await console_sessions.events(a.session_id))[-1].event_type == ending
             assert {m.message_id for m in chat.bot_messages if m.reply_markup} == {
                 menu,

@@ -357,3 +357,47 @@ async def test_boolean_refusal_retains_ownership_until_cleanup_can_run():
     chat.discard = _Chat.discard.__get__(chat)
     assert await stopped.retire_finished() == 1
     assert chat.standing_messages() == 0
+
+
+async def test_accepted_message_is_not_resent_while_its_local_record_is_unwritable():
+    class Unwritable(StandingNotificationStore):
+        failed = True
+
+        def record(self, chat_id, notification):
+            if self.failed:
+                raise OSError("disk unavailable")
+            super().record(chat_id, notification)
+
+    chat, standing = _Chat(), Unwritable()
+    notifier = _notifier(chat, standing, callbacks=CallbackStateStore())
+    event = _activity(detail="Finished.")
+    assert await notifier.deliver([event]) == 1
+    assert await notifier.deliver([event]) == 0
+    assert standing.notification(chat.chat_id, SESSION) is None
+    standing.failed = False
+    await notifier.deliver([])
+    assert len(chat.sent) == 1
+    assert standing.notification(chat.chat_id, SESSION).message_id == 1101
+
+
+async def test_stop_during_send_retires_the_accepted_text_even_when_markup_fails():
+    finished = []
+
+    class StoppingChat(_Chat):
+        async def send_apart(self, bot, arguments):
+            message_id = await super().send_apart(bot, arguments)
+            finished.append(SESSION)
+            return message_id
+
+    class UnavailableKeyboard:
+        async def edit_message_reply_markup(self, **kwargs):
+            raise OSError("no markup transport")
+
+    chat, standing = StoppingChat(), StandingNotificationStore()
+    notifier = _notifier(chat, standing, callbacks=CallbackStateStore(), finished=finished)
+    notifier.attach(UnavailableKeyboard())
+    await notifier.deliver([_activity()])
+    await notifier.deliver([])
+    assert len(chat.sent) == 1
+    assert chat.standing_messages() == 0
+    assert standing.notification(chat.chat_id, SESSION) is None

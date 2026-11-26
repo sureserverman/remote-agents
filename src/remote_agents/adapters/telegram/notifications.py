@@ -738,6 +738,7 @@ class ActivityNotifier:
         self._standing = standing if standing is not None else StandingNotificationStore()
         #: Which of the sessions holding a notification have stopped being worth one, or None
         #: in a composition with no lifecycle to ask. See `retire_finished`.
+        self._unsaved: dict[str, StandingNotification] = {}
         self._finished = finished
         #: Serialises a delivery pass and a lift's `retire_line`, which each read the standing
         #: record, await Telegram, and write it back. Not every writer: the owner's press path
@@ -777,6 +778,7 @@ class ActivityNotifier:
                 )
                 return
         self._standing.forget(self._view.chat_id, session_id, message_id)
+        self._unsaved.pop(session_id, None)
 
     async def dismiss(self, bot, session_id: str, message_id: int) -> None:
         async with self._lock:
@@ -786,15 +788,24 @@ class ActivityNotifier:
 
     def _recall(self, session_id: str) -> StandingNotification | None:
         """Which message this session owns, whichever process put it there."""
-        return self._standing.notification(self._view.chat_id, session_id)
+        return self._unsaved.get(session_id) or self._standing.notification(
+            self._view.chat_id, session_id
+        )
 
     def _remember(
         self, session_id: str, message_id: int, activities: tuple[AgentActivity, ...], token: str
     ) -> None:
-        self._standing.record(
-            self._view.chat_id,
-            StandingNotification(session_id, message_id, activities, token),
-        )
+        self._save(StandingNotification(session_id, message_id, activities, token))
+
+    def _save(self, notice: StandingNotification) -> None:
+        try:
+            self._standing.record(self._view.chat_id, notice)
+        except Exception:
+            # Telegram accepted the message. Retry the local write without another send.
+            self._unsaved[notice.session_id] = notice
+            _LOG.warning("deferring the standing record of an accepted activity notification")
+        else:
+            self._unsaved.pop(notice.session_id, None)
 
     async def retire_finished(self) -> int:
         async with self._lock:
@@ -841,7 +852,7 @@ class ActivityNotifier:
             return 0
         retired = 0
         for notification in held:
-            if notification.session_id not in finished:
+            if notification.session_id in self._unsaved or notification.session_id not in finished:
                 continue
             try:
                 # Pruned before the delete, for `service`'s reason on the press path: a token
@@ -902,6 +913,8 @@ class ActivityNotifier:
             )
         if self._bot is None:
             return 0
+        for notice in tuple(self._unsaved.values()):
+            self._save(notice)
         if self._flood.held():
             # Telegram has told this chat to wait. Holding the queue is what this pass already
             # does with a refusal; doing it without spending the request is the whole
@@ -929,7 +942,7 @@ class ActivityNotifier:
         arrived_at_the_bottom = False
         refused_sessions: list[str] = []
         for group in grouped_for_delivery(self._pending):
-            if sent >= _MAXIMUM_SENDS_PER_PASS:
+            if group.session_id in self._unsaved or sent >= _MAXIMUM_SENDS_PER_PASS:
                 held.extend(group.activities)
                 continue
             try:
@@ -1356,7 +1369,7 @@ class ActivityNotifier:
                 self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
                 if await self._view.retire_notice(self._bot, standing.message_id) is False:
                     return False
-                self._standing.forget(self._view.chat_id, session_id, standing.message_id)
+                self.forget(session_id, standing.message_id)
             return True
         if noted is not None or not await self._view.discard(self._bot, standing.message_id):
             name = _bounded_escaped(display or "", MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS)
@@ -1380,7 +1393,7 @@ class ActivityNotifier:
                 if await self._view.retire_notice(self._bot, standing.message_id) is False:
                     return False
         self._callbacks.prune_for_message(self._view.chat_id, standing.message_id)
-        self._standing.forget(self._view.chat_id, session_id, standing.message_id)
+        self.forget(session_id, standing.message_id)
         return True
 
     async def _replace(

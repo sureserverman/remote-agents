@@ -48,6 +48,7 @@ _AT_THE_BASE = frozenset(
         "could not deliver an activity notification; holding it for retry",
         "could not move the live view below the notifications",
         "could not move the Open session callback",
+        "deferring the standing record of an accepted activity notification",
         "could not remove the notification a replacement supersedes",
         "could not remove the notification of a session that has finished",
         "dropping an activity this service will not speak about",
