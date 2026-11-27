@@ -70,6 +70,8 @@ is immediate and only the memory of it can fail.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from textual.widgets import OptionList
 
@@ -229,6 +231,48 @@ def _restart_resume_line(value: bool | None) -> str:
     return f"{RESTART_RESUME_TITLE} · {RESTART_RESUME_LABELS[value]}"
 
 
+@dataclass
+class _Reading[T]:
+    """A backend row keeps the most recent successful observation across read failures."""
+
+    format_line: Callable[[T | None], str]
+    value: T | None = None
+    stale: bool = False
+
+    async def read(self, reader: Callable[[], Awaitable[T]]) -> T:
+        try:
+            value = await reader()
+        except Exception:
+            self.stale = True
+            raise
+        self.value = value
+        self.stale = False
+        return value
+
+    async def refresh(self, reader: Callable[[], Awaitable[T]] | None) -> None:
+        if reader is None:
+            self.value = None
+            self.stale = False
+            return
+        try:
+            await self.read(reader)
+        except Exception:
+            _LOG.exception("Could not refresh %s", self.line())
+
+    def line(self) -> str:
+        line = self.format_line(self.value)
+        if not self.stale:
+            return line
+        title, separator, word = line.partition(" · ")
+        detail = "Could not read" if self.value is None else f"Last known: {word}"
+        return f"{title}{separator}{detail}"
+
+
+def _permissions_line(value: PermissionPreset | None) -> str:
+    word = UNAVAILABLE if value is None else permission_label(value)
+    return f"{PERMISSION_TITLE} · {word}"
+
+
 SETTINGS_INSTRUCTION = "Press enter on a row to change it."
 """What this position is for, in the one line the status region holds.
 
@@ -263,26 +307,15 @@ class SettingsScreen(ChoiceScreen):
 
     def __init__(self) -> None:
         super().__init__()
-        #: The last reading of each provider row. `None` is both "not read yet" and "no
-        #: capability wired", which the two render identically and on purpose: before the first
-        #: read there is nothing this surface can honestly claim about the machine either.
-        self._claude_default: RemoteControlDefault | None = None
-        self._host_status: HostRemoteControlStatus | None = None
-        #: The stored limits source, or `None` for a composition that wired no Claude provider.
-        #: `None` rather than the default string, because "this host cannot choose" and "this
-        #: host chose the hop" are different answers and the row must not render them alike.
-        self._limits_source: str | None = None
-        #: Cursor's stored switch, or `None` for a composition that wired none.
-        self._cursor_limits: str | None = None
-        #: The stored resume switch, or `None` for a composition that wired none.
-        self._resume: bool | None = None
-        #: The stored early-reset notice choice, or `None` for a composition that wired none.
-        self._early_reset: str | None = None
-        #: The stored auto-rollover switch, or `None` for a composition that wired none.
-        self._rollover: bool | None = None
-        #: The stored restart-resume switch, or `None` for a composition that wired none.
-        self._restart_resume: bool | None = None
-        self._permissions: PermissionPreset | None = None
+        self._claude_default = _Reading[RemoteControlDefault](remote_control_default_line)
+        self._host_status = _Reading[HostRemoteControlStatus](host_remote_control_line)
+        self._permissions = _Reading[PermissionPreset](_permissions_line)
+        self._limits_source = _Reading[str](_limits_source_line)
+        self._cursor_limits = _Reading[str](_cursor_limits_line)
+        self._resume = _Reading[bool](_resume_line)
+        self._early_reset = _Reading[str](_early_reset_line)
+        self._rollover = _Reading[bool](_rollover_line)
+        self._restart_resume = _Reading[bool](_restart_resume_line)
         #: The two terminal preferences, as last read. Plain strings rather than `None`-able
         #: readings: `read_theme` and `read_project_order` are total and always answer one of
         #: the values this surface knows, so there is no absence for these two rows to render.
@@ -322,90 +355,30 @@ class SettingsScreen(ChoiceScreen):
         self._project_order = read_project_order(self.services.preferences_path)
 
     async def _read_every_row(self) -> None:
-        """Read each capability, and let neither failure take the other row's reading down.
-
-        Both ports promise never to raise for a read -- the stored default answers
-        `PROVIDER_DEFAULT` for every way a file can be unreadable, and the host service answers
-        UNREACHABLE rather than raising -- so these `except` clauses are for the shapes they
-        cannot promise about: a composition wiring something else, a cancelled read. What is
-        already drawn is then stale rather than wrong, which is the contract every background
-        read in this surface keeps.
-        """
-        permissions = self.services.backend.permission_presets
-        self._permissions = None
-        if permissions is not None:
-            try:
-                self._permissions = await permissions.read()
-            except Exception as error:
-                self.announce(f"Launch permissions could not be read: {error}")
-        port = self.services.backend.claude_remote_control_default
-        if port is None:
-            # A declared absence, not a failure (DEC-061). Left as `None` so the row says
-            # "unavailable" rather than keeping a reading from a capability that is gone.
-            self._claude_default = None
-        else:
-            try:
-                self._claude_default = await port.read()
-            except Exception:
-                _LOG.exception("Claude's stored Remote Control default could not be read")
-        control = self.services.backend.host_remote_control
-        if control is None:
-            self._host_status = None
-        else:
-            try:
-                self._host_status = await control.status()
-            except Exception:
-                _LOG.exception("this host's Remote Control could not be read")
-        source = self.services.backend.claude_limits_source
-        if source is None:
-            # A declared absence, not a failure (DEC-061). Left as `None` so the row says
-            # "unavailable" rather than keeping a reading from a capability that is gone.
-            self._limits_source = None
-        else:
-            try:
-                self._limits_source = await source.read()
-            except Exception:
-                _LOG.exception("the Claude limits source could not be read")
-        cursor = self.services.backend.cursor_limits_source
-        if cursor is None:
-            self._cursor_limits = None
-        else:
-            try:
-                self._cursor_limits = await cursor.read()
-            except Exception:
-                _LOG.exception("the Cursor limits switch could not be read")
-        resume = self.services.backend.resume_after_limit
-        if resume is None:
-            self._resume = None
-        else:
-            try:
-                self._resume = await resume.read()
-            except Exception:
-                _LOG.exception("the resume switch could not be read")
-        early_reset = self.services.backend.early_reset_notice
-        if early_reset is None:
-            self._early_reset = None
-        else:
-            try:
-                self._early_reset = await early_reset.read()
-            except Exception:
-                _LOG.exception("the early-reset notice choice could not be read")
-        rollover = self.services.backend.auto_rollover
-        if rollover is None:
-            self._rollover = None
-        else:
-            try:
-                self._rollover = await rollover.read()
-            except Exception:
-                _LOG.exception("the rollover switch could not be read")
-        restart_resume = self.services.backend.resume_interrupted
-        if restart_resume is None:
-            self._restart_resume = None
-        else:
-            try:
-                self._restart_resume = await restart_resume.read()
-            except Exception:
-                _LOG.exception("the restart-resume switch could not be read")
+        """Refresh each backend independently so that one failed read only marks its row."""
+        backend = self.services.backend
+        claude_default = backend.claude_remote_control_default
+        await self._claude_default.refresh(
+            claude_default.read if claude_default is not None else None
+        )
+        host_status = backend.host_remote_control
+        await self._host_status.refresh(host_status.status if host_status is not None else None)
+        permissions = backend.permission_presets
+        await self._permissions.refresh(permissions.read if permissions is not None else None)
+        limits_source = backend.claude_limits_source
+        await self._limits_source.refresh(limits_source.read if limits_source is not None else None)
+        cursor_limits = backend.cursor_limits_source
+        await self._cursor_limits.refresh(cursor_limits.read if cursor_limits is not None else None)
+        resume = backend.resume_after_limit
+        await self._resume.refresh(resume.read if resume is not None else None)
+        early_reset = backend.early_reset_notice
+        await self._early_reset.refresh(early_reset.read if early_reset is not None else None)
+        rollover = backend.auto_rollover
+        await self._rollover.refresh(rollover.read if rollover is not None else None)
+        restart_resume = backend.resume_interrupted
+        await self._restart_resume.refresh(
+            restart_resume.read if restart_resume is not None else None
+        )
         self._read_preferences()
 
     def _draw_settings_rows(self) -> None:
@@ -423,23 +396,15 @@ class SettingsScreen(ChoiceScreen):
             return
         self.show_choices(
             (
-                (_CLAUDE_ROW, remote_control_default_line(self._claude_default)),
-                (_CODEX_ROW, host_remote_control_line(self._host_status)),
-                (
-                    _PERMISSIONS_ROW,
-                    f"{PERMISSION_TITLE} · "
-                    + (
-                        permission_label(self._permissions)
-                        if self._permissions is not None
-                        else UNAVAILABLE
-                    ),
-                ),
-                (_LIMITS_SOURCE_ROW, _limits_source_line(self._limits_source)),
-                (_CURSOR_LIMITS_ROW, _cursor_limits_line(self._cursor_limits)),
-                (_RESUME_ROW, _resume_line(self._resume)),
-                (_EARLY_RESET_ROW, _early_reset_line(self._early_reset)),
-                (_ROLLOVER_ROW, _rollover_line(self._rollover)),
-                (_RESTART_RESUME_ROW, _restart_resume_line(self._restart_resume)),
+                (_CLAUDE_ROW, self._claude_default.line()),
+                (_CODEX_ROW, self._host_status.line()),
+                (_PERMISSIONS_ROW, self._permissions.line()),
+                (_LIMITS_SOURCE_ROW, self._limits_source.line()),
+                (_CURSOR_LIMITS_ROW, self._cursor_limits.line()),
+                (_RESUME_ROW, self._resume.line()),
+                (_EARLY_RESET_ROW, self._early_reset.line()),
+                (_ROLLOVER_ROW, self._rollover.line()),
+                (_RESTART_RESUME_ROW, self._restart_resume.line()),
                 (_THEME_ROW, f"{THEME_TITLE} · {THEME_LABELS.get(self._theme, self._theme)}"),
                 (
                     _ORDER_ROW,
@@ -514,8 +479,9 @@ class SettingsScreen(ChoiceScreen):
         if settings is None or self.tui.busy:
             return
         try:
-            current = await settings.read()
+            current = await self._permissions.read(settings.read)
         except Exception as error:
+            self._draw_settings_rows()
             self.announce(f"Launch permissions could not be read: {error}")
             return
 
@@ -556,12 +522,14 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {LIMITS_SOURCE_TITLE}…"):
-                    intended = next_limits_source(await port.read())
+                    intended = next_limits_source(await self._limits_source.read(port.read))
                     await port.write(intended)
                     # Read back rather than drawing `intended`: the write may have been
                     # refused, and the file is the only thing that knows.
-                    self._limits_source = await port.read()
+                    verified = await self._limits_source.read(port.read)
             except Exception as error:
+                self._limits_source.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("the Claude limits source could not be changed")
                 # Not "was not changed": the write may have landed and only the read-back
                 # failed, which would make that sentence the false half of a true-sounding pair.
@@ -573,8 +541,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = LIMITS_SOURCE_LABELS.get(self._limits_source, self._limits_source)
-            if self._limits_source == intended:
+            word = LIMITS_SOURCE_LABELS.get(verified, verified)
+            if verified == intended:
                 self.set_status(f"{LIMITS_SOURCE_TITLE} is now {word}.")
             else:
                 self.announce(f"{LIMITS_SOURCE_TITLE} could not be changed; it is still {word}.")
@@ -596,14 +564,17 @@ class SettingsScreen(ChoiceScreen):
             return
         async with self.holding_the_guard():
             try:
-                intended = next_cursor_limits_source(await port.read())
+                intended = next_cursor_limits_source(await self._cursor_limits.read(port.read))
                 if intended == CURSOR_LIMITS_ON:
                     if not await self.tui.ask_to_confirm(CursorLimitsConfirmModal()):
+                        self._draw_settings_rows()
                         return
                 async with self.awaiting(f"Changing {CURSOR_LIMITS_SOURCE_TITLE}…"):
                     await port.write(intended)
-                    self._cursor_limits = await port.read()
+                    verified = await self._cursor_limits.read(port.read)
             except Exception as error:
+                self._cursor_limits.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("the Cursor limits switch could not be changed")
                 self.announce(
                     f"{CURSOR_LIMITS_SOURCE_TITLE} could not be confirmed: {error} "
@@ -613,8 +584,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = CURSOR_LIMITS_SOURCE_LABELS.get(self._cursor_limits, self._cursor_limits)
-            if self._cursor_limits == intended:
+            word = CURSOR_LIMITS_SOURCE_LABELS.get(verified, verified)
+            if verified == intended:
                 self.set_status(f"{CURSOR_LIMITS_SOURCE_TITLE} is now {word}.")
             else:
                 self.announce(
@@ -634,10 +605,12 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {RESUME_TITLE}…"):
-                    intended = not await port.read()
+                    intended = not await self._resume.read(port.read)
                     await port.write(intended)
-                    self._resume = await port.read()
+                    verified = await self._resume.read(port.read)
             except Exception as error:
+                self._resume.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("the resume switch could not be changed")
                 self.announce(
                     f"{RESUME_TITLE} could not be confirmed: {error} "
@@ -647,8 +620,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = RESUME_LABELS[self._resume]
-            if self._resume == intended:
+            word = RESUME_LABELS[verified]
+            if verified == intended:
                 self.set_status(f"{RESUME_TITLE} is now {word}.")
             else:
                 self.announce(f"{RESUME_TITLE} could not be changed; it is still {word}.")
@@ -661,10 +634,12 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {ROLLOVER_TITLE}…"):
-                    intended = not await port.read()
+                    intended = not await self._rollover.read(port.read)
                     await port.write(intended)
-                    self._rollover = await port.read()
+                    verified = await self._rollover.read(port.read)
             except Exception as error:
+                self._rollover.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("the rollover switch could not be changed")
                 self.announce(
                     f"{ROLLOVER_TITLE} could not be confirmed: {error} "
@@ -674,8 +649,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = ROLLOVER_LABELS[self._rollover]
-            if self._rollover == intended:
+            word = ROLLOVER_LABELS[verified]
+            if verified == intended:
                 self.set_status(f"{ROLLOVER_TITLE} is now {word}.")
             else:
                 self.announce(f"{ROLLOVER_TITLE} could not be changed; it is still {word}.")
@@ -688,10 +663,12 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {EARLY_RESET_TITLE}…"):
-                    intended = next_early_reset_notice(await port.read())
+                    intended = next_early_reset_notice(await self._early_reset.read(port.read))
                     await port.write(intended)
-                    self._early_reset = await port.read()
+                    verified = await self._early_reset.read(port.read)
             except Exception as error:
+                self._early_reset.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("the early-reset notice choice could not be changed")
                 self.announce(
                     f"{EARLY_RESET_TITLE} could not be confirmed: {error} "
@@ -701,8 +678,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = EARLY_RESET_LABELS.get(self._early_reset, self._early_reset)
-            if self._early_reset == intended:
+            word = EARLY_RESET_LABELS.get(verified, verified)
+            if verified == intended:
                 self.set_status(f"{EARLY_RESET_TITLE} is now {word}.")
             else:
                 self.announce(f"{EARLY_RESET_TITLE} could not be changed; it is still {word}.")
@@ -715,10 +692,12 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {RESTART_RESUME_TITLE}…"):
-                    intended = not await port.read()
+                    intended = not await self._restart_resume.read(port.read)
                     await port.write(intended)
-                    self._restart_resume = await port.read()
+                    verified = await self._restart_resume.read(port.read)
             except Exception as error:
+                self._restart_resume.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("the restart-resume switch could not be changed")
                 self.announce(
                     f"{RESTART_RESUME_TITLE} could not be confirmed: {error} "
@@ -728,8 +707,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = RESTART_RESUME_LABELS[self._restart_resume]
-            if self._restart_resume == intended:
+            word = RESTART_RESUME_LABELS[verified]
+            if verified == intended:
                 self.set_status(f"{RESTART_RESUME_TITLE} is now {word}.")
             else:
                 self.announce(f"{RESTART_RESUME_TITLE} could not be changed; it is still {word}.")
@@ -833,13 +812,17 @@ class SettingsScreen(ChoiceScreen):
         async with self.holding_the_guard():
             try:
                 async with self.awaiting(f"Changing {REMOTE_CONTROL_DEFAULT_TITLE}…"):
-                    intended = next_remote_control_default(await port.read())
+                    intended = next_remote_control_default(
+                        await self._claude_default.read(port.read)
+                    )
                     await port.write(intended)
                     # Read back rather than drawing `intended`. The write may have been refused,
                     # and `PROVIDER_DEFAULT` is stored as the key's *absence*, so the file is the
                     # only thing that knows.
-                    self._claude_default = await port.read()
+                    verified = await self._claude_default.read(port.read)
             except Exception as error:
+                self._claude_default.stale = True
+                self._draw_settings_rows()
                 _LOG.exception("Claude's stored Remote Control default could not be changed")
                 # Not "was not changed": the write may have landed and only the read-back failed,
                 # in which case that sentence would be the false half of a true-sounding pair.
@@ -851,8 +834,8 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            word = remote_control_default_word(self._claude_default)
-            if self._claude_default is intended:
+            word = remote_control_default_word(verified)
+            if verified is intended:
                 self.set_status(f"{REMOTE_CONTROL_DEFAULT_TITLE} is now {word}.")
             else:
                 self.announce(
@@ -887,7 +870,10 @@ class SettingsScreen(ChoiceScreen):
             if not self.showing:
                 return
             self._draw_settings_rows()
-            status = self._host_status
+            if self._host_status.stale:
+                self.announce("Codex Remote Control could not be read. Try refreshing Settings.")
+                return
+            status = self._host_status.value
             directions = host_remote_control_directions(status)
             if not directions:
                 return
@@ -927,6 +913,7 @@ class SettingsScreen(ChoiceScreen):
         `LimitsRegion`'s method of the same job, because the app drives both positions through
         it and a second name would be a second thing for that one caller to know about.
         """
-        self._host_status = status
+        self._host_status.value = status
+        self._host_status.stale = False
         self._draw_settings_rows()
         self.set_status(f"{host_remote_control_line(status)}.")

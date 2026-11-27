@@ -1953,6 +1953,9 @@ Four facts that are easy to get wrong when a key appears not to work:
   pane and selects that pane. With an agent in the left slot it runs `console projects` first
   (F12's exchange), so the agent goes back to its own window. `,` and the palette in a
   right-hand pane ask the console for the same thing.
+  A Settings row marked **Last known** shows its last successful reading. **Could not read**
+  means the first read failed. **Unavailable** means the host lacks that control. Refresh
+  Settings to read the value again.
 - **An agent this project does not curate will lose a function key it binds, and nothing
   reports it.** That is a stated, accepted cost of the row rather than a defect, tracked as
   BL-094.

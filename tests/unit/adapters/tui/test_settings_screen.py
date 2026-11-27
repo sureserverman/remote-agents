@@ -49,6 +49,7 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
@@ -83,7 +84,12 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.remote_control import HostConnection, RemoteControlDefault
+from remote_agents.domain.profiles import PermissionPreset
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    RemoteControlDefault,
+)
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -600,22 +606,97 @@ class RaisingRemoteControlDefault:
         self.value = value
 
 
-async def test_a_read_that_raises_leaves_the_screen_drawn_rather_than_crashing() -> None:
-    """The mount-time branch: what is already drawn is stale, never a traceback on the terminal.
-
-    The row falls back to *unavailable* -- which is not the same fact as a capability nobody
-    wired, and is recorded as a residual rather than defended: the alternative is a row with no
-    word in it at all, and the screen must draw something.
-    """
-    app = RemoteAgentsTui(_context(claude_default=RaisingRemoteControlDefault(on_read=True)))
+@pytest.mark.parametrize(
+    ("port_name", "method", "first", "second"),
+    [
+        (
+            "claude_remote_control_default",
+            "read",
+            RemoteControlDefault.OFF,
+            RemoteControlDefault.ON,
+        ),
+        (
+            "host_remote_control",
+            "status",
+            HostRemoteControlStatus.observed(HostConnection.DISABLED, server_name=None),
+            HostRemoteControlStatus.observed(HostConnection.CONNECTED, server_name=None),
+        ),
+        ("permission_presets", "read", PermissionPreset.ASK, PermissionPreset.FULL_ACCESS),
+        ("claude_limits_source", "read", "status-line", "usage-api"),
+        ("cursor_limits_source", "read", "off", "usage-api"),
+        ("resume_after_limit", "read", False, True),
+        ("early_reset_notice", "read", "off", "1h"),
+        ("auto_rollover", "read", False, True),
+        ("resume_interrupted", "read", False, True),
+    ],
+)
+async def test_read_failures_and_recovery_are_visible_per_setting(port_name, method, first, second):
+    context = _context(
+        claude_default=FakeRemoteControlDefault(), host_remote_control=FakeHostRemoteControl()
+    )
+    port = AsyncMock()
+    reader = getattr(port, method)
+    reader.side_effect = RuntimeError("offline")
+    app = RemoteAgentsTui(replace(context, backend=replace(context.backend, **{port_name: port})))
     async with app.run_test() as pilot:
-        await pilot.pause()
         await _open_settings(app, pilot)
-        drawn = _row(app, REMOTE_CONTROL_DEFAULT_TITLE)
-        alive = isinstance(app.screen, SettingsScreen)
+        failed = [line for line in _rows(app) if "Could not read" in line]
+        assert len(failed) == 1
+        title = failed[0].split(" · ")[0]
+        neighbor = (
+            HOST_REMOTE_CONTROL_TITLE
+            if title == REMOTE_CONTROL_DEFAULT_TITLE
+            else REMOTE_CONTROL_DEFAULT_TITLE
+        )
+        healthy = _row(app, neighbor)
+        reader.side_effect = None
+        reader.return_value = first
+        await app.screen.refresh_contents()
+        current = _row(app, title)
+        word = current.removeprefix(f"{title} · ")
+        assert word and word not in ("Could not read", "unavailable")
+        for recovered in (first, second):
+            reader.side_effect = RuntimeError("offline")
+            await app.screen.refresh_contents()
+            assert _row(app, title) == f"{title} · Last known: {word}"
+            assert _row(app, neighbor) == healthy
+            reader.side_effect = None
+            reader.return_value = recovered
+            await app.screen.refresh_contents()
+            restored = _row(app, title)
+            assert "Last known" not in restored and "Could not read" not in restored
+            assert (restored == current) == (recovered == first)
 
-    assert alive, "a port that raised took the screen down"
-    assert drawn, "the row drew nothing at all"
+
+async def test_failed_reads_around_a_change_keep_the_last_verified_value():
+    port = FakeRemoteControlDefault(RemoteControlDefault.OFF)
+    app = RemoteAgentsTui(_context(claude_default=port))
+    async with app.run_test() as pilot:
+        await _open_settings(app, pilot)
+        port.read = AsyncMock(side_effect=RuntimeError("offline"))
+        await pilot.press("enter")
+        assert port.writes == []
+        assert _row(app, REMOTE_CONTROL_DEFAULT_TITLE).endswith("Last known: off")
+
+        port.read.side_effect = [RemoteControlDefault.ON, RuntimeError("lost after write")]
+        await pilot.press("enter")
+        assert len(port.writes) == 1
+        assert _row(app, REMOTE_CONTROL_DEFAULT_TITLE).endswith("Last known: on")
+        assert any("could not be confirmed" in msg for msg in announcements(app))
+        assert "is now" not in status(app)
+
+
+async def test_codex_read_failure_cannot_offer_a_direction_from_its_cached_status():
+    control = FakeHostRemoteControl(HostConnection.DISABLED)
+    app = RemoteAgentsTui(_context(host_remote_control=control))
+    async with app.run_test() as pilot:
+        await _open_settings(app, pilot)
+        control.status = AsyncMock(side_effect=RuntimeError("offline"))
+        app.ask_to_confirm = AsyncMock(return_value=False)
+        await _press_row(app, pilot, HOST_REMOTE_CONTROL_TITLE)
+        app.ask_to_confirm.assert_not_awaited()
+        assert "Last known:" in _row(app, HOST_REMOTE_CONTROL_TITLE)
+        assert not any(call.startswith("set_state:") for call in control.calls)
 
 
 async def test_a_write_that_raises_tells_the_owner_and_keeps_the_surface() -> None:
