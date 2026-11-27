@@ -686,6 +686,63 @@ async def test_failed_reads_around_a_change_keep_the_last_verified_value():
         assert "is now" not in status(app)
 
 
+@pytest.mark.parametrize(
+    ("port_name", "title", "value"),
+    [
+        ("claude_limits_source", "Claude limits source", "status-line"),
+        ("cursor_limits_source", "Cursor limits", "usage-api"),
+        ("resume_after_limit", "Resume after a limit lifts", True),
+        ("early_reset_notice", "Early limits reset notice", "1h"),
+        ("auto_rollover", "Roll over to a fresh session on handoff", True),
+        ("resume_interrupted", "Resume after restart", True),
+    ],
+)
+async def test_setting_change_requires_verified_prerequisite_and_readback(port_name, title, value):
+    port = AsyncMock()
+    port.read.return_value = value
+    context = _context()
+    app = RemoteAgentsTui(replace(context, backend=replace(context.backend, **{port_name: port})))
+    async with app.run_test() as pilot:
+        await _open_settings(app, pilot)
+        word = _row(app, title).split(" · ", 1)[1]
+        port.read.side_effect = RuntimeError("cannot read")
+        await _press_row(app, pilot, title)
+        port.write.assert_not_awaited()
+        assert _row(app, title).endswith(f"Last known: {word}")
+
+        port.read.side_effect = [value, RuntimeError("lost after write")]
+        await pilot.press("enter")
+        port.write.assert_awaited_once()
+        assert _row(app, title).endswith(f"Last known: {word}")
+        assert any("could not be confirmed" in msg for msg in announcements(app))
+        assert "is now" not in status(app)
+
+
+async def test_permissions_picker_handles_failed_prerequisite_and_unverified_save():
+    from remote_agents.application.permission_presets import PERMISSION_TITLE, PermissionSettings
+
+    port = AsyncMock()
+    port.read.return_value = PermissionPreset.ASK
+    context = _context()
+    backend = replace(context.backend, permission_presets=PermissionSettings(port))
+    app = RemoteAgentsTui(replace(context, backend=backend))
+    async with app.run_test() as pilot:
+        await _open_settings(app, pilot)
+        word = _row(app, PERMISSION_TITLE).split(" · ", 1)[1]
+        port.read.side_effect = RuntimeError("offline")
+        await _press_row(app, pilot, PERMISSION_TITLE)
+        port.write.assert_not_awaited()
+        assert _row(app, PERMISSION_TITLE).endswith(f"Last known: {word}")
+
+        port.read.side_effect = [PermissionPreset.ASK, RuntimeError("lost after write")]
+        await pilot.press("enter", "down", "enter")
+        port.write.assert_awaited_once()
+        assert any("Could not save launch permissions" in msg for msg in announcements(app))
+        port.read.side_effect = RuntimeError("still offline")
+        await pilot.press("escape")
+        assert _row(app, PERMISSION_TITLE).endswith(f"Last known: {word}")
+
+
 async def test_codex_read_failure_cannot_offer_a_direction_from_its_cached_status():
     control = FakeHostRemoteControl(HostConnection.DISABLED)
     app = RemoteAgentsTui(_context(host_remote_control=control))
@@ -697,6 +754,20 @@ async def test_codex_read_failure_cannot_offer_a_direction_from_its_cached_statu
         app.ask_to_confirm.assert_not_awaited()
         assert "Last known:" in _row(app, HOST_REMOTE_CONTROL_TITLE)
         assert not any(call.startswith("set_state:") for call in control.calls)
+
+
+async def test_unconfirmed_codex_command_marks_the_last_host_reading():
+    control = FakeHostRemoteControl(HostConnection.DISABLED)
+    app = RemoteAgentsTui(_context(host_remote_control=control))
+    async with app.run_test() as pilot:
+        await _open_settings(app, pilot)
+        word = _row(app, HOST_REMOTE_CONTROL_TITLE).split(" · ", 1)[1]
+        control.set_state = AsyncMock(side_effect=RuntimeError("could not verify daemon"))
+        app.ask_to_confirm = AsyncMock(return_value=True)
+        await _press_row(app, pilot, HOST_REMOTE_CONTROL_TITLE)
+        control.set_state.assert_awaited_once()
+        assert _row(app, HOST_REMOTE_CONTROL_TITLE).endswith(f"Last known: {word}")
+        assert any("could not be confirmed" in msg for msg in announcements(app))
 
 
 async def test_a_write_that_raises_tells_the_owner_and_keeps_the_surface() -> None:

@@ -430,8 +430,11 @@ async def test_a_vanished_row_leaves_nothing_marked() -> None:
 async def test_displayed_session_and_cursor_move_independently() -> None:
     records = (_record(_FIRST, "one"), _record(_SECOND, "two", sequence=2))
     displayed = _SECOND
+    offline = False
 
     async def read_displayed():
+        if offline:
+            raise OSError("tmux did not respond")
         return displayed
 
     app = SessionsPane(_context(records, console_displayed_session=read_displayed))
@@ -453,6 +456,10 @@ async def test_displayed_session_and_cursor_move_independently() -> None:
         await screen._refresh_displayed_session()
         assert open_rows() == [0]
         assert _marked(screen) == [1]
+        offline = True
+        await screen._refresh_displayed_session()
+        assert open_rows() == [0]
+        offline = False
         displayed = None
         await screen._refresh_displayed_session()
         assert open_rows() == []

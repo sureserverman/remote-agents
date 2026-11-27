@@ -2367,7 +2367,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         except Exception as error:
             _LOG.exception("this host's Remote Control could not be changed")
-            screen.announce(f"{HOST_REMOTE_CONTROL_TITLE} was not changed: {error}")
+            if isinstance(screen, SettingsScreen):
+                screen.mark_host_remote_control_unconfirmed()
+            screen.announce(f"{HOST_REMOTE_CONTROL_TITLE} could not be confirmed: {error}")
             return
         else:
             # Redrawn from the answer rather than from a re-read: `set_state` returns the

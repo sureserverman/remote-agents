@@ -1684,7 +1684,7 @@ class SessionsPaneScreen(SessionListingScreen):
             current = await read()
         except Exception:
             _LOG.debug("Could not read the displayed session", exc_info=True)
-            current = None
+            return
         key = str(current) if current is not None else None
         if key == self._displayed_session or not self.showing:
             return

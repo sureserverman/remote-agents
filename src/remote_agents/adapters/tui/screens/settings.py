@@ -904,6 +904,10 @@ class SettingsScreen(ChoiceScreen):
                 return
         await self.tui.set_host_remote_control(chosen, self)
 
+    def mark_host_remote_control_unconfirmed(self) -> None:
+        self._host_status.stale = True
+        self._draw_settings_rows()
+
     def show_host_remote_control(self, status: HostRemoteControlStatus | None) -> None:
         """Draw a reading this screen did not read itself, and name it in words.
 
